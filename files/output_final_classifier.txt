@@ -1,0 +1,26 @@
+
+******************************* INITIAL MODEL *******************************
+
+Correct: 364, Errors: 23, Accuracy: 0.94057
+
+Confusion Matrix with Labels:
+Labels: [0, 1]
+[[197   1]
+ [ 22 167]]
+Total Rules: 6344
+
+******************************* FINAL MODEL *******************************
+
+Correct: 362, Errors: 25, Accuracy: 0.93540
+
+Confusion Matrix with Labels (Final):
+Labels: [0, 1]
+[[198   0]
+ [ 25 164]]
+Total Rules: 2707
+
+******************************* DIVERGENT CASES *******************************
+Index: 18, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 0.0, 'v4': 1.0, 'v5': 0.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 0.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
+Index: 33, Data: {'v1': 0.0, 'v2': 0.0, 'v3': 0.0, 'v4': 1.0, 'v5': 1.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
+Index: 181, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 0.0, 'v4': 1.0, 'v5': 1.0, 'v6': 0.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
+Index: 356, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 1.0, 'v4': 0.0, 'v5': 0.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 0.0}, Initial Class: 1, Final Class: 0, Actual Class: 0
