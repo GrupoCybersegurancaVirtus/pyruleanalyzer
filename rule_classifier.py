@@ -8,6 +8,7 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.tree import export_text, _tree
 import tkinter as tk
 from tkinter import filedialog
+from sklearn.tree import DecisionTreeClassifier
 
 class Rule:
     def __init__(self, name, class_, conditions):
@@ -21,7 +22,7 @@ class RuleClassifier:
     def __init__(self, rules, algorithm_type='Decision Tree'):
         self.initial_rules = self.parse_rules(rules, algorithm_type)
         self.algorithm_type = algorithm_type
-        self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules()
+        self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules() 
         self.specific_rules = []
 
     def parse_rules(self, rules, algorithm_type):
@@ -30,13 +31,13 @@ class RuleClassifier:
         if algorithm_type == 'Random Forest':
             return [self.parse_rf_rule(rule) for rule in rules if rule]
         if algorithm_type == 'Decision Tree':
-            return [self.parse_rule(rule) for rule in rules if rule]
+            return [self.parse_dt_rule(rule) for rule in rules if rule]
 
-    def parse_rule(self, rule):
-        rule = rule.strip().split(':')
+    def parse_dt_rule(self, rule):
+        rule = rule.strip().split(':', 1)  # Split only at the first colon
         rule_name = rule[0].strip()
-        class_, conditions = rule_name.split('_')
-        conditions = rule[1].strip().replace('[', '').replace(']', '').split(', ')
+        class_, _ = rule_name.rsplit('_', 1)  # Split from the right to handle underscores in names
+        conditions = rule[1].strip().replace('[', '').replace(']', '').split(', ') if len(rule) > 1 else []
         return Rule(rule_name, class_, conditions)
 
     def parse_rf_rule(self, rule):
@@ -72,26 +73,46 @@ class RuleClassifier:
                     rule.usage_count += 1  # Increment rule usage count
             if votes:
                 proba = RuleClassifier.compute_predict_proba(votes)
-                class_labels = [0, 1]
-                if proba[0] == proba[1]:
-                    return class_labels[1], votes, proba
+                class_labels = list(range(len(proba)))  # Dynamically generate class labels based on the number of classes
+                if len(set(proba)) == 1:  # If all probabilities are equal
+                    return class_labels[0], votes, proba  # Default to the first class
 
                 return class_labels[np.argmax(proba)], votes, proba
 
         if self.algorithm_type == 'Decision Tree':
-            class_counts = {}
             for rule in rules_to_use:
-                parsed_conditions = self.parse_conditions(rule.conditions)
-                if all(var in data and (data[var] <= value if op == '<=' else
-                                        data[var] >= value if op == '>=' else
-                                        data[var] < value if op == '<' else
-                                        data[var] > value) for var, op, value in parsed_conditions):
-                    rule.usage_count += 1  # Increment rule usage count
-                    return int(rule.class_[-1])
-                class_counts[rule.class_] = class_counts.get(rule.class_, 0) + len(rule.conditions)
-            # If no rule matches, return the class with the most conditions covered
-            return int(max(class_counts, key=class_counts.get)[-1])
-        return None
+                    rule_satisfied = True
+                    parsed_conditions = self.parse_conditions(rule.conditions)
+                    for (var, op, value) in parsed_conditions:
+                        instance_value = data[var]
+                        if instance_value is None:
+                            rule_satisfied = False
+                            break
+                        
+                        if op == '<=' and not (instance_value <= value):
+                            rule_satisfied = False
+                            break
+                        elif op == '>=' and not (instance_value >= value):
+                            rule_satisfied = False
+                            break
+                        elif op == '<' and not (instance_value < value):
+                            rule_satisfied = False
+                            break
+                        elif op == '>' and not (instance_value > value):
+                            rule_satisfied = False
+                            break
+                    
+                    if rule_satisfied:
+                        # Extrai o número da classe do nome da regra (ex: 'Class0', 'Class1', etc.)
+                        # Assume que o nome da regra termina com '_ClassX'
+                        parts = rule.name.split('_')
+                        rule.usage_count += 1  # Increment rule usage count
+                        for part in parts:
+                            if part.startswith('Class'):
+                                return int(part.replace('Class', '')), None, None  # Retorna apenas o número da classe (ex: 0, 1)
+                
+                # Se nenhuma regra for satisfeita, retorna None
+            return None, None, None
 
     def parse_conditions(self, conditions):
         parsed_conditions = []
@@ -117,39 +138,146 @@ class RuleClassifier:
             for j, rule2 in enumerate(self.initial_rules):
                 if i >= j:
                     continue
-                if self.compare_similar_rules(rule1.conditions, rule2.conditions):
+                # Extrai os nomes das variáveis e operadores de cada regra
+                vars_ops1 = self.extract_variables_and_operators(rule1.conditions)
+                vars_ops2 = self.extract_variables_and_operators(rule2.conditions)
+                
+                # Verifica se as variáveis e operadores são os mesmos (valores podem diferir)
+                if vars_ops1 == vars_ops2:
                     similar_rules.append((rule1.name, rule2.name))
         return similar_rules
 
-    def compare_similar_rules(self, conditions1, conditions2):
-        if len(conditions1) != len(conditions2):
-            return False
-        for cond1, cond2 in zip(conditions1, conditions2):
-            var1, op1, val1 = cond1.split(' ')
-            var2, op2, val2 = cond2.split(' ')
-            if var1 != var2:
-                return False
-            if (op1 in ['<=', '<'] and op2 in ['>', '>=']) or (op1 in ['>', '>='] and op2 in ['<=', '<']):
-                continue
-            if val1 != val2:
-                return False
-        return True
-    
+    def extract_variables_and_operators(self, conditions):
+        """Extrai pares de (variável, operador) de uma lista de condições"""
+        vars_ops = []
+        for cond in conditions:
+            parts = cond.split(' ')
+            if len(parts) >= 3:  # Garante que temos pelo menos variável, operador e valor
+                var = parts[0]
+                op = parts[1]
+                # Normaliza operadores similares (<= e < são tratados como equivalentes, > e >= também)
+                if op in ['<=', '<']:
+                    op = '<='
+                elif op in ['>=', '>']:
+                    op = '>='
+                vars_ops.append((var, op))
+        # Ordena para garantir comparação consistente
+        return sorted(vars_ops)
+
     def adjust_and_remove_rules(self):
         similar_rules = self.find_similar_rules()
         unique_rules = []
         duplicated_rules = set()
 
+        # Primeiro marcamos todas as regras que são duplicadas
+        for rule1, rule2 in similar_rules:
+            duplicated_rules.add(rule1)
+            duplicated_rules.add(rule2)
+
+        # Depois adicionamos apenas as únicas
         for rule in self.initial_rules:
             if rule.name not in duplicated_rules:
                 unique_rules.append(rule)
-            for similar_rule in similar_rules:
-                if rule.name in similar_rule:
-                    duplicated_rules.add(similar_rule[1] if rule.name == similar_rule[0] else similar_rule[0])
 
-        return unique_rules, duplicated_rules
+        # Também podemos querer manter informações sobre quais regras são similares
+        return unique_rules, similar_rules
+    
+    def execute_rule_analysis(self, file_path, remove_below_n_classifications=-1):
+        if self.algorithm_type == 'Random Forest':
+            self.execute_rule_analysis_rf(file_path, remove_below_n_classifications)
+        elif self.algorithm_type == 'Decision Tree':
+            self.execute_rule_analysis_dt(file_path, remove_below_n_classifications)
+        else:
+            raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
 
-    def execute_rule_analysis(self, file_path,remove_below_n_classifications=-1):
+    def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
+        print("\n*********************************************************************************************************")
+        print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
+        print("*********************************************************************************************************\n")
+        correct = 0
+        total = 0
+        y_true = []
+        y_pred = []
+        with open('files/output_classifier_dt.txt', 'w') as f:
+            with open(file_path, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                i = 1
+                errors = ""
+                for row in reader:
+                    print(f'\nIndex: {i}')
+                    f.write(f'\nIndex: {i}\n')
+                    i += 1
+                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    predicted_class = self.classify(data)[0]
+                    actual_class = int(row[-1])
+                    y_true.append(actual_class)
+                    y_pred.append(predicted_class)
+                    if predicted_class != actual_class:
+                        print(f'ERROR: Predicted: {predicted_class}, Actual: {actual_class}')
+                        f.write(f'ERROR: Predicted: {predicted_class}, Actual: {actual_class}\n')
+                        errors += f'\nIndex: {i-1}\nERROR: Predicted: {predicted_class}, Actual: {actual_class}\n'
+                    else:
+                        print(f'Predicted: {predicted_class}, Actual: {actual_class}')
+                        f.write(f'Predicted: {predicted_class}, Actual: {actual_class}\n')
+                        correct += 1
+                    total += 1
+
+            if remove_below_n_classifications != -1:
+                f.write(f"\nRules removed with usage count below {remove_below_n_classifications}:\n")
+                for rule in self.final_rules[:]:
+                    if rule.usage_count <= remove_below_n_classifications:
+                        f.write(f"Rule: {rule.name}, Count: {rule.usage_count}\n")
+                        self.specific_rules.append(rule)
+                        self.final_rules.remove(rule)
+
+            accuracy = correct / total if total > 0 else 0
+            print(f'\nCorrect: {correct}, Errors: {total - correct}, Accuracy: {accuracy:.5f}')
+            f.write(f'\nCorrect: {correct}, Errors: {total - correct}, Accuracy: {accuracy:.5f}\n')
+
+            # Compute confusion matrix
+            labels = sorted(set(y_true))
+            cm = confusion_matrix(y_true, y_pred, labels=labels) 
+
+            # Print confusion matrix with labels
+            print("\nConfusion Matrix with Labels:")
+            f.write("\nConfusion Matrix with Labels:\n")
+            print("Labels:", labels)
+            f.write(f"Labels: {labels}\n")
+            print(cm)
+            f.write(f"{cm}\n")
+
+            print("\nErrors: \n" + errors + "\n")
+            f.write("\nErrors: \n" + errors + "\n")
+
+            # Print each rule with its usage count
+            print("\nRule Usage Counts:")
+            f.write("\nRule Usage Counts:\n")
+            for rule in self.initial_rules:
+                print(f"Rule: {rule.name}, Count: {rule.usage_count}")
+                f.write(f"Rule: {rule.name}, Count: {rule.usage_count}\n")
+
+            # Print the final rules
+            f.write("\nFinal Rules:\n")
+            for rule in self.final_rules:
+                f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
+
+            # Print the total number of initial and final rules
+            print(f"\nTotal Initial Rules: {len(self.initial_rules)}")
+            f.write(f"\nTotal Initial Rules: {len(self.initial_rules)}\n")
+            print(f"Total Final Rules: {len(self.final_rules)}")
+            f.write(f"Total Final Rules: {len(self.final_rules)}\n")
+
+            # Print the total number of duplicated rules
+            print(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}")
+            f.write(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}\n")
+
+            # Print the total number of specific rules
+            print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
+            f.write(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)\n")
+
+        return self
+    
+    def execute_rule_analysis_rf(self, file_path,remove_below_n_classifications=-1):
 
         print("\n*********************************************************************************************************")
         print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
@@ -328,9 +456,124 @@ class RuleClassifier:
                 with open('files/final_model.pkl', 'wb') as file:
                     pickle.dump(self, file)
         return self
-
-                
+    
     def compare_initial_final_results(self, file_path):
+        if self.algorithm_type == 'Random Forest':
+            self.compare_initial_final_results_rf(file_path)
+        elif self.algorithm_type == 'Decision Tree':
+            self.compare_initial_final_results_dt(file_path)
+        else:
+            raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
+
+    def compare_initial_final_results_dt(self, file_path):
+        print("\n*********************************************************************************************************")
+        print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
+        print("*********************************************************************************************************\n")
+        correct = 0
+        total = 0
+        y_true = []
+        y_pred = []
+        with open('files/output_final_classifier_dt.txt', 'w') as f:
+            with open(file_path, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                print("\n******************************* INITIAL MODEL *******************************\n")
+                f.write("\n******************************* INITIAL MODEL *******************************\n")
+                i = 1
+                for row in reader:
+                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    predicted_class, _, _ = self.classify(data)
+                    actual_class = int(row[-1])
+                    y_true.append(actual_class)
+                    y_pred.append(predicted_class)
+                    if predicted_class == actual_class:
+                        correct += 1
+                    total += 1
+
+            accuracy = correct / total if total > 0 else 0
+            print(f'\nCorrect: {correct}, Errors: {total - correct}, Accuracy: {accuracy:.5f}')
+            f.write(f'\nCorrect: {correct}, Errors: {total - correct}, Accuracy: {accuracy:.5f}\n')
+
+            # Compute confusion matrix
+            labels = sorted(set(y_true))
+            cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+            # Print confusion matrix with labels
+            print("\nConfusion Matrix with Labels:")
+            f.write("\nConfusion Matrix with Labels:\n")
+            print("Labels:", labels)
+            f.write(f"Labels: {labels}\n")
+            print(cm)
+            f.write(f"{cm}\n")
+
+            print("\n******************************* FINAL MODEL *******************************\n")
+            f.write("\n******************************* FINAL MODEL *******************************\n")
+
+            correct_final = 0
+            total_final = 0
+            y_true_final = []
+            y_pred_final = []
+            with open(file_path, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                i = 1
+                for row in reader:
+                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    predicted_class, _, _ = self.classify(data, final=True)
+                    actual_class = int(row[-1])
+                    y_true_final.append(actual_class)
+                    y_pred_final.append(predicted_class)
+                    if predicted_class == actual_class:
+                        correct_final += 1
+                    total_final += 1
+
+            accuracy_final = correct_final / total_final if total_final > 0 else 0
+            print(f'\nCorrect: {correct_final}, Errors: {total_final - correct_final}, Accuracy: {accuracy_final:.5f}')
+            f.write(f'\nCorrect: {correct_final}, Errors: {total_final - correct_final}, Accuracy: {accuracy_final:.5f}\n')
+
+            # Compute confusion matrix
+            labels_final = sorted(set(y_true_final))
+            # Filter out None values from y_true_final and y_pred_final
+            y_true_final_filtered = [y for y, y_p in zip(y_true_final, y_pred_final) if y_p is not None]
+            y_pred_final_filtered = [y_p for y_p in y_pred_final if y_p is not None]
+            
+            # Compute confusion matrix
+            cm_final = confusion_matrix(y_true_final_filtered, y_pred_final_filtered, labels=labels_final)
+
+            # Print confusion matrix with labels
+            print("\nConfusion Matrix with Labels (Final):")
+            f.write("\nConfusion Matrix with Labels (Final):\n")
+            print("Labels:", labels_final)
+            f.write(f"Labels: {labels_final}\n")
+            print(cm_final)
+            f.write(f"{cm_final}\n")
+
+            print("\n******************************* DIVERGENT CASES *******************************\n")
+            f.write("\n******************************* DIVERGENT CASES *******************************\n")
+
+            divergent_cases = []
+            with open(file_path, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                i = 1
+                for row in reader:
+                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    initial_predicted_class, _, _ = self.classify(data)
+                    final_predicted_class, _, _ = self.classify(data, final=True)
+                    if initial_predicted_class != final_predicted_class:
+                        divergent_cases.append({
+                            'index': i,
+                            'data': data,
+                            'initial_class': initial_predicted_class,
+                            'final_class': final_predicted_class,
+                            'actual_class': int(row[-1])
+                    })
+                    i += 1
+
+            for case in divergent_cases:
+                print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                    f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
+                f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                    f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                
+    def compare_initial_final_results_rf(self, file_path):
         print("\n*********************************************************************************************************")
         print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
         print("*********************************************************************************************************\n")
@@ -350,7 +593,7 @@ class RuleClassifier:
                         # f.write(f'\nIndex: {i}\n')
                         i+=1
                         data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
-                        predicted_class, votes, proba = self.classify(data)
+                        predicted_class, votes, proba = self.classify(data) 
                         class_vote_counts = {cls: votes.count(cls) for cls in set(votes)}
                         # print(f'Votes: {votes}\nClass Votes: {class_vote_counts}\nNumber of classifications: {len(votes)}')
                         # f.write(f'Votes: {votes}\nClass Votes: {class_vote_counts}\nNumber of classifications: {len(votes)}\n')
@@ -611,15 +854,20 @@ class RuleClassifier:
         
         return rules_by_class
     
-    def get_tree_rules (model,lst,lst_class):
+    def get_tree_rules(model, lst, lst_class, algorithm_type='Random Forest'):
         feature = [f'v{i}' for i in lst]  # Supondo que estas são suas características
         print(feature)
 
         class_names = lst_class  # Substitua pelos nomes reais das classes
 
         rules = []
-        for estimator in model.estimators_:
-            rules.append(RuleClassifier.get_rules(estimator, feature, class_names))
+        if algorithm_type == 'Random Forest':
+            for estimator in model.estimators_:
+                rules.append(RuleClassifier.get_rules(estimator, feature, class_names))
+        elif algorithm_type == 'Decision Tree':
+            rules.append(RuleClassifier.get_rules(model, feature, class_names))
+        else:
+            raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
         return rules
     
     def save_tree_rules(rules, lst, lst_class):
@@ -678,36 +926,34 @@ class RuleClassifier:
         else:
             # Train a new model with dynamic parameters
             print("Training a new model with dynamic parameters")
-            model = RandomForestClassifier(**model_parameters) if algorithm_type == 'Random Forest' else None
-            if model is None:
+            if algorithm_type == 'Random Forest':
+                model = RandomForestClassifier(**model_parameters)
+            elif algorithm_type == 'Decision Tree':
+                model = DecisionTreeClassifier(**model_parameters)
+            else:
                 raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
-            X_train, y_train, X_test, y_test = RuleClassifier.process_data(train_path, test_path)
-            model.fit(X_train, y_train)
-        model = RandomForestClassifier(**model_parameters) if algorithm_type == 'Random Forest' else None
-        if model is None:
-            raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
 
         print("\nDatabase details:")
         X_train, y_train, X_test, y_test = RuleClassifier.process_data(train_path, test_path)
         model.fit(X_train, y_train)
 
-        # Predições e avaliações
+        # Predictions and evaluations
         print("\nTesting model:")
         y_pred = model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred) * 100
-        print(f'Accuracy: {accuracy:.2f}%')
+        print(f'Accuracy: {accuracy:.3f}%')
 
         print("\nSaving Scikit-Learn model:")
         RuleClassifier.save_sklearn_model(model)
 
-        # Geração das árvores e extração das regras de decisão
+        # Generate trees and extract decision rules
         feature_names = [f'feature_{i+1}' for i in range(X_train.shape[1])]
         class_names = np.unique(y_train).astype(str)
 
         lst = list(range(1, X_train.shape[1]+1))
         feature = [f'v{i}' for i in lst] 
 
-        rules = RuleClassifier.get_tree_rules(model, lst, class_names)
+        rules = RuleClassifier.get_tree_rules(model, lst, class_names, algorithm_type=algorithm_type)
 
         RuleClassifier.save_tree_rules(rules, lst, class_names)
 
