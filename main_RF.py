@@ -2,8 +2,8 @@ from rule_classifier import RuleClassifier
 
 # ************************ EXECUÇÃO ************************
 
-train_path = "G:/Meu Drive/Mestrado/VIRTUS/Código/Novo RuleXtract/data/rapid_balanceado_treinamento.csv"
-test_path = "G:/Meu Drive/Mestrado/VIRTUS/Código/Novo RuleXtract/data/rapid_balanceado_teste.csv"
+train_path = "data/rapid_balanceado_treinamento.csv"
+test_path = "data/rapid_balanceado_teste.csv"
 
 # Parâmetros do modelo
 model_parameters = {
