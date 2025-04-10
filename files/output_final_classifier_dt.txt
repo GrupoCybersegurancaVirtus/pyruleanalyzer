@@ -18,3 +18,20 @@ Labels: [0, 1]
  [ 20 169]]
 
 ******************************* DIVERGENT CASES *******************************
+No divergent cases found.
+
+******************************* INTERPRETABILITY METRICS *******************************
+Tree (Initial): DT1
+  Features Used: 10/10
+  Sparsity: 0.00
+  Total Rules: 70
+  Max Rule Depth: 9
+  Mean Rule Depth: 6.54
+  Sparsity Interpretability Score: 1.17
+Tree (Final): DT1
+  Features Used: 10/10
+  Sparsity: 0.00
+  Total Rules: 70
+  Max Rule Depth: 9
+  Mean Rule Depth: 6.54
+  Sparsity Interpretability Score: 1.17
