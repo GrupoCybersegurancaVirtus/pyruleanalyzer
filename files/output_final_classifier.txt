@@ -17,9 +17,25 @@ Confusion Matrix with Labels (Final):
 Labels: [0, 1]
 [[198   0]
  [ 22 167]]
-Total Rules: 3785
+Total Rules: 3965
 
 ******************************* DIVERGENT CASES *******************************
 Index: 181, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 0.0, 'v4': 1.0, 'v5': 1.0, 'v6': 0.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
 Index: 356, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 1.0, 'v4': 0.0, 'v5': 0.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 0.0}, Initial Class: 1, Final Class: 0, Actual Class: 0
 Index: 374, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 1.0, 'v4': 1.0, 'v5': 1.0, 'v6': 0.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 0, Final Class: 1, Actual Class: 1
+
+******************************* INTERPRETABILITY METRICS *******************************
+
+Average Metrics Across Trees (Initial Rules):
+  Average Features Used: 10.00/10.00
+  Average Total Rules: 62.81
+  Average Max Rule Depth: 9.23
+  Average Mean Rule Depth: 6.59
+  Average Sparsity Interpretability Score: 1.28
+
+Average Metrics Across Trees (Final Rules):
+  Average Features Used: 10.00/10.00
+  Average Total Rules: 39.26
+  Average Max Rule Depth: 8.77
+  Average Mean Rule Depth: 6.46
+  Average Sparsity Interpretability Score: 1.86

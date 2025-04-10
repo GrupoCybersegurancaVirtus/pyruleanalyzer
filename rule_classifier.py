@@ -22,7 +22,7 @@ class RuleClassifier:
     def __init__(self, rules, algorithm_type='Decision Tree'):
         self.initial_rules = self.parse_rules(rules, algorithm_type)
         self.algorithm_type = algorithm_type
-        self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules() 
+        self.final_rules, self.duplicated_rules = [], [] 
         self.specific_rules = []
 
     def parse_rules(self, rules, algorithm_type):
@@ -143,8 +143,9 @@ class RuleClassifier:
                 vars_ops2 = self.extract_variables_and_operators(rule2.conditions)
                 
                 # Verifica se as variáveis e operadores são os mesmos (valores podem diferir)
-                if vars_ops1 == vars_ops2:
-                    similar_rules.append((rule1.name, rule2.name))
+                # e se as classes resultantes são iguais
+                if vars_ops1 == vars_ops2 and rule1.class_ == rule2.class_:
+                    similar_rules.append((rule1, rule2))
         return similar_rules
 
     def extract_variables_and_operators(self, conditions):
@@ -173,16 +174,31 @@ class RuleClassifier:
         for rule1, rule2 in similar_rules:
             duplicated_rules.add(rule1)
             duplicated_rules.add(rule2)
+            if rule1.name.split('_')[0] == rule2.name.split('_')[0]:  # Check if they belong to the same Decision Tree
+                print(f"Duplicated rules from the same tree: {rule1.name} and {rule2.name}")
+            else:
+                print(f"Duplicated rules: {rule1.name} and {rule2.name}")
+                print(f"{rule1.name}: {rule1.conditions}")
+                print(f"{rule2.name}: {rule2.conditions}")
+
 
         # Depois adicionamos apenas as únicas
         for rule in self.initial_rules:
-            if rule.name not in duplicated_rules:
+            if rule not in duplicated_rules:
                 unique_rules.append(rule)
 
         # Também podemos querer manter informações sobre quais regras são similares
         return unique_rules, similar_rules
     
-    def execute_rule_analysis(self, file_path, remove_below_n_classifications=-1):
+    def execute_rule_analysis(self, file_path, remove_duplicates=True, remove_below_n_classifications=-1):
+        print("\n*********************************************************************************************************")
+        print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
+        print("*********************************************************************************************************\n")
+        if remove_duplicates:
+            self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules()
+        else:
+            self.final_rules = self.initial_rules
+
         if self.algorithm_type == 'Random Forest':
             self.execute_rule_analysis_rf(file_path, remove_below_n_classifications)
         elif self.algorithm_type == 'Decision Tree':
@@ -191,9 +207,6 @@ class RuleClassifier:
             raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
 
     def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
-        print("\n*********************************************************************************************************")
-        print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
-        print("*********************************************************************************************************\n")
         correct = 0
         total = 0
         y_true = []
@@ -208,7 +221,7 @@ class RuleClassifier:
                     f.write(f'\nIndex: {i}\n')
                     i += 1
                     data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
-                    predicted_class = self.classify(data)[0]
+                    predicted_class = self.classify(data, final=True)[0]
                     actual_class = int(row[-1])
                     y_true.append(actual_class)
                     y_pred.append(predicted_class)
@@ -278,10 +291,6 @@ class RuleClassifier:
         return self
     
     def execute_rule_analysis_rf(self, file_path,remove_below_n_classifications=-1):
-
-        print("\n*********************************************************************************************************")
-        print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
-        print("*********************************************************************************************************\n")
         correct = 0
         total = 0
         y_true = []
@@ -296,7 +305,7 @@ class RuleClassifier:
                         f.write(f'\nIndex: {i}\n')
                         i+=1
                         data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
-                        predicted_class, votes, proba = self.classify(data)
+                        predicted_class, votes, proba = self.classify(data, final=True)
                         if predicted_class != int(row[-1]):
                             for rule in self.final_rules:
                                 parsed_conditions = self.parse_conditions(rule.conditions)
@@ -381,17 +390,17 @@ class RuleClassifier:
 
                 # Print the initial rules
                 # print("\nInitial Rules:")
-                f.write("\nInitial Rules:\n")
-                for rule in self.initial_rules:
-                    # print(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}")
-                    f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
+                # f.write("\nInitial Rules:\n")
+                # for rule in self.initial_rules:
+                #     print(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}")
+                #     f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
                 
                 # Print the final rules
                 # print("\nFinal Rules:")
-                f.write("\nFinal Rules:\n")
-                for rule in self.final_rules:
-                    # print(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}")
-                    f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
+                # f.write("\nFinal Rules:\n")
+                # for rule in self.final_rules:
+                #     print(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}")
+                #     f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
 
                 # Count the number of rules for each tree in initial rules
                 initial_tree_rule_counts = {}
@@ -456,7 +465,42 @@ class RuleClassifier:
                 with open('files/final_model.pkl', 'wb') as file:
                     pickle.dump(self, file)
         return self
+
+    def calculate_sparsity_interpretability(rules, n_features_total):
+        # Extract unique features used in the rules
+        features_used = set()
+        for rule in rules:
+            for condition in rule.conditions:
+                feature = condition.split(' ')[0]  # Extract the feature name
+                features_used.add(feature)
+
+        # Compute sparsity
+        n_features_used = len(features_used)
+        sparsity = 1 - (n_features_used / n_features_total)
+
+        # Calculate rule depths (number of conditions per rule)
+        rule_depths = [len(rule.conditions) for rule in rules]
+        max_depth = max(rule_depths) if rule_depths else 0
+        mean_rule_depth = np.mean(rule_depths) if rule_depths else 0
+
+        # Total number of rules
+        total_rules = len(rules)
+
+        # Sparsity Interpretability Score (SI)
+        alpha, beta, gamma = 1, 1, 1  # Adjustable weights
+        SI = 100 / (alpha * max_depth + beta * mean_rule_depth + gamma * total_rules)
+
+        return {
+            "features_used": n_features_used,
+            "total_features": n_features_total,
+            "sparsity": sparsity,
+            "total_rules": total_rules,
+            "max_depth": max_depth,
+            "mean_rule_depth": mean_rule_depth,
+            "sparsity_interpretability_score": SI,
+        }
     
+        
     def compare_initial_final_results(self, file_path):
         if self.algorithm_type == 'Random Forest':
             self.compare_initial_final_results_rf(file_path)
@@ -563,15 +607,75 @@ class RuleClassifier:
                             'data': data,
                             'initial_class': initial_predicted_class,
                             'final_class': final_predicted_class,
-                            'actual_class': int(row[-1])
+                            'actual_class': int(row[-1])                           
                     })
                     i += 1
 
-            for case in divergent_cases:
-                print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                    f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
-                f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                    f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                if not divergent_cases:
+                    print("No divergent cases found.")
+                    f.write("No divergent cases found.\n")
+                else:
+                    for case in divergent_cases:
+                        print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                            f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
+                        f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                                f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                
+            print("\n******************************* INTERPRETABILITY METRICS *******************************\n")
+            f.write("\n******************************* INTERPRETABILITY METRICS *******************************\n")
+            # Calculate sparsity and interpretability for each tree
+            # Calculate sparsity and interpretability for initial rules
+            tree_sparsity_info = {}
+            for rule in self.initial_rules:
+                tree_name = rule.name.split('_')[0]
+                if tree_name not in tree_sparsity_info:
+                    tree_sparsity_info[tree_name] = []
+                tree_sparsity_info[tree_name].append(rule)
+
+            for tree_name, rules in tree_sparsity_info.items():
+                n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
+                sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
+                print(f"\nTree (Initial):")
+                print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
+                print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
+                print(f"  Total Rules: {sparsity_info['total_rules']}")
+                print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
+                print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
+                print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
+                f.write(f"Tree (Initial): {tree_name}\n")
+                f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
+                f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
+                f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
+                f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
+                f.write(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}\n")
+                f.write(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}\n")
+
+            # Calculate sparsity and interpretability for final rules
+            tree_sparsity_info = {}
+            for rule in self.final_rules:
+                tree_name = rule.name.split('_')[0]
+                if tree_name not in tree_sparsity_info:
+                    tree_sparsity_info[tree_name] = []
+                tree_sparsity_info[tree_name].append(rule)
+
+            for tree_name, rules in tree_sparsity_info.items():
+                n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
+                sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
+                print(f"\nTree (Final):")
+                print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
+                print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
+                print(f"  Total Rules: {sparsity_info['total_rules']}")
+                print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
+                print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
+                print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
+                f.write(f"Tree (Final): {tree_name}\n")
+                f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
+                f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
+                f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
+                f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
+                f.write(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}\n")
+                f.write(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}\n")
+                    
                 
     def compare_initial_final_results_rf(self, file_path):
         print("\n*********************************************************************************************************")
@@ -751,11 +855,149 @@ class RuleClassifier:
                         i += 1
 
 
-                for case in divergent_cases:
-                    print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                          f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
-                    f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                            f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                if not divergent_cases:
+                    print("No divergent cases found.")
+                    f.write("No divergent cases found.\n")
+                else:
+                    for case in divergent_cases:
+                        print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                            f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
+                        f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
+                                f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+
+                print("\n******************************* INTERPRETABILITY METRICS *******************************\n")
+                f.write("\n******************************* INTERPRETABILITY METRICS *******************************\n")
+
+                
+                                # Calculate sparsity and interpretability for each tree in Random Forest
+                tree_sparsity_info = {}
+                for rule in self.initial_rules:
+                    tree_name = rule.name.split('_')[0]
+                    if tree_name not in tree_sparsity_info:
+                        tree_sparsity_info[tree_name] = []
+                    tree_sparsity_info[tree_name].append(rule)
+
+                total_features_used = 0
+                total_features = 0
+                total_rules = 0
+                total_max_depth = 0
+                total_mean_rule_depth = 0
+                total_sparsity_interpretability_score = 0
+                tree_count = len(tree_sparsity_info)
+
+                for tree_name, rules in tree_sparsity_info.items():
+                    n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
+                    sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
+                    total_features_used += sparsity_info['features_used']
+                    total_features += sparsity_info['total_features']
+                    total_rules += sparsity_info['total_rules']
+                    total_max_depth += sparsity_info['max_depth']
+                    total_mean_rule_depth += sparsity_info['mean_rule_depth']
+                    total_sparsity_interpretability_score += sparsity_info['sparsity_interpretability_score']
+
+                    # print(f"Tree: {tree_name}")
+                    # print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
+                    # print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
+                    # print(f"  Total Rules: {sparsity_info['total_rules']}")
+                    # print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
+                    # print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
+                    # print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
+                    # f.write(f"Tree: {tree_name}\n")
+                    # f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
+                    # f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
+                    # f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
+                    # f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
+                    # f.write(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}\n")
+                    # f.write(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}\n")
+
+                # Calculate and print averages
+                if tree_count > 0:
+                    avg_features_used = total_features_used / tree_count
+                    avg_features = total_features / tree_count
+                    avg_rules = total_rules / tree_count
+                    avg_max_depth = total_max_depth / tree_count
+                    avg_mean_rule_depth = total_mean_rule_depth / tree_count
+                    avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
+
+                    print("\nAverage Metrics Across Trees (Initial Rules):")
+                    print(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}")
+                    print(f"  Average Total Rules: {avg_rules:.2f}")
+                    print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
+                    print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
+                    print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
+                    f.write("\nAverage Metrics Across Trees (Initial Rules):\n")
+                    f.write(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}\n")
+                    f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
+                    f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
+                    f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
+                    f.write(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}\n")
+
+                # Calculate sparsity and interpretability for each tree in Random Forest
+                tree_sparsity_info = {}
+                for rule in self.final_rules:
+                    tree_name = rule.name.split('_')[0]
+                    if tree_name not in tree_sparsity_info:
+                        tree_sparsity_info[tree_name] = []
+                    tree_sparsity_info[tree_name].append(rule)
+
+                total_features_used = 0
+                total_features = 0
+                total_rules = 0
+                total_max_depth = 0
+                total_mean_rule_depth = 0
+                total_sparsity_interpretability_score = 0
+                tree_count = len(tree_sparsity_info)
+
+                for tree_name, rules in tree_sparsity_info.items():
+                    n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
+                    sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
+                    total_features_used += sparsity_info['features_used']
+                    total_features += sparsity_info['total_features']
+                    total_rules += sparsity_info['total_rules']
+                    total_max_depth += sparsity_info['max_depth']
+                    total_mean_rule_depth += sparsity_info['mean_rule_depth']
+                    total_sparsity_interpretability_score += sparsity_info['sparsity_interpretability_score']
+
+                    # print(f"Tree: {tree_name}")
+                    # print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
+                    # print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
+                    # print(f"  Total Rules: {sparsity_info['total_rules']}")
+                    # print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
+                    # print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
+                    # print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
+                    # f.write(f"Tree: {tree_name}\n")
+                    # f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
+                    # f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
+                    # f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
+                    # f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
+                    # f.write(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}\n")
+                    # f.write(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}\n")
+
+                # Calculate and print averages
+                if tree_count > 0:
+                    avg_features_used = total_features_used / tree_count
+                    avg_features = total_features / tree_count
+                    avg_rules = total_rules / tree_count
+                    avg_max_depth = total_max_depth / tree_count
+                    avg_mean_rule_depth = total_mean_rule_depth / tree_count
+                    avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
+
+                    print("\nAverage Metrics Across Trees (Final Rules):")
+                    print(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}")
+                    print(f"  Average Total Rules: {avg_rules:.2f}")
+                    print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
+                    print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
+                    print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
+                    f.write("\nAverage Metrics Across Trees (Final Rules):\n")
+                    f.write(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}\n")
+                    f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
+                    f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
+                    f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
+                    f.write(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}\n")
+
+                
+        
+
 
     @staticmethod
     def select_csv_and_test(classifier):
@@ -959,6 +1201,23 @@ class RuleClassifier:
 
         print("\nGenerating classifier model:")
         classifier = RuleClassifier.generate_classifier_model(rules, algorithm_type)
+
+        print("\nClassifying test data:")
+        with open(test_path, newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            i = 1
+            for row in reader:
+                print(f"\nIndex: {i}")
+                data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                predicted_class, votes, proba = classifier.classify(data)
+                actual_class = int(row[-1])
+                class_vote_counts = {cls: votes.count(cls) for cls in set(votes)} if votes else {}
+                print(f"Votes: {votes}")
+                print(f"Class Votes: {class_vote_counts}")
+                print(f"Number of classifications: {len(votes) if votes else 0}")
+                print(f"Probabilities: {proba}")
+                print(f"Predicted: {predicted_class}, Actual: {actual_class}")
+                i += 1
 
         return classifier
     
