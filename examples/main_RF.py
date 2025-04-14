@@ -1,4 +1,4 @@
-from rule_classifier import RuleClassifier
+from pyruleanalyzer import RuleClassifier
 
 # ************************ EXECUÇÃO ************************
 
@@ -8,22 +8,26 @@ test_path = "data/rapid_balanceado_teste.csv"
 # Parâmetros do modelo
 model_parameters = {
     'criterion': 'gini',
-    'splitter': 'best',
-    'max_leaf_nodes': None,
-    'min_impurity_decrease': 0.0,
-    'class_weight': None,
+    'bootstrap': True,
+    'oob_score': False,
+    'n_jobs': None,
+    'verbose': 0,
+    'warm_start': False,
     'ccp_alpha': 0.0,
-    'max_depth': 10,
-    'min_samples_split': 2,
+    'max_samples': None,
+    'n_estimators': 101,
     'min_samples_leaf': 2,
-    'max_features': None,
+    'min_samples_split': 2,
+    'max_depth': None, 
+    'max_features': 'sqrt',
     'random_state': 42
 }
 
 # Treinamento do modelo inicial
-classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Decision Tree')
+classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Random Forest')
 
 # Análise e remoção de regras
+#(exact, strict, relaxed,...)
 classifier.execute_rule_analysis(test_path, remove_duplicates=True, remove_below_n_classifications=-1)
 
 # Comparação dos resultados iniciais e finais
