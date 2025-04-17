@@ -9,6 +9,7 @@ from sklearn.tree import export_text, _tree
 import tkinter as tk
 from tkinter import filedialog
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import plot_tree
 
 class Rule:
     def __init__(self, name, class_, conditions):
@@ -36,7 +37,7 @@ class RuleClassifier:
     def parse_dt_rule(self, rule):
         rule = rule.strip().split(':', 1)  # Split only at the first colon
         rule_name = rule[0].strip()
-        class_, _ = rule_name.rsplit('_', 1)  # Split from the right to handle underscores in names
+        class_ = rule_name.split('_')[-1]  # Extract the class from the rule name
         conditions = rule[1].strip().replace('[', '').replace(']', '').split(', ') if len(rule) > 1 else []
         return Rule(rule_name, class_, conditions)
 
@@ -63,14 +64,19 @@ class RuleClassifier:
 
         if self.algorithm_type == 'Random Forest':
             votes = []
+            tree_votes = {}  # Dictionary to store votes per tree
             for rule in rules_to_use:
+                tree_name = rule.name.split('_')[0] 
                 parsed_conditions = self.parse_conditions(rule.conditions)
                 if all(var in data and (data[var] <= float(value) if op == '<=' else
-                                        data[var] >= float(value) if op == '>=' else
-                                        data[var] < float(value) if op == '<' else
-                                        data[var] > float(value)) for var, op, value in parsed_conditions):
-                    votes.append(int(rule.class_[-1]))
+                            data[var] >= float(value) if op == '>=' else
+                            data[var] < float(value) if op == '<' else
+                            data[var] > float(value)) for var, op, value in parsed_conditions):
+                    vote = int(rule.class_[-1])
                     rule.usage_count += 1  # Increment rule usage count
+                    if tree_name not in tree_votes:
+                        tree_votes[tree_name] = vote  # Each tree contributes only one vote
+                votes = list(tree_votes.values())  # Collect one vote per tree
             if votes:
                 proba = RuleClassifier.compute_predict_proba(votes)
                 class_labels = list(range(len(proba)))  # Dynamically generate class labels based on the number of classes
@@ -131,8 +137,8 @@ class RuleClassifier:
                 parsed_conditions.append((var, '>', float(value)))
         return parsed_conditions
     
-
-    def find_similar_rules(self):
+    # Encontra regras similares entre as árvores, considerando variáveis e operadores
+    def find_similar_rules_between_trees(self):
         similar_rules = []
         for i, rule1 in enumerate(self.initial_rules):
             for j, rule2 in enumerate(self.initial_rules):
@@ -164,40 +170,84 @@ class RuleClassifier:
                 vars_ops.append((var, op))
         # Ordena para garantir comparação consistente
         return sorted(vars_ops)
+    
+    def find_duplicated_rules(self):
+        duplicated_rules = []
+        for i, rule1 in enumerate(self.final_rules):
+            for j, rule2 in enumerate(self.final_rules):
+                if i >= j:
+                    continue
+                # Compare conditions up to the penultimate condition
+                if len(rule1.conditions) == len(rule2.conditions) and rule1.class_ == rule2.class_:
+                    if rule1.conditions[:-1] == rule2.conditions[:-1]:
+                        # Check if the last condition differs only by the operator and value
+                        last_cond1 = rule1.conditions[-1]
+                        last_cond2 = rule2.conditions[-1]
+                        if ('<=' in last_cond1 and '>' in last_cond2 or
+                            '>' in last_cond1 and '<=' in last_cond2):
+                                duplicated_rules.append((rule1, rule2))
+        return duplicated_rules
 
     def adjust_and_remove_rules(self):
-        similar_rules = self.find_similar_rules()
+
+        similar_rules = self.find_duplicated_rules()
+
         unique_rules = []
         duplicated_rules = set()
 
+        
         # Primeiro marcamos todas as regras que são duplicadas
         for rule1, rule2 in similar_rules:
             duplicated_rules.add(rule1)
             duplicated_rules.add(rule2)
-            if rule1.name.split('_')[0] == rule2.name.split('_')[0]:  # Check if they belong to the same Decision Tree
-                print(f"Duplicated rules from the same tree: {rule1.name} and {rule2.name}")
-            else:
-                print(f"Duplicated rules: {rule1.name} and {rule2.name}")
-                print(f"{rule1.name}: {rule1.conditions}")
-                print(f"{rule2.name}: {rule2.conditions}")
+            print(f"Duplicated rules from the same tree: {rule1.name} == {rule2.name}")
+            print(f"{rule1.name}: {rule1.conditions}")
+            print(f"{rule2.name}: {rule2.conditions}")
 
+            # Create a new rule based on the common conditions of the duplicated rules
+            common_conditions = rule1.conditions[:-1]  # Use the common conditions up to the penultimate condition
+            new_rule_name = f"{rule1.name}_&_{rule2.name}"
+            new_rule_class = rule1.class_  # Assuming both rules have the same class
+            new_rule = Rule(new_rule_name, new_rule_class, common_conditions)
+ 
+            # Add the new rule to the unique rules list
+            unique_rules.append(new_rule)
 
         # Depois adicionamos apenas as únicas
-        for rule in self.initial_rules:
+        for rule in self.final_rules:
             if rule not in duplicated_rules:
                 unique_rules.append(rule)
 
-        # Também podemos querer manter informações sobre quais regras são similares
+
+
+        # similar_rules_between_trees = self.find_similar_rules_between_trees()
+        # for rule1, rule2 in similar_rules_between_trees:
+        #     duplicated_rules.add(rule1)
+        #     duplicated_rules.add(rule2)
+        #     print(f"Duplicated rules between trees: {rule1.name} and {rule2.name}")
+        #     print(f"{rule1.name}: {rule1.conditions}")
+        #     print(f"{rule2.name}: {rule2.conditions}")
+
         return unique_rules, similar_rules
     
     def execute_rule_analysis(self, file_path, remove_duplicates=True, remove_below_n_classifications=-1):
         print("\n*********************************************************************************************************")
         print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
         print("*********************************************************************************************************\n")
+
+        self.final_rules = self.initial_rules
+
         if remove_duplicates:
-            self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules()
-        else:
-            self.final_rules = self.initial_rules
+            while True:
+                self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules()
+                if not self.duplicated_rules:
+                    break
+
+        # Print the final rules after analysis
+        print("\nFinal Rules After Analysis:")
+        for rule in self.final_rules:
+            print(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}")
+
 
         if self.algorithm_type == 'Random Forest':
             self.execute_rule_analysis_rf(file_path, remove_below_n_classifications)
@@ -280,9 +330,9 @@ class RuleClassifier:
             print(f"Total Final Rules: {len(self.final_rules)}")
             f.write(f"Total Final Rules: {len(self.final_rules)}\n")
 
-            # Print the total number of duplicated rules
-            print(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}")
-            f.write(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}\n")
+            # # Print the total number of duplicated rules
+            # print(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}")
+            # f.write(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}\n")
 
             # Print the total number of specific rules
             print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
@@ -449,9 +499,9 @@ class RuleClassifier:
                 print(f"Total Final Rules: {len(self.final_rules)}")
                 f.write(f"Total Final Rules: {len(self.final_rules)}\n")
                 
-                # Print the total number of duplicated rules
-                print(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}")
-                f.write(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}\n")
+                # # Print the total number of duplicated rules
+                # print(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}")
+                # f.write(f"\nTotal Duplicated Rules: {len(self.duplicated_rules)}\n")
 
                 # Print the total number of specific rules
                 print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
@@ -1187,6 +1237,17 @@ class RuleClassifier:
 
         print("\nSaving Scikit-Learn model:")
         RuleClassifier.save_sklearn_model(model)
+
+        import matplotlib.pyplot as plt
+
+        # Plot and save the decision tree
+        if algorithm_type == 'Decision Tree':
+            feature = [f'v{i+1}' for i in range(X_train.shape[1])]  # Define feature names dynamically
+            class_names = [str(cls) for cls in np.unique(y_train)]  # Define class names dynamically
+            plt.figure(figsize=(200, 200))
+            _ = plot_tree(model, feature_names=feature, class_names=class_names, filled=True)
+            plt.savefig('files/arvore_inicial_gerada.png')
+            print("Decision tree image saved: files/arvore_inicial_gerada.png")
 
         # Generate trees and extract decision rules
         feature_names = [f'feature_{i+1}' for i in range(X_train.shape[1])]

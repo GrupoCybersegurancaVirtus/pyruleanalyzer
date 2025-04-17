@@ -1,4 +1,4 @@
-from pyruleanalyzer import RuleClassifier
+from rule_classifier import RuleClassifier
 
 # ************************ EXECUÇÃO ************************
 
