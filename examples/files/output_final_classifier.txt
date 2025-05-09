@@ -1,23 +1,33 @@
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 364, Errors: 23, Accuracy: 0.94057
+Correct: 357, Errors: 30
+Accuracy: 0.92248
+Precision: 0.97041
+Recall: 0.86772
+F1 Score: 0.91620
+Specificity: 0.97475
 
 Confusion Matrix with Labels:
 Labels: [0, 1]
-[[197   1]
- [ 22 167]]
-Total Rules: 6344
+[193, 5]
+[25, 164]
+Total Rules: 631
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 364, Errors: 23, Accuracy: 0.94057
+Correct: 357, Errors: 30
+Accuracy: 0.92248
+Precision: 0.97041
+Recall: 0.86772
+F1 Score: 0.91620
+Specificity: 0.97475
 
-Confusion Matrix with Labels (Final):
+Confusion Matrix with Labels:
 Labels: [0, 1]
-[[197   1]
- [ 22 167]]
-Total Rules: 4967
+[193, 5]
+[25, 164]
+Total Rules: 494
 
 ******************************* DIVERGENT CASES *******************************
 No divergent cases found.
@@ -26,14 +36,14 @@ No divergent cases found.
 
 Average Metrics Across Trees (Initial Rules):
   Average Features Used: 10.00/10.00
-  Average Total Rules: 62.81
-  Average Max Rule Depth: 9.23
-  Average Mean Rule Depth: 6.59
+  Average Total Rules: 63.10
+  Average Max Rule Depth: 9.10
+  Average Mean Rule Depth: 6.55
   Average Sparsity Interpretability Score: 1.28
 
 Average Metrics Across Trees (Final Rules):
   Average Features Used: 10.00/10.00
-  Average Total Rules: 49.18
-  Average Max Rule Depth: 9.21
-  Average Mean Rule Depth: 6.37
+  Average Total Rules: 49.40
+  Average Max Rule Depth: 9.10
+  Average Mean Rule Depth: 6.34
   Average Sparsity Interpretability Score: 1.56

@@ -1,21 +1,31 @@
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 879, Errors: 24, Accuracy: 0.97342
+Correct: 358, Errors: 29
+Accuracy: 0.92506
+Precision: 0.94944
+Recall: 0.89418
+F1 Score: 0.92098
+Specificity: 0.95455
 
 Confusion Matrix with Labels:
 Labels: [0, 1]
-[[443   4]
- [ 20 436]]
+[189, 9]
+[20, 169]
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 879, Errors: 24, Accuracy: 0.97342
+Correct: 358, Errors: 29
+Accuracy: 0.92506
+Precision: 0.94944
+Recall: 0.89418
+F1 Score: 0.92098
+Specificity: 0.95455
 
-Confusion Matrix with Labels (Final):
+Confusion Matrix with Labels:
 Labels: [0, 1]
-[[443   4]
- [ 20 436]]
+[189, 9]
+[20, 169]
 
 ******************************* DIVERGENT CASES *******************************
 No divergent cases found.
