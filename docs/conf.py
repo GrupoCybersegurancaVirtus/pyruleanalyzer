@@ -5,20 +5,27 @@ sys.path.insert(0, os.path.abspath('..'))
 project = 'PyRuleAnalyzer'
 copyright = '2025, GrupoCybersegurancaVirtus'
 author = 'GrupoCybersegurancaVirtus'
+version = '1.0.0'
+release = '1.0.0'
 
 extensions = [
-    'sphinx_rtd_theme',
     'sphinx.ext.napoleon',
     'sphinx.ext.autodoc',
+    'sphinxcontrib.bibtex',
 ]
+
+napoleon_google_docstring = True
+bibtex_bibfiles = ['bib.bib']
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-language = 'pt_BR'
+language = 'en_US'
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = 'sphinx_rtd_theme'
-html_static_path = ['_static']
+html_theme_options = {
+    "titles_only": True
+}

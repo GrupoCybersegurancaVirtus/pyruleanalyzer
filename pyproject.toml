@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PyRuleAnalyzer"
-version = "0.0.1"
+version = "1.0.0"
 description = ""
 authors = [
     {name = "GrupoCybersegurancaVirtus"}
@@ -17,6 +17,7 @@ dependencies = [
     "numpy",
     "pandas",
     "scikit-learn",
+    "matplotlib"
 ]
 
 [project.optional-dependencies]
@@ -24,4 +25,5 @@ docs = [
     "sphinx",
     "sphinx-autobuild",
     "sphinx_rtd_theme",
+    "sphinxcontrib-bibtex",
 ]
