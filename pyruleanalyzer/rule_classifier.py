@@ -11,7 +11,29 @@ from sklearn.tree import DecisionTreeClassifier
 
 # Class to represent a rule
 class Rule:
+    """
+    Represents a complete ruleset (path from root to leaf) in a decision tree.
+    
+    This class is not designed to be operated directly, but by instead using the main :ref:`RuleClassifier<rule_classifier>` class.
+
+    Attributes:
+        name (str): Name of the rule (e.g., "DT1_Rule36_Class0")
+        class (str): Class that the rule assigns to matching instances (Note: trailing underscore is used because "class" is a Python keyword.)
+        conditions (List[str]): List of condition strings (like "v2 > 0.5")
+        usage_count (int): Number of times the rule matched during classification
+        error_count (int): Number of times the rule matched but the prediction was wrong
+    """
+
     def __init__(self, name, class_, conditions):
+        """
+        Initializes a new Rule instance representing a decision path in a tree.
+
+        Args:
+            name (str): The name of the rule, including tree and class identifiers, e.g. "DT1_Rule36_Class0".
+            class (str): The class label assigned to instances that satisfy the rule's conditions. (Note: trailing underscore is used because "class" is a Python keyword.)
+            conditions (List[str]): List of attribute comparison conditions defining the rule.
+        """
+
         self.name = name
         self.class_ = class_
         self.conditions = conditions
@@ -21,6 +43,21 @@ class Rule:
 # Class to handle the rule classification process
 class RuleClassifier:
     def __init__(self, rules, algorithm_type='Decision Tree'):
+        """
+        Represents a rule-based classifier built from decision paths in tree models.
+        
+        This class supports rule extraction, classification, refinement, and 
+        analysis of decision logic derived from scikit-learn Decision Tree and 
+        Random Forest models.
+
+        Attributes:
+            initial_rules (List[Rule]): List of all parsed rules extracted from the model.
+            final_rules (List[Rule]): Filtered rule list after duplicate removal or other processing.
+            duplicated_rules (List[Tuple[Rule, Rule]]): List of rules identified as structurally redundant.
+            specific_rules (List[Rule]): Rules removed based on low usage or specificity.
+            algorithm_type (str): Type of model used to generate the rules ('Decision Tree' or 'Random Forest').
+        """
+
         self.initial_rules = self.parse_rules(rules, algorithm_type)
         self.algorithm_type = algorithm_type
         self.final_rules, self.duplicated_rules = [], [] 
@@ -28,6 +65,20 @@ class RuleClassifier:
 
     # Method to parse the rules from string based on the algorithm type
     def parse_rules(self, rules, algorithm_type):
+        """
+        Parses a raw rule string into structured Rule objects based on model type.
+        
+        Depending on whether the rules originate from a Decision Tree or a Random Forest,
+        this method delegates to the appropriate parsing logic.
+
+        Args:
+            rules (str): Multiline string containing rule definitions.
+            algorithm_type (str): The model type ('Decision Tree' or 'Random Forest').
+
+        Returns:
+            List[Rule]: A list of Rule objects parsed from the input string.
+        """
+
         rules = rules.replace('"', '').replace('- ','').strip().split('\n')
         
         if algorithm_type == 'Random Forest':
@@ -37,6 +88,19 @@ class RuleClassifier:
 
     # Method to parse the rules for Decision Tree
     def parse_dt_rule(self, rule):
+        """
+        Parses a decision tree rule string into a structured Rule object.
+        
+        This method processes a rule extracted from a Decision Tree by separating 
+        its identifier and its condition list, and then converting it into a Rule instance.
+
+        Args:
+            rule (str): A string representing a single rule in the format "RuleName: [condition1, condition2, ...]".
+
+        Returns:
+            Rule: A Rule object with the extracted name, class, and condition list.
+        """
+
         rule = rule.strip().split(':', 1)
         rule_name = rule[0].strip()
         class_ = rule_name.split('_')[-1]
@@ -45,6 +109,19 @@ class RuleClassifier:
 
     # Method to parse the rules for Random Forest
     def parse_rf_rule(self, rule):
+        """
+        Parses a random forest rule string into a structured Rule object.
+        
+        This method processes a rule extracted from Random Forest estimators by separating 
+        its identifier and its condition list, and then converting it into a Rule instance.
+
+        Args:
+            rule (str): A string representing a Random Forest rule in the format "RuleName: [condition1, condition2, ...]".
+
+        Returns:
+            Rule: A Rule object containing the parsed name, class, and condition list.
+        """
+
         rule = rule.split(':')
         rule_name, conditions = rule[0].strip(), rule[1].strip()
         class_ = rule_name.split('_')[-1]
@@ -53,6 +130,20 @@ class RuleClassifier:
     
     # Method to parse conditions from string to tuple (variable, operator, value)
     def parse_conditions(self, conditions):
+        """
+        Parses a list of condition strings into structured tuples for evaluation.
+        
+        Converts conditions like "v1 <= 0.5" into a tuple representation 
+        ("v1", "<=", 0.5) to facilitate programmatic comparison during classification.
+
+        Args:
+            conditions (List[str]): A list of condition strings from a rule.
+
+        Returns:
+            List[Tuple[str,str,float]]: A list of parsed conditions, where each
+            tuple contains (variable name, operator, numeric threshold).
+        """
+
         parsed_conditions = []
         for condition in conditions:
             if '<=' in condition:
@@ -71,6 +162,22 @@ class RuleClassifier:
 
     # Method to execute the classification process
     def classify(self, data, final=False):
+        """
+        Classifies a single data instance using extracted rules.
+
+        This method will delegate the classification logic to the appropriate function based on the algorithm type.
+
+        Args:
+            data (Dict[str, float]): A dictionary representing the instance to classify, where keys are feature names (e.g., 'v1', 'v2') and values are the corresponding feature values.
+            final (bool): If True, use `final_rules` (post-analysis); otherwise, use `initial_rules`.
+
+        Returns:
+            Tuple[int|None,List[int]|None,np.ndarray|None]: A tuple containing
+                - Predicted class label (or None if no rule matched),
+                - List of votes (Random Forest only, otherwise None),
+                - Class probabilities (Random Forest only, otherwise None).
+        """
+
         rules = self.final_rules if final else self.initial_rules
 
         if self.algorithm_type == 'Random Forest':
@@ -81,6 +188,22 @@ class RuleClassifier:
     
     # Method to classify data using Decision Tree rules
     def classify_dt(self, data, rules):
+        """
+        Classifies a single data instance using extracted rules from the decision tree model.
+
+        This method applies the rule set to classify a given data instance, it returns the class of the first rule that matches.
+
+        Args:
+            data (Dict[str, float]): A dictionary representing the instance to classify, where keys are feature names (e.g., 'v1', 'v2') and values are the corresponding feature values.
+            rules: (List[rule]): A list of rule instances.
+
+        Returns:
+            Tuple[int|None,None,None]: A tuple containing
+                - Predicted class label (or None if no rule matched),
+                - None,
+                - None.
+        """
+
         for rule in rules:
                     rule_satisfied = True
                     parsed_conditions = self.parse_conditions(rule.conditions)
@@ -115,6 +238,22 @@ class RuleClassifier:
 
     # Method to classify data using Random Forest rules    
     def classify_rf(self,data, rules):
+            """
+            Classifies a single data instance using extracted rules from the random forest model.
+
+            This method applies the rule set to classify a given data instance, it returns the class of the first rule that matches.
+
+            Args:
+                data (Dict[str, float]): A dictionary representing the instance to classify, where keys are feature names (e.g., 'v1', 'v2') and values are the corresponding feature values.
+                rules: (List[rule]): A list of rule instances.
+
+            Returns:
+                Tuple[int|None,List[int]|None,np.ndarray|None]: A tuple containing
+                    - Predicted class label (or None if no rule matched),
+                    - List of votes,
+                    - Class probabilities.
+            """
+
         # Identify unique class labels and create a mapping
             class_labels = sorted({int(rule.class_[-1]) for rule in rules})
             class_to_index = {label: idx for idx, label in enumerate(class_labels)}
@@ -169,6 +308,20 @@ class RuleClassifier:
     
     # Method to extract variables and operators from conditions
     def extract_variables_and_operators(self, conditions):
+        """
+        Extracts variable-operator pairs from a list of rule conditions.
+
+        This helper method parses each condition (e.g., "v1 <= 0.5") and returns a
+        normalized list of tuples containing the variable name and the comparison operator.
+        Operators '<=' and '<' are treated equivalently, as are '>=' and '>'.
+
+        Args:
+            conditions (List[str]): A list of string conditions from a rule.
+
+        Returns:
+            List[Tuple[str,str]]: A sorted list of (variable, operator) pairs, with normalized operators.
+        """
+
         vars_ops = []
         for cond in conditions:
             parts = cond.split(' ')
@@ -186,6 +339,17 @@ class RuleClassifier:
 
     # Method to find similar rules between trees, considering the variables and operators
     def find_duplicated_rules_between_trees(self):
+        """
+        Identifies semantically similar rules between different rules.
+
+        This method compares rules across the full rule set to find pairs that:
+        - Use the same set of variables and logical operators (ignoring threshold values),
+        - Belong to the same target class.
+
+        Returns:
+            List[Tuple[Rule,Rule]]: A list of tuples, where each pair represents similar rules.
+        """
+
         similar_rules = []
         for i, rule1 in enumerate(self.initial_rules):
             for j, rule2 in enumerate(self.initial_rules):
@@ -201,6 +365,20 @@ class RuleClassifier:
     
     # Method to find duplicated rules in the same tree
     def find_duplicated_rules(self):
+        """
+        Identifies nearly identical rules within the the same decision tree.
+
+        This method searches for rule pairs that:
+        - Have the same class label,
+        - Share all conditions except the last,
+        - Differ only in the final condition, where one uses a '<=' and the other a '>' (or vice versa).
+
+        Such pairs are considered duplicates due to redundant decision splits at the boundary.
+
+        Returns:
+            List[Tuple[Rule,Rule]]: A list of tuples, each representing a pair of duplicated rules.
+        """
+
         duplicated_rules = []
         for i, rule1 in enumerate(self.final_rules):
             for j, rule2 in enumerate(self.final_rules):
@@ -219,16 +397,53 @@ class RuleClassifier:
     
     # Method to set a custom rule removal function
     def set_custom_rule_removal(self, custom_function):
+        """
+        Allows the user to override the rule removal logic, by employing their own implementation.
+
+        Args:
+            custom_function (Callable[[List[Rule]],Tuple[List[Rule],List[Tuple[Rule,Rule]]]]): A callback that takes a list of Rule instances as argument and returns a tuple containing a new list of rules after removing duplicates and the list of duplicate rule pairs.
+        """
+
         self.custom_rule_removal = custom_function
 
     # Method to remove rules based on custom logic
     def custom_rule_removal(self, rules):
+        """
+        Placeholder for custom rule removal logic. Does not alter the rule set.
+
+        Args:
+            rules (List[Rule]): List of Rules instances.
+
+        Returns:
+            Tuple[List[Rule],List[]]:
+            A tuple containing
+                - The same rules from the input,
+                - An empty list.
+        """
+
         # Example custom logic to remove rules with specific conditions
         # This can be customized based on your requirements
         return rules, [] # Placeholder for custom logic
 
     # Method to adjust and remove duplicated rules
     def adjust_and_remove_rules(self, method):
+        """
+        Adjusts and removes duplicated rules from the rule set based on the specified method.
+
+        This method analyzes the current rule set to identify and remove duplicated rules. The logic supports three modes:
+            - "custom": Uses a user-defined custom function to remove rules.
+            - "soft": Detects and removes duplicated rules within the same tree only.
+            - "hard": Removes duplicated rules both within the same tree and across different trees.
+        
+        Args:
+            method (str): Strategy for rule refinement. Must be either "custom", "soft" or "hard".
+
+        Returns:
+            Tuple[List[Rule],List[Tuple[Rule,Rule]]]: A tuple containing
+                - A new list of rules after removing duplicates and adding generalized ones,
+                - A list of the identified duplicated rule pairs.
+        """
+
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
         
@@ -301,6 +516,21 @@ class RuleClassifier:
     # remove_duplicates = "soft" (in the same tree, probably does not affect the final metrics), "hard" (between trees, may affect the final metrics), "custom" (custom function to remove duplicates) or "none" (no removal)
     # remove_below_n_classifications = -1 (no removal), 0 (removal of rules with 0 classifications), or any other integer (removal of rules with equal or less than n classifications)
     def execute_rule_analysis(self, file_path, remove_duplicates="none", remove_below_n_classifications=-1):
+        """
+        Executes a full rule evaluation and pruning process on a given dataset.
+
+        This method:
+        - Applies optional duplicate rule removal,
+        - Prints and logs final rule structure,
+        - Runs evaluation using the appropriate algorithm (Decision Tree or Random Forest),
+        - Optionally removes rules used less than or equal to a given threshold.
+
+        Args:
+            file_path (str): Path to the CSV file containing data for evaluation.
+            remove_duplicates (str): Method for removing duplicate rules, can be either "soft", "hard", "custom" or "none".
+            remove_below_n_classifications (int): Threshold for rule usage count. If set to -1, no filtering is applied.
+        """
+
         print("\n*********************************************************************************************************")
         print("**************************************** EXECUTING RULE ANALYSIS ****************************************")
         print("*********************************************************************************************************\n")
@@ -329,6 +559,17 @@ class RuleClassifier:
 
     # Method to execute the rule analysis for RDecision Tree
     def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
+        """
+        Evaluates Decision Tree rules on a dataset and logs classification performance.
+
+        This method tests the decision tree rules on a CSV dataset, evaluates rule performance, removes infrequent rules (if specified), and logs classification results, errors, usage counts, and rule effectiveness into an output file.
+
+        Outputs are written to 'examples/files/output_classifier_dt.txt'.
+
+        Args:
+            file_path (str): Path to the CSV file containing the dataset to evaluate.
+            remove_below_n_classifications (int): Minimum usage count required to retain a rule.
+        """
         correct = 0
         total = 0
         y_true = []
@@ -442,6 +683,20 @@ class RuleClassifier:
     
     # Method to execute the rule analysis for Random Forest
     def execute_rule_analysis_rf(self, file_path,remove_below_n_classifications=-1):
+        """
+        Evaluates Random Forest rules on a dataset and logs classification performance.
+
+        This method evaluates the rule-based classifier on test data using extracted random forest rules.
+        It logs predictions, voting behavior, rule usage, errors, confusion matrix, and other diagnostics.
+        It can also filter out rarely used rules if a threshold is specified.
+
+        Outputs are written to 'examples/files/output_classifier.txt'.
+
+        Args:
+            file_path (str): Path to the CSV file containing the dataset to evaluate.
+            remove_below_n_classifications (int): Minimum rule usage required to retain a rule.
+        """
+
         correct = 0
         total = 0
         y_true = []
@@ -620,6 +875,30 @@ class RuleClassifier:
         return self
 
     def calculate_sparsity_interpretability(rules, n_features_total):
+        """
+        Computes sparsity and interpretability metrics for a given rule set.
+
+        This method measures how concise and generalizable the rules are by evaluating:
+        - The proportion of total features actually used,
+        - The total number of rules,
+        - Rule depth statistics (max and mean),
+        - A combined Sparsity Interpretability (SI) score.
+
+        Args:
+            rules (List[Rule]): A list of Rule objects to analyze.
+            n_features_total (int): Total number of available features in the dataset.
+
+        Returns:
+            Dict[str,Any]: A dictionary containing
+                - features_used (int): Number of unique features used in rules,
+                - total_features (int): Total number of features in the dataset,
+                - sparsity (float): 1 - (features_used / total_features),
+                - total_rules (int): Total number of rules,
+                - max_depth (int): Maximum number of conditions in a single rule,
+                - mean_rule_depth (float): Average number of conditions per rule,
+                - sparsity_interpretability_score (float): Combined interpretability score (higher is better).
+        """
+
         # Extract unique features used in the rules
         features_used = set()
         for rule in rules:
@@ -655,6 +934,21 @@ class RuleClassifier:
     
     @staticmethod
     def display_metrics(y_true, y_pred, correct, total, file=None):
+        """
+        Computes and displays classification performance metrics.
+
+        This method calculates standard evaluation metrics including accuracy, precision,
+        recall, F1 score, specificity, and the confusion matrix. The results are printed to
+        the console and optionally written to a file.
+
+        Args:
+            y_true (List[int]): List of true class labels.
+            y_pred (List[int]): List of predicted class labels.
+            correct (int): Number of correct predictions.
+            total (int): Total number of predictions.
+            file (Optional[TextIO]): File object to write the metrics to. If None, metrics are only printed.
+        """
+
         # Calculate accuracy, precision, recall, F1 score and specificity
         tp = sum(1 for yt, yp in zip(y_true, y_pred) if yt == yp and yt == 1)
         fp = sum(1 for yt, yp in zip(y_true, y_pred) if yt != yp and yp == 1)
@@ -704,6 +998,22 @@ class RuleClassifier:
 
     # Method to compare initial and final results
     def compare_initial_final_results(self, file_path):
+        """
+        Compares the classification performance of the initial and final rule sets.
+
+        This method evaluates both the original (`initial_rules`) and pruned (`final_rules`)
+        rule sets on the same dataset, and logs performance metrics such as:
+        - Accuracy,
+        - Confusion matrices,
+        - Divergent predictions between the two rule sets,
+        - Interpretability metrics per tree.
+
+        It delegates to algorithm-specific methods based on the classifier type.
+
+        Args:
+            file_path (str): Path to the CSV file used for evaluation.
+        """
+
         if self.algorithm_type == 'Random Forest':
             self.compare_initial_final_results_rf(file_path)
         elif self.algorithm_type == 'Decision Tree':
@@ -713,6 +1023,21 @@ class RuleClassifier:
         
     # Method to compare initial and final results for Decision Tree
     def compare_initial_final_results_dt(self, file_path):
+        """
+        Evaluates and compares the initial and final rule sets for a Decision Tree model.
+
+        This method:
+        - Applies both the original (`initial_rules`) and refined (`final_rules`) rules to a dataset,
+        - Computes and logs accuracy, confusion matrices, and divergent predictions,
+        - Identifies instances where predictions changed after rule pruning,
+        - Calculates interpretability metrics (sparsity, rule depth, etc.) for both rule sets.
+
+        All outputs are saved to 'examples/files/output_final_classifier_dt.txt'.
+
+        Args:
+            file_path (str): Path to the CSV file containing the dataset to evaluate.
+        """
+
         print("\n*********************************************************************************************************")
         print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
         print("*********************************************************************************************************\n")
@@ -847,6 +1172,22 @@ class RuleClassifier:
                     
     # Method to compare initial and final results for Random Forest            
     def compare_initial_final_results_rf(self, file_path):
+        """
+        Evaluates and compares the initial and final rule sets for a Random Forest model.
+
+        This method:
+        - Applies both the original (`initial_rules`) and refined (`final_rules`) rule sets to the dataset,
+        - Aggregates predictions using one vote per tree,
+        - Computes and logs accuracy, confusion matrices, and rule counts per tree,
+        - Identifies divergent predictions between the initial and final models,
+        - Computes average interpretability metrics across trees for both rule sets.
+
+        All output is written to 'examples/files/output_final_classifier.txt'.
+
+        Args:
+            file_path (str): Path to the CSV file containing the dataset to evaluate.
+        """
+
         print("\n*********************************************************************************************************")
         print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
         print("*********************************************************************************************************\n")
@@ -1066,6 +1407,26 @@ class RuleClassifier:
     # ************************  GENERATING SCIKIT-LEARN MODEL ************************
 
     def process_data (train_path, test_path):
+        """
+        Loads and processes training and testing data from CSV files.
+
+        This method:
+        - Reads training and test datasets (no headers assumed),
+        - Splits features and labels,
+        - Encodes class labels using scikit-learn's LabelEncoder.
+
+        Args:
+            train_path (str): File path to the training CSV dataset.
+            test_path (str): File path to the testing CSV dataset.
+
+        Returns:
+            Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray]: A tuple containing
+                - X_train (features for training),
+                - y_train (encoded labels for training),
+                - X_test (features for testing),
+                - y_test (encoded labels for testing).
+        """
+
         # Data loading
         df_train = pd.read_csv(train_path, header=None, encoding='latin-1')
         data_train = df_train.values
@@ -1098,6 +1459,21 @@ class RuleClassifier:
 
     # Method to extract rules from a tree model
     def get_rules(tree, feature_names, class_names):
+        """
+        Extracts human-readable decision rules from a scikit-learn DecisionTreeClassifier.
+
+        This method traverses the tree structure to generate logical condition paths from root to leaf,
+        and organizes them by predicted class.
+
+        Args:
+            tree (DecisionTreeClassifier): A trained scikit-learn decision tree model.
+            feature_names (List[str]): A list of feature names corresponding to the tree input features.
+            class_names (List[str]): A list of class names corresponding to output labels.
+
+        Returns:
+            Dict[str,List[str]]: A dictionary mapping each class name to a list of rule strings that lead to predictions for that class.
+        """
+         
         tree_ = tree.tree_
         feature_name = [
             feature_names[i] if i != _tree.TREE_UNDEFINED else "undefined!"
@@ -1141,6 +1517,22 @@ class RuleClassifier:
     
     # Method to extract rules from a Random Forest model
     def get_tree_rules(model, lst, lst_class, algorithm_type='Random Forest'):
+        """
+        Extracts rules from a trained scikit-learn model (Decision Tree or Random Forest).
+
+        For Decision Trees, this returns one rule set. For Random Forests, it aggregates rule sets
+        from all individual decision trees.
+
+        Args:
+            model (Union[DecisionTreeClassifier, RandomForestClassifier]): The trained model.
+            lst (List[int]): List of feature indices (1-based) used to generate feature names (e.g., 'v1', 'v2').
+            lst_class (List[str]): List of class names.
+            algorithm_type (str): Type of model; either 'Decision Tree' or 'Random Forest'.
+
+        Returns:
+            List[Dict[str,List[str]]]: A list of rule sets, each as a dictionary mapping class names to rule strings.
+        """
+
         feature = [f'v{i}' for i in lst]  # Supondo que estas são suas características
         print(feature)
 
@@ -1158,6 +1550,20 @@ class RuleClassifier:
     
     # Method to save rules in a text file
     def save_tree_rules(rules, lst, lst_class):
+        """
+        Saves extracted decision rules to a text file in a standardized format.
+
+        Each rule is assigned a unique name that includes the tree index, rule index, and class index.
+        The output is saved to 'examples/files/rules_sklearn.txt'.
+
+        Args:
+            rules (List[Dict[str, List[str]]]): List of rule dictionaries organized by class name.
+            lst (List[int]): List of feature indices (1-based), used to define feature naming.
+            lst_class (List[str]): List of class names corresponding to output labels.
+
+        Returns:
+            List[Dict[str,List[str]]]: The original rules list, unmodified.
+        """
 
         # Salvando a saída em um arquivo
         output_path = 'examples/files/rules_sklearn.txt'  # Defina o caminho do arquivo de saída
@@ -1174,6 +1580,15 @@ class RuleClassifier:
     
     # Method to save the Scikit-Learn model
     def save_sklearn_model(model):
+        """
+        Saves a trained scikit-learn model to disk as a pickle (.pkl) file.
+
+        The model is stored at 'examples/files/sklearn_model.pkl' for later reuse or inspection.
+
+        Args:
+            model (BaseEstimator): A trained scikit-learn classifier (e.g., DecisionTreeClassifier or RandomForestClassifier).
+        """
+
         path = 'examples/files/sklearn_model.pkl'
         with open(path, 'wb') as model_file:
             pickle.dump(model, model_file)
@@ -1181,6 +1596,19 @@ class RuleClassifier:
 
     # Method to generate a classifier model based on rules
     def generate_classifier_model(rules, algorithm_type='Random Forest'):
+        """
+        Converts a list of extracted rule sets into a RuleClassifier instance.
+
+        This method formats rule sets into a standardized string format and initializes
+        a RuleClassifier object with it. The resulting classifier is saved to 'files/initial_model.pkl'.
+
+        Args:
+            rules (List[Dict[str, List[str]]]): A list of rule dictionaries, each mapping class names to rule strings.
+            algorithm_type (str): The type of model the rules originated from ('Random Forest' or 'Decision Tree').
+
+        Returns:
+            RuleClassifier: A RuleClassifier instance initialized with the given rules.
+        """
 
         rules_text = ""        
         for i, rule_set in enumerate(rules):
@@ -1200,6 +1628,25 @@ class RuleClassifier:
         return classifier
 
     def new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest'):
+        """
+        Trains or loads a model, extracts decision rules, and builds a rule-based classifier.
+
+        This method either loads an existing scikit-learn model or trains a new one using the provided
+        training dataset and model parameters. It evaluates the model on test data, saves it, extracts
+        decision rules, and constructs a corresponding `RuleClassifier` object.
+
+        Args:
+            train_path (str): Path to the training CSV file. Each row should contain features and the target label.
+            test_path (str): Path to the test CSV file. Each row should contain features and the target label.
+            model_parameters (dict): Parameters to initialize the scikit-learn model. Must match the accepted parameters of either ``sklearn.tree.DecisionTreeClassifier`` or ``sklearn.ensemble.RandomForestClassifier``, depending on the value of ``algorithm_type``.
+            model_path (Optional[str]): Path to a pre-trained model file (.pkl). If provided, skips training.
+            algorithm_type (str, optional): Type of model to use ('Random Forest' or 'Decision Tree').
+                Defaults to 'Random Forest'.
+
+        Returns:
+            RuleClassifier: A rule-based classifier instance constructed from the trained or loaded model.
+        """
+        
         print("\n*********************************************************************************************************")
         print("************************************** GENERATING A NEW CLASSIFIER **************************************")
         print("*********************************************************************************************************\n")
