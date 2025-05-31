@@ -133,6 +133,7 @@ Parameters:
 
 - `file_path`: Path to the test dataset CSV file.
 - `remove_duplicates`: Strategy to remove duplicate rules. Options:
+
   - `"soft"`: Remove duplicates within the same tree.
   - `"hard"`: Remove duplicates across different trees.
   - `"custom"`: Use the custom function defined with `set_custom_rule_removal` for duplicate removal.
