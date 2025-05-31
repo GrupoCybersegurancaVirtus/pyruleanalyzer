@@ -16,5 +16,5 @@ Key functionalities include:
 
    Overview <self>
    installation
-   tutorial
+   tutorials/index
    api/index
