@@ -39,6 +39,7 @@ Your dataset should be in CSV format with the following characteristics:
 - Each row represents a single sample.
 - The last column is the target class label.
 - All other columns are feature values.
+- All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
 
 Example:
 
@@ -56,7 +57,9 @@ Split your dataset into training and testing sets. Here's how you can do it usin
     from sklearn.model_selection import train_test_split
 
     # Load the dataset
-    df = pd.read_csv("your_dataset.csv", header=None)
+    df = pd.read_csv("your_dataset.csv")
+    # If your csv already omits the header line, you should use this instead:
+    # df = pd.read_csv("rapid_balanced.csv", header=None)
 
     # Split into features and target
     X = df.iloc[:, :-1]
@@ -64,7 +67,7 @@ Split your dataset into training and testing sets. Here's how you can do it usin
 
     # Split into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25
+        X, y, test_size=0.25, stratify=True
     )
 
     # Save to CSV files without headers and index
@@ -152,8 +155,8 @@ Make Predictions
 Use the `classify` method to make predictions on new samples. You must name your features as "v{column}" where `column` is the column index in the csv. If `final` is set to true the classifier will use the refined rule set to classify the sample.
 
 .. code-block:: python
-
-    sample = {"v1": 1, "v2": 0, "v3": 5, "v4": 1}
+    
+    sample = {"v1": 1, "v2": 23, "v3": 34, ..., "vn": 654}
     predicted_class, votes, probabilities = classifier.classify(sample, final=True)
 
 Returns:
