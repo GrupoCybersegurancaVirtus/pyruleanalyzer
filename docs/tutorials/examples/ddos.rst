@@ -1,14 +1,14 @@
-COVID-19
-========
+DDOS
+====
 
-This tutorial will guide you as we train and prune a decision tree model using the `Brazilian dataset of symptomatic patients for screening the risk of COVID-19 <https://data.mendeley.com/datasets/b7zcgmmwx4/5>`_ repository.
+This guild will go through the process of pruning a random forest model using the `DDoS evaluation dataset (CIC-DDoS2019) <https://www.unb.ca/cic/datasets/ddos-2019.html>`_ repository.
 
 Prerequisites
 -------------
 
-For this example we will be using the `rapid_balanced.csv` dataset, so make sure to download it from the repository above before continuing.
+For this example we will be using the `UDPLag.csv` dataset, it is a large dataset that contains realistic traffic data with multiclass targeting and it's included in the `CSV-03-11.zip`, downloadable from the repository above.
 
-Next, install the required packages and create the folder structure, as described in the :ref:`prerequisites section<tutorials/usage#prerequisites>` of the :doc:`usage guide<../usage>`.
+To start off, follow the instructions specified in the :ref:`prerequisites section<tutorials/usage#prerequisites>` of the :doc:`usage guide<../usage>`.
 
 Prepare Your Dataset
 --------------------
@@ -21,15 +21,25 @@ As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_
 - All other columns are feature values.
 - All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
 
-We can use the following script to remove the header row and split the data, be sure to adapt it to your current pipeline as needed:
+We can use the following script to remove the header row, apply an encoder to the string columns, remove infinites and split the data, be sure to adapt it to your current pipeline as needed:
 
 .. code-block:: python
     
     import pandas as pd
+    import numpy as np
     from sklearn.model_selection import train_test_split
- 
+    from sklearn.preprocessing import OrdinalEncoder
+
     # Load the dataset
-    df = pd.read_csv("rapid_balanced.csv")
+    df = pd.read_csv("UDPLag.csv")
+
+    # Encoding string columns into integers
+    string_cols = ['Flow ID', ' Source IP', ' Destination IP', ' Timestamp', ' Label', 'SimillarHTTP']
+    df[string_cols] = OrdinalEncoder().fit_transform(df[string_cols].astype('str'))
+
+    # Dropping entries with infinite values
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.dropna(inplace=True)
 
     # Split into features and target
     X = df.iloc[:, :-1]
@@ -47,7 +57,7 @@ We can use the following script to remove the header row and split the data, be 
     train_df.to_csv("train.csv", index=False, header=False)
     test_df.to_csv("test.csv", index=False, header=False)
 
-Training the Tree and Extracting Its Rules
+Training the Forest and Extracting Its Rules
 ---------------------------------------------------
 
 The `new_classifier` method from :ref:`RuleClassifier<rule_classifier>` will train a `scikit-learn` model, extract its rules and create a new :ref:`RuleClassifier<rule_classifier>` instance. It expects the path to the newly created CSV files, an algorithm type (can be either "Decision Tree" or "Random Forest") and the model parameters to be used in the respective `scikit-learn` model.
@@ -57,20 +67,20 @@ The `new_classifier` method from :ref:`RuleClassifier<rule_classifier>` will tra
     from pyruleanalyzer import RuleClassifier
 
     # Define the model parameters
-    model_params = {"max_depth": 5}
+    model_params = {"max_depth": 5, "n_estimators": 100}
 
     # Create a RuleClassifier instance
     classifier = RuleClassifier.new_classifier(
         train_path="train.csv",
         test_path="test.csv",
         model_parameters=model_params,
-        algorithm_type="Decision Tree"
+        algorithm_type="Random Forest"
     )
 
 Pruning
 -------
 
-With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis with the `execute_rule_analysis` method, which will refine the tree by removing duplicate rules. This method expects the `test.csv` file, a duplicate removal method (which can be either "soft", removing duplicate rules in a single tree; "hard", deleting duplicate rules in distinct trees and only applicable to random forest models; "custom", that will use a custom function previously defined with the `set_custom_rule_removal` method; or "none", that will not remove any rules). You may also optionally specify rule removal based on classification count, which will remove rules that classify `n` or fewer entries with the `remove_below_n_classifications` parameter (disabled by default).
+With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis with the `execute_rule_analysis` method, which will refine the forest by removing duplicate rules. This method expects the `test.csv` file, a duplicate removal method (which can be either "soft", removing duplicate rules in a single tree, "hard", deleting duplicate rules in distinct trees, only applicable to random forest models, "custom", that will use a custom function previously defined with the `set_custom_rule_removal` method, or "none", that will not remove any rules). You may also optionally specify rule removal based on classification count, which will remove rules that classify `n` or fewer entries with the `remove_below_n_classifications` parameter (disabled by default).
 
 .. code-block:: python
 
@@ -78,6 +88,8 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
         file_path="test.csv",
         remove_duplicates="soft"
     )
+
+Since this is a large dataset and the algorithm goes through many iterative steps to ensure no new duplicate rules are accidentally created during pruning, it may take a longer time to fully complete the analysis, specially if you use the "hard" removal method.
 
 Using the model
 ---------------
