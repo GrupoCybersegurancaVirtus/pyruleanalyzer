@@ -1,0 +1,6 @@
+Examples
+========
+
+.. toctree::
+   covid
+   ddos

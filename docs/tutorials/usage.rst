@@ -1,8 +1,10 @@
-Tutorial
-========
+Usage
+=====
 
 
 This tutorial demonstrates how to integrate the :ref:`RuleClassifier<rule_classifier>` into your own machine learning pipeline. We'll cover data preparation, model training, rule extraction, and analysis using both Decision Tree and Random Forest classifiers.
+
+.. _tutorials/usage#prerequisites:
 
 Prerequisites
 -------------
@@ -19,6 +21,15 @@ You can install them using pip:
 
     pip install scikit-learn pandas numpy
 
+You must also create the following folder structure in the directory you'll be executing your code:
+
+.. code-block:: text
+
+    your_project/
+    ├──examples/
+    │  └──files/
+    └──your_python_code.py
+
 Prepare Your Dataset
 --------------------
 
@@ -28,6 +39,7 @@ Your dataset should be in CSV format with the following characteristics:
 - Each row represents a single sample.
 - The last column is the target class label.
 - All other columns are feature values.
+- All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
 
 Example:
 
@@ -41,27 +53,29 @@ Split your dataset into training and testing sets. Here's how you can do it usin
 
 .. code-block:: python
 
-   import pandas as pd
-   from sklearn.model_selection import train_test_split
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
 
-   # Load the dataset
-   df = pd.read_csv("your_dataset.csv", header=None)
+    # Load the dataset
+    df = pd.read_csv("your_dataset.csv")
+    # If your csv already omits the header line, you should use this instead:
+    # df = pd.read_csv("rapid_balanced.csv", header=None)
 
-   # Split into features and target
-   X = df.iloc[:, :-1]
-   y = df.iloc[:, -1]
+    # Split into features and target
+    X = df.iloc[:, :-1]
+    y = df.iloc[:, -1]
 
-   # Split into training and testing sets
-   X_train, X_test, y_train, y_test = train_test_split(
-       X, y, test_size=0.25
-   )
+    # Split into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.25, stratify=True
+    )
 
-   # Save to CSV files without headers and index
-   train_df = pd.concat([X_train, y_train], axis=1)
-   test_df = pd.concat([X_test, y_test], axis=1)
+    # Save to CSV files without headers and index
+    train_df = pd.concat([X_train, y_train], axis=1)
+    test_df = pd.concat([X_test, y_test], axis=1)
 
-   train_df.to_csv("train.csv", index=False, header=False)
-   test_df.to_csv("test.csv", index=False, header=False)
+    train_df.to_csv("train.csv", index=False, header=False)
+    test_df.to_csv("test.csv", index=False, header=False)
 
 Train a Model and Extract Rules
 -------------------------------
@@ -72,29 +86,32 @@ Example with Decision Tree:
 
 .. code-block:: python
 
-   # Define model parameters for the sklearn model
-   model_params = {"max_depth": 5}
+    from pyruleanalyzer import RuleClassifier
 
-   # Create a RuleClassifier instance
-   classifier = RuleClassifier.new_classifier(
-       train_path="train.csv",
-       test_path="test.csv",
-       model_parameters=model_params,
-       algorithm_type="Decision Tree"
-   )
+
+    # Define model parameters for the sklearn model
+    model_params = {"max_depth": 5}
+
+    # Create a RuleClassifier instance
+    classifier = RuleClassifier.new_classifier(
+        train_path="train.csv",
+        test_path="test.csv",
+        model_parameters=model_params,
+        algorithm_type="Decision Tree"
+    )
 
 Example with Random Forest:
 
 .. code-block:: python
 
-   model_params = {"n_estimators": 100, "max_depth": 5}
+    model_params = {"n_estimators": 100, "max_depth": 5}
 
-   classifier = RuleClassifier.new_classifier(
-       train_path="train.csv",
-       test_path="test.csv",
-       model_parameters=model_params,
-       algorithm_type="Random Forest"
-   )
+    classifier = RuleClassifier.new_classifier(
+        train_path="train.csv",
+        test_path="test.csv",
+        model_parameters=model_params,
+        algorithm_type="Random Forest"
+    )
 
 This process will:
 
@@ -109,16 +126,17 @@ After initializing the :ref:`RuleClassifier<rule_classifier>` instance, you can 
 
 .. code-block:: python
 
-   classifier.execute_rule_analysis(
-       file_path="test.csv",
-       remove_duplicates="soft",
-       remove_below_n_classifications=1
-   )
+    classifier.execute_rule_analysis(
+        file_path="test.csv",
+        remove_duplicates="soft",
+        remove_below_n_classifications=1
+    )
 
 Parameters:
 
 - `file_path`: Path to the test dataset CSV file.
 - `remove_duplicates`: Strategy to remove duplicate rules. Options:
+
   - `"soft"`: Remove duplicates within the same tree.
   - `"hard"`: Remove duplicates across different trees.
   - `"custom"`: Use the custom function defined with `set_custom_rule_removal` for duplicate removal.
@@ -137,9 +155,9 @@ Make Predictions
 Use the `classify` method to make predictions on new samples. You must name your features as "v{column}" where `column` is the column index in the csv. If `final` is set to true the classifier will use the refined rule set to classify the sample.
 
 .. code-block:: python
-
-   sample = {"v1": 1, "v2": 0, "v3": 5, "v4": 1}
-   predicted_class, votes, probabilities = classifier.classify(sample, final=True)
+    
+    sample = {"v1": 1, "v2": 23, "v3": 34, ..., "vn": 654}
+    predicted_class, votes, probabilities = classifier.classify(sample, final=True)
 
 Returns:
 
