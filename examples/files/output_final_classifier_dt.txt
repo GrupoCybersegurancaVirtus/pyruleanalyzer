@@ -13,6 +13,8 @@ Labels: [0, 1]
 [189, 9]
 [20, 169]
 
+Time elapsed in executing initial model classifications: 0.02 seconds
+
 ******************************* FINAL MODEL *******************************
 
 Correct: 358, Errors: 29
@@ -26,6 +28,8 @@ Confusion Matrix with Labels:
 Labels: [0, 1]
 [189, 9]
 [20, 169]
+
+Time elapsed in executing final model classifications: 0.01 seconds
 
 ******************************* DIVERGENT CASES *******************************
 No divergent cases found.

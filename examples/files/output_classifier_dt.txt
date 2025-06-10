@@ -1399,3 +1399,5 @@ Total Initial Rules: 70
 Total Final Rules: 45
 
 Total Duplicated Rules: 25
+
+Time elapsed in executing rule analysis and adjustment: 0.01 seconds
