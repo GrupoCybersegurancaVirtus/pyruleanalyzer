@@ -8,6 +8,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
 from sklearn.tree import _tree
 from sklearn.tree import DecisionTreeClassifier
+import time
+from sklearn.preprocessing import LabelEncoder
 
 # Class to represent a rule
 class Rule:
@@ -385,14 +387,30 @@ class RuleClassifier:
                 if i >= j:
                     continue
                 # Compare conditions up to the penultimate condition
-                if len(rule1.conditions) == len(rule2.conditions) and rule1.class_ == rule2.class_:
+                # Ignore rules with no conditions
+                if len(rule1.conditions) == 0 or len(rule2.conditions) == 0:
+                    continue
+                if (
+                    len(rule1.conditions) == len(rule2.conditions)
+                    and rule1.class_ == rule2.class_
+                ):
                     if rule1.conditions[:-1] == rule2.conditions[:-1]:
                         # Check if the last condition differs only by the operator and value
                         last_cond1 = rule1.conditions[-1]
                         last_cond2 = rule2.conditions[-1]
-                        if ('<=' in last_cond1 and '>' in last_cond2 or
-                            '>' in last_cond1 and '<=' in last_cond2):
-                                duplicated_rules.append((rule1, rule2))
+                        # Check if the last condition differs only by the operator and value,
+                        # and both are for the same feature
+                        last_parts1 = last_cond1.split(' ')
+                        last_parts2 = last_cond2.split(' ')
+                        if (
+                            len(last_parts1) >= 3 and len(last_parts2) >= 3 and
+                            last_parts1[0] == last_parts2[0] and  # same feature
+                            (
+                                ('<=' in last_parts1[1] and '>' in last_parts2[1]) or
+                                ('>' in last_parts1[1] and '<=' in last_parts2[1])
+                            )
+                        ):
+                            duplicated_rules.append((rule1, rule2))
         return duplicated_rules
     
     # Method to set a custom rule removal function
@@ -467,10 +485,10 @@ class RuleClassifier:
             new_rule_class = rule1.class_  # Assuming both rules have the same class
             new_rule = Rule(new_rule_name, new_rule_class, common_conditions)
 
-            print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
- 
-            # Add the new rule to the unique rules list
-            unique_rules.append(new_rule)
+            if common_conditions:  # Only add the new rule if there are conditions
+                print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
+                # Add the new rule to the unique rules list
+                unique_rules.append(new_rule)
 
         unique_rules_between_trees = []
         duplicated_rules_between_trees = set()
@@ -498,10 +516,11 @@ class RuleClassifier:
                 new_rule_class = rule1.class_  # Assuming both rules have the same class
                 new_rule = Rule(new_rule_name, new_rule_class, common_conditions)
 
-                print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
-    
-                # Add the new rule to the unique rules list
-                unique_rules_between_trees.append(new_rule)
+
+                if common_conditions:  # Only add the new rule if there are conditions
+                    print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
+                    # Add the new rule to the unique rules list
+                    unique_rules_between_trees.append(new_rule)
 
             # Combine duplicated rules from the same tree and between trees
             duplicated_rules = list(duplicated_rules.union(duplicated_rules_between_trees))
@@ -557,6 +576,7 @@ class RuleClassifier:
         else:
             raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
 
+        
     # Method to execute the rule analysis for RDecision Tree
     def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
         """
@@ -576,15 +596,44 @@ class RuleClassifier:
         y_pred = []
         with open('examples/files/output_classifier_dt.txt', 'w') as f:
             with open(file_path, newline='') as csvfile:
+
+                # Start the timer
+                start_time = time.time()
+
                 reader = csv.reader(csvfile)
+
+                # Skip the header row if present
+                first_row = next(reader)
+                try:
+                    # Try to convert all values except the last to float
+                    [float(x) for x in first_row[:-1]]
+                    # If successful, first_row is data, so process it
+                    row = first_row
+                    # The rest of the code expects to process all rows in the loop,
+                    # so we can yield the first row back to the reader
+                    reader = (r for r in [row] + list(reader))
+                except ValueError:
+                    # If conversion fails, it's a header, so continue as normal
+                    pass
+
                 i = 1
                 errors = ""
                 print("\nTESTING RULES AFTER ANALYSIS")
                 for row in reader:
                     print(f'\nIndex: {i}')
                     f.write(f'\nIndex: {i}\n')
+
                     i += 1
-                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    # Use feature names from first_row if they look like names, otherwise generate default names
+                    try:
+                        [float(x) for x in first_row[:-1]]
+                        # If all are numbers, generate default names
+                        feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                    except ValueError:
+                        feature_names = first_row[:-1]
+                    data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                    
+
                     predicted_class = self.classify(data, final=True)[0]
                     actual_class = int(row[-1])
                     y_true.append(actual_class)
@@ -678,6 +727,14 @@ class RuleClassifier:
             if remove_below_n_classifications > -1:
                 print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
                 f.write(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)\n")
+     
+            # Finalize the timer
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            
+            # Print the time elapsed in executing rule analysis and adjustment
+            print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds")
+            f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds\n")
 
         return self
     
@@ -703,7 +760,26 @@ class RuleClassifier:
         y_pred = []
         with open('examples/files/output_classifier.txt', 'w') as f:
                 with open(file_path, newline='') as csvfile:
+
+                    # Start the timer
+                    start_time = time.time()
+
                     reader = csv.reader(csvfile)
+
+                    # Skip the header row if present
+                    first_row = next(reader)
+                    try:
+                        # Try to convert all values except the last to float
+                        [float(x) for x in first_row[:-1]]
+                        # If successful, first_row is data, so process it
+                        row = first_row
+                        # The rest of the code expects to process all rows in the loop,
+                        # so we can yield the first row back to the reader
+                        reader = (r for r in [row] + list(reader))
+                    except ValueError:
+                        # If conversion fails, it's a header, so continue as normal
+                        pass
+
                     i=1
                     errors = ""
                     print("\nTESTING RULES AFTER ANALYSIS")
@@ -711,7 +787,15 @@ class RuleClassifier:
                         print(f'\nIndex: {i}') 
                         f.write(f'\nIndex: {i}\n')
                         i+=1
-                        data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                        # Use feature names from first_row if they look like names, otherwise generate default names
+                        try:
+                            [float(x) for x in first_row[:-1]]
+                            # If all are numbers, generate default names
+                            feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                        except ValueError:
+                            feature_names = first_row[:-1]
+                        data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                        
                         predicted_class, votes, proba = self.classify(data, final=True)
                         if predicted_class != int(row[-1]):
                             for rule in self.final_rules:
@@ -868,6 +952,14 @@ class RuleClassifier:
                 if remove_below_n_classifications > -1:
                     print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
                     f.write(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)\n")
+
+                # Finalize the timer
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                
+                # Print the time elapsed in executing rule analysis and adjustment
+                print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds")
+                f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds\n")
 
                 # Save the initial model to a .pkl file
                 with open('examples/files/final_model.pkl', 'wb') as file:
@@ -1047,12 +1139,36 @@ class RuleClassifier:
         y_pred = []
         with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
             with open(file_path, newline='') as csvfile:
+
+                # Start the timer for the initial model
+                start_time_initial = time.time()
+
                 reader = csv.reader(csvfile)
                 print("\n******************************* INITIAL MODEL *******************************\n")
                 f.write("\n******************************* INITIAL MODEL *******************************\n")
                 i = 1
+                # Read the first row to use as header or feature names
+                first_row = next(reader)
+                try:
+                    [float(x) for x in first_row[:-1]]
+                    # If successful, first_row is data, so process it
+                    row = first_row
+                    # The rest of the code expects to process all rows in the loop,
+                    # so we can yield the first row back to the reader
+                    reader = (r for r in [row] + list(reader))
+                except ValueError:
+                    # If conversion fails, it's a header, so continue as normal
+                    pass
                 for row in reader:
-                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    # Use feature names from first_row if they look like names, otherwise generate default names
+                    try:
+                        [float(x) for x in first_row[:-1]]
+                        # If all are numbers, generate default names
+                        feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                    except ValueError:
+                        feature_names = first_row[:-1]
+                    data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                    
                     predicted_class, _, _ = self.classify(data)
                     actual_class = int(row[-1])
                     y_true.append(actual_class)
@@ -1062,6 +1178,13 @@ class RuleClassifier:
                     total += 1
             RuleClassifier.display_metrics(y_true, y_pred, correct, total, f)
 
+            
+            # Finalize the timer for the initial model
+            end_time_initial = time.time()
+            elapsed_time_initial = end_time_initial - start_time_initial
+            print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds")
+            f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds\n")
+
             print("\n******************************* FINAL MODEL *******************************\n")
             f.write("\n******************************* FINAL MODEL *******************************\n")
 
@@ -1070,10 +1193,34 @@ class RuleClassifier:
             y_true_final = []
             y_pred_final = []
             with open(file_path, newline='') as csvfile:
+
+                # Start the timer for the final model
+                start_time_final = time.time()
+
                 reader = csv.reader(csvfile)
                 i = 1
+                # Read the first row to use as header or feature names
+                first_row = next(reader)
+                try:
+                    [float(x) for x in first_row[:-1]]
+                    # If successful, first_row is data, so process it
+                    row = first_row
+                    # The rest of the code expects to process all rows in the loop,
+                    # so we can yield the first row back to the reader
+                    reader = (r for r in [row] + list(reader))
+                except ValueError:
+                    # If conversion fails, it's a header, so continue as normal
+                    pass
                 for row in reader:
-                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    # Use feature names from first_row if they look like names, otherwise generate default names
+                    try:
+                        [float(x) for x in first_row[:-1]]
+                        # If all are numbers, generate default names
+                        feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                    except ValueError:
+                        feature_names = first_row[:-1]
+                    data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                    
                     predicted_class, _, _ = self.classify(data, final=True)
                     actual_class = int(row[-1])
                     y_true_final.append(actual_class)
@@ -1084,6 +1231,12 @@ class RuleClassifier:
 
             RuleClassifier.display_metrics(y_true_final, y_pred_final, correct_final, total_final, f)
 
+            # Finalize the timer for the final model
+            end_time_final = time.time()
+            elapsed_time_final = end_time_final - start_time_final
+            print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds")
+            f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds\n")
+
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
 
@@ -1091,8 +1244,28 @@ class RuleClassifier:
             with open(file_path, newline='') as csvfile:
                 reader = csv.reader(csvfile)
                 i = 1
+                # Read the first row to use as header or feature names
+                first_row = next(reader)
+                try:
+                    [float(x) for x in first_row[:-1]]
+                    # If successful, first_row is data, so process it
+                    row = first_row
+                    # The rest of the code expects to process all rows in the loop,
+                    # so we can yield the first row back to the reader
+                    reader = (r for r in [row] + list(reader))
+                except ValueError:
+                    # If conversion fails, it's a header, so continue as normal
+                    pass
                 for row in reader:
-                    data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                    # Use feature names from first_row if they look like names, otherwise generate default names
+                    try:
+                        [float(x) for x in first_row[:-1]]
+                        # If all are numbers, generate default names
+                        feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                    except ValueError:
+                        feature_names = first_row[:-1]
+                    data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                    
                     initial_predicted_class, _, _ = self.classify(data)
                     final_predicted_class, _, _ = self.classify(data, final=True)
                     if initial_predicted_class != final_predicted_class:
@@ -1197,14 +1370,40 @@ class RuleClassifier:
         y_pred = []
         with open('examples/files/output_final_classifier.txt', 'w') as f:
                 with open(file_path, newline='') as csvfile:
+
+                    # Start the timer
+                    start_time_initial = time.time()
+
                     reader = csv.reader(csvfile)
+
+                    # Skip the header row if present
+                    first_row = next(reader)
+                    try:
+                        # Try to convert all values except the last to float
+                        [float(x) for x in first_row[:-1]]
+                        # If successful, first_row is data, so process it
+                        row = first_row
+                        # The rest of the code expects to process all rows in the loop,
+                        # so we can yield the first row back to the reader
+                        reader = (r for r in [row] + list(reader))
+                    except ValueError:
+                        # If conversion fails, it's a header, so continue as normal
+                        pass
                     print("\n******************************* INITIAL MODEL *******************************\n")
                     f.write("\n******************************* INITIAL MODEL *******************************\n")
                     i=1
                     errors = ""
                     for row in reader:
                         i+=1
-                        data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                        # Use feature names from first_row if they look like names, otherwise generate default names
+                        try:
+                            [float(x) for x in first_row[:-1]]
+                            # If all are numbers, generate default names
+                            feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                        except ValueError:
+                            feature_names = first_row[:-1]
+                        data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                        
                         predicted_class, votes, proba = self.classify(data) 
                         class_vote_counts = {cls: votes.count(cls) for cls in set(votes)}
                         actual_class = int(row[-1])
@@ -1231,6 +1430,12 @@ class RuleClassifier:
                 print(f"Total Rules: {total_rules}")
                 f.write(f"Total Rules: {total_rules}\n")
 
+                # Finalize the timer for the initial model
+                end_time_initial = time.time()
+                elapsed_time_initial = end_time_initial - start_time_initial
+                print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds")
+                f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds\n")
+
 
                 print("\n******************************* FINAL MODEL *******************************\n")
                 f.write("\n******************************* FINAL MODEL *******************************\n")
@@ -1240,12 +1445,37 @@ class RuleClassifier:
                 y_true_final = []
                 y_pred_final = []
                 with open(file_path, newline='') as csvfile:
+
+                    # Start the timer
+                    start_time_final = time.time()
+
                     reader = csv.reader(csvfile)
+                    # Skip the header row if present
+                    first_row = next(reader)
+                    try:
+                        # Try to convert all values except the last to float
+                        [float(x) for x in first_row[:-1]]
+                        # If successful, first_row is data, so process it
+                        row = first_row
+                        # The rest of the code expects to process all rows in the loop,
+                        # so we can yield the first row back to the reader
+                        reader = (r for r in [row] + list(reader))
+                    except ValueError:
+                        # If conversion fails, it's a header, so continue as normal
+                        pass
                     i=1
                     errors = ""
                     for row in reader:
                         i+=1
-                        data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                        # Use feature names from first_row if they look like names, otherwise generate default names
+                        try:
+                            [float(x) for x in first_row[:-1]]
+                            # If all are numbers, generate default names
+                            feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                        except ValueError:
+                            feature_names = first_row[:-1]
+                        data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                        
                         predicted_class, votes, proba = self.classify(data, final=True)
                         class_vote_counts = {cls: votes.count(cls) for cls in set(votes)}
                         actual_class = int(row[-1])
@@ -1271,6 +1501,12 @@ class RuleClassifier:
                 print(f"Total Rules: {total_rules}")
                 f.write(f"Total Rules: {total_rules}\n")
 
+                # Finalize the timer for the final model
+                end_time_final = time.time()
+                elapsed_time_final = end_time_final - start_time_final
+                print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds")
+                f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds\n")
+
                 # Track cases where the initial classification diverged from the final classification
 
                 print("\n******************************* DIVERGENT CASES *******************************\n")
@@ -1279,9 +1515,30 @@ class RuleClassifier:
                 divergent_cases = []
                 with open(file_path, newline='') as csvfile:
                     reader = csv.reader(csvfile)
+                    # Skip the header row if present
+                    first_row = next(reader)
+                    try:
+                        # Try to convert all values except the last to float
+                        [float(x) for x in first_row[:-1]]
+                        # If successful, first_row is data, so process it
+                        row = first_row
+                        # The rest of the code expects to process all rows in the loop,
+                        # so we can yield the first row back to the reader
+                        reader = (r for r in [row] + list(reader))
+                    except ValueError:
+                        # If conversion fails, it's a header, so continue as normal
+                        pass
                     i = 1
                     for row in reader:
-                        data = {f'v{i+1}': float(value) for i, value in enumerate(row[:-1])}
+                        # Use feature names from first_row if they look like names, otherwise generate default names
+                        try:
+                            [float(x) for x in first_row[:-1]]
+                            # If all are numbers, generate default names
+                            feature_names = [f'v{i+1}' for i in range(len(row)-1)]
+                        except ValueError:
+                            feature_names = first_row[:-1]
+                        data = {col: float(value) for col, value in zip(feature_names, row[:-1])}
+                        
                         initial_predicted_class, _, _ = self.classify(data)
                         final_predicted_class, _, _ = self.classify(data, final=True)
                         if initial_predicted_class != final_predicted_class:
@@ -1428,34 +1685,48 @@ class RuleClassifier:
         """
 
         # Data loading
+        # Try reading with header, skip if first row is not numeric
         df_train = pd.read_csv(train_path, header=None, encoding='latin-1')
+        if not np.issubdtype(df_train.dtypes.iloc[0], np.number):
+            df_train = pd.read_csv(train_path, header=0, encoding='latin-1')
         data_train = df_train.values
 
         df_test = pd.read_csv(test_path, header=None, encoding='latin-1')
+        if not np.issubdtype(df_test.dtypes.iloc[0], np.number):
+            df_test = pd.read_csv(test_path, header=0, encoding='latin-1')
         data_test = df_test.values
 
         colunas = df_train.shape[1]
         print("Number of collumns:", colunas)
 
         classes = df_train.iloc[:, -1].nunique()
+        class_names = df_train.iloc[:, -1].unique()
         print("Number of classes:", classes)
-        print("Classes names:", df_train.iloc[:, -1].unique())
+        print("Classes names:", class_names)
         print("Number of samples in training set:", data_train.shape[0])
         print("Number of samples in test set:", data_test.shape[0])
 
+        # Encode all string columns (categorical features and label)
+        def encode_columns(data):
+            encoders = {}
+            for col in range(data.shape[1]):
+                if data[:, col].dtype.kind in {'U', 'O', 'S'}:
+                    le = LabelEncoder()
+                    data[:, col] = le.fit_transform(data[:, col])
+                    encoders[col] = le
+            return data, encoders
+
+        data_train, train_encoders = encode_columns(data_train)
+        data_test, _ = encode_columns(data_test)
+
         # Separating features and labels
-        X_train = data_train[:, :-1]
-        y_train = data_train[:, -1]
+        X_train = data_train[:, :-1].astype(float)
+        y_train = data_train[:, -1].astype(float)
 
-        X_test = data_test[:, :-1]
-        y_test = data_test[:, -1]
+        X_test = data_test[:, :-1].astype(float)
+        y_test = data_test[:, -1].astype(float)
 
-        # Encode categorical labels to integers
-        encoder = LabelEncoder()
-        y_train = encoder.fit_transform(y_train)
-        y_test = encoder.transform(y_test)
-
-        return X_train, y_train, X_test, y_test
+        return X_train, y_train, X_test, y_test, class_names
 
     # Method to extract rules from a tree model
     def get_rules(tree, feature_names, class_names):
@@ -1516,7 +1787,7 @@ class RuleClassifier:
         return rules_by_class
     
     # Method to extract rules from a Random Forest model
-    def get_tree_rules(model, lst, lst_class, algorithm_type='Random Forest'):
+    def get_tree_rules(model, lst, lst_class, feature_names, algorithm_type='Random Forest'):
         """
         Extracts rules from a trained scikit-learn model (Decision Tree or Random Forest).
 
@@ -1533,17 +1804,16 @@ class RuleClassifier:
             List[Dict[str,List[str]]]: A list of rule sets, each as a dictionary mapping class names to rule strings.
         """
 
-        feature = [f'v{i}' for i in lst]  # Supondo que estas são suas características
-        print(feature)
+        print("Feature names:", feature_names)
 
-        class_names = lst_class  # Substitua pelos nomes reais das classes
+        class_names = lst_class
 
         rules = []
         if algorithm_type == 'Random Forest':
             for estimator in model.estimators_:
-                rules.append(RuleClassifier.get_rules(estimator, feature, class_names))
+                rules.append(RuleClassifier.get_rules(estimator, feature_names, class_names))
         elif algorithm_type == 'Decision Tree':
-            rules.append(RuleClassifier.get_rules(model, feature, class_names))
+            rules.append(RuleClassifier.get_rules(model, feature_names, class_names))
         else:
             raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
         return rules
@@ -1657,7 +1927,7 @@ class RuleClassifier:
                 model = pickle.load(model_file)
         else:
             # Train a new model with dynamic parameters
-            print("Training a new model with dynamic parameters")
+            print("Training a new Scikit-Learn model")
             if algorithm_type == 'Random Forest':
                 model = RandomForestClassifier(**model_parameters)
             elif algorithm_type == 'Decision Tree':
@@ -1666,7 +1936,8 @@ class RuleClassifier:
                 raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
 
         print("\nDatabase details:")
-        X_train, y_train, X_test, y_test = RuleClassifier.process_data(train_path, test_path)
+        X_train, y_train, X_test, y_test, class_names = RuleClassifier.process_data(train_path, test_path)
+
         model.fit(X_train, y_train)
 
         # Predictions and evaluations
@@ -1700,21 +1971,33 @@ class RuleClassifier:
 
         # Print confusion matrix with labels
         print("\nConfusion Matrix with Labels:")
-        print("Labels:", labels)
+        print("Labels:", class_names)
         print(cm)
 
         print("\nSaving Scikit-Learn model:")
         RuleClassifier.save_sklearn_model(model)
 
         # Generate trees and extract decision rules
-        feature_names = [f'feature_{i+1}' for i in range(X_train.shape[1])]
-        class_names = np.unique(y_train).astype(str)
+        # Try to detect if the first row contains feature names (non-numeric)
+        with open(train_path, 'r', encoding='latin-1') as f:
+            first_line = f.readline()
+        first_row = first_line.strip().split(',')
+        # If all values are numeric, treat as no header
+        try:
+            [float(x) for x in first_row]
+            has_header = False
+        except ValueError:
+            has_header = True
+
+        if has_header:
+            feature_names = first_row[:-1]
+        else:
+            print("No header detected in the training data. Generating default feature names.")
+            feature_names = [f'v{i+1}' for i in range(X_train.shape[1])]
+        class_names = np.unique(y_train).astype(str)   
 
         lst = list(range(1, X_train.shape[1]+1))
-        feature = [f'v{i}' for i in lst] 
-
-        rules = RuleClassifier.get_tree_rules(model, lst, class_names, algorithm_type=algorithm_type)
-
+        rules = RuleClassifier.get_tree_rules(model, lst, class_names, feature_names, algorithm_type=algorithm_type)
         RuleClassifier.save_tree_rules(rules, lst, class_names)
 
         print("\nGenerating classifier model:")
