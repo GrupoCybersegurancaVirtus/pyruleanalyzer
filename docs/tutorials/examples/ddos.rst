@@ -15,31 +15,38 @@ Prepare Your Dataset
 
 As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` `new_classifier` method expects a dataset split into two files: `train.csv` and `test.csv`. The dataset must also be formatted with the following characteristics:
 
-- No header row.
 - Each row represents a single sample.
 - The last column is the target class label.
 - All other columns are feature values.
 - All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
 
-We can use the following script to remove the header row, apply an encoder to the string columns, remove infinites and split the data, be sure to adapt it to your current pipeline as needed:
+We can use the following script to apply an encoder to the string columns, remove infinites and split the data, be sure to adapt it to your current pipeline as needed:
 
 .. code-block:: python
     
     import pandas as pd
     import numpy as np
     from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import OrdinalEncoder
+    from sklearn.preprocessing import OrdinalEncoder, LabelEncoder
 
     # Load the dataset
     df = pd.read_csv("UDPLag.csv")
 
     # Encoding string columns into integers
-    string_cols = ['Flow ID', ' Source IP', ' Destination IP', ' Timestamp', ' Label', 'SimillarHTTP']
-    df[string_cols] = OrdinalEncoder().fit_transform(df[string_cols].astype('str'))
+    string_cols = ['Flow ID', ' Source IP', ' Destination IP', ' Timestamp', 'SimillarHTTP']
 
     # Dropping entries with infinite values
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
+
+    feature_encoder = OrdinalEncoder().fit(df[string_cols].astype('str'))
+    df[string_cols] = feature_encoder.transform(df[string_cols].astype('str'))
+
+    label_encoder = LabelEncoder().fit(df[' Label'])
+    df[' Label'] = label_encoder.transform(df[' Label'])
+
+    label_encoder = LabelEncoder().fit(y)
+    y = label_encoder.transform(y)
 
     # Split into features and target
     X = df.iloc[:, :-1]
@@ -47,15 +54,15 @@ We can use the following script to remove the header row, apply an encoder to th
 
     # Split into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, stratify=True
+        X, y, test_size=0.25
     )
 
-    # Save to CSV files without headers and index
+    # Save to CSV files without index
     train_df = pd.concat([X_train, y_train], axis=1)
     test_df = pd.concat([X_test, y_test], axis=1)
 
-    train_df.to_csv("train.csv", index=False, header=False)
-    test_df.to_csv("test.csv", index=False, header=False)
+    train_df.to_csv("train.csv", index=False)
+    test_df.to_csv("test.csv", index=False)
 
 Training the Forest and Extracting Its Rules
 ---------------------------------------------------
@@ -94,10 +101,15 @@ Since this is a large dataset and the algorithm goes through many iterative step
 Using the model
 ---------------
 
-To use the refined model to classify new entries we can use the `classify` method with the `final` parameter set to `True`, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. You must name your features as “v{column}” where `column` is the column index in the csv.
+To use the refined model to classify new entries we can use the `classify` method with the `final` parameter set to `True`, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. If your dataset didn't include a header row you must name your features as “v{column}” where `column` is the column index in the csv.
 
 .. code-block:: python
     
     # Replace with actual values of your dataset
-    sample = {"v1": 1, "v2": 23, "v3": 34, ..., "vn": 654}
-    predicted_class, votes, probabilities = classifier.classify(sample, final=True)
+    sample = {"Flow ID": "172.16.0.5-192.168.50.4-35468-49856-17", " Source IP": "172.16.0.5", ..., " Inbound": 1}
+
+    encoded_sample = feature_encoder.transform(sample)
+
+    predicted_class, votes, probabilities = classifier.classify(encoded_sample, final=True)
+    
+    actual_class = label_encoder.inverse_transform(predicted_class)
