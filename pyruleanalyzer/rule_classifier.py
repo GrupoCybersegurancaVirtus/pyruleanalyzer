@@ -1668,7 +1668,7 @@ class RuleClassifier:
         Loads and processes training and testing data from CSV files.
 
         This method:
-        - Reads training and test datasets (no headers assumed),
+        - Reads training and test datasets,
         - Splits features and labels,
         - Encodes class labels using scikit-learn's LabelEncoder.
 
