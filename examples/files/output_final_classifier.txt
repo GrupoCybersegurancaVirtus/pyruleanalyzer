@@ -1,57 +1,55 @@
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 367, Errors: 20
-Accuracy: 0.94832
-Precision: 0.97740
-Recall: 0.91534
-F1 Score: 0.94536
-Specificity: 0.97980
+Correct: 27, Errors: 3
+Accuracy: 0.90476
+Precision: 0.81818
+Recall: 1.00000
+F1 Score: 0.90000
+Specificity: 0.83333
 
 Confusion Matrix with Labels:
-Labels: [0, 1]
-[194, 4]
-[16, 173]
-Total Rules: 9736
+Labels: [0, 1, 2]
+[10, 0, 0]
+[0, 9, 1]
+[0, 2, 8]
+Total Rules: 763
 
-Time elapsed in executing initial model classifications: 7.26 seconds
+Time elapsed in executing initial model classifications: 0.040 seconds
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 368, Errors: 19
-Accuracy: 0.95090
-Precision: 0.98851
-Recall: 0.91005
-F1 Score: 0.94766
-Specificity: 0.98990
+Correct: 27, Errors: 3
+Accuracy: 0.90476
+Precision: 0.81818
+Recall: 1.00000
+F1 Score: 0.90000
+Specificity: 0.83333
 
 Confusion Matrix with Labels:
-Labels: [0, 1]
-[196, 2]
-[17, 172]
-Total Rules: 4665
+Labels: [0, 1, 2]
+[10, 0, 0]
+[0, 9, 1]
+[0, 2, 8]
+Total Rules: 381
 
-Time elapsed in executing final model classifications: 3.53 seconds
+Time elapsed in executing final model classifications: 0.032 seconds
 
 ******************************* DIVERGENT CASES *******************************
-Index: 197, Data: {'v1': 0.0, 'v2': 1.0, 'v3': 0.0, 'v4': 1.0, 'v5': 0.0, 'v6': 0.0, 'v7': 0.0, 'v8': 1.0, 'v9': 0.0, 'v10': 1.0}, Initial Class: 0, Final Class: 1, Actual Class: 1
-Index: 238, Data: {'v1': 1.0, 'v2': 1.0, 'v3': 0.0, 'v4': 1.0, 'v5': 1.0, 'v6': 0.0, 'v7': 0.0, 'v8': 1.0, 'v9': 0.0, 'v10': 0.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
-Index: 294, Data: {'v1': 0.0, 'v2': 0.0, 'v3': 0.0, 'v4': 0.0, 'v5': 1.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 1
-Index: 334, Data: {'v1': 0.0, 'v2': 0.0, 'v3': 0.0, 'v4': 1.0, 'v5': 1.0, 'v6': 0.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 1.0}, Initial Class: 1, Final Class: 0, Actual Class: 0
-Index: 356, Data: {'v1': 1.0, 'v2': 0.0, 'v3': 1.0, 'v4': 0.0, 'v5': 0.0, 'v6': 1.0, 'v7': 1.0, 'v8': 1.0, 'v9': 1.0, 'v10': 0.0}, Initial Class: 1, Final Class: 0, Actual Class: 0
+No divergent cases found.
 
 ******************************* INTERPRETABILITY METRICS *******************************
 
 Average Metrics Across Trees (Initial Rules):
-  Average Features Used: 10.00/10.00
-  Average Total Rules: 97.36
-  Average Max Rule Depth: 9.91
-  Average Mean Rule Depth: 7.34
-  Average Sparsity Interpretability Score: 0.88
+  Average Features Used: 1.89
+  Average Total Rules: 7.63
+  Average Max Rule Depth: 4.79
+  Average Mean Rule Depth: 3.43
+  Average Sparsity Interpretability Score: 6.57
 
 Average Metrics Across Trees (Final Rules):
-  Average Features Used: 10.00/10.00
-  Average Total Rules: 46.65
-  Average Max Rule Depth: 9.23
-  Average Mean Rule Depth: 6.85
-  Average Sparsity Interpretability Score: 1.63
+  Average Features Used: 1.86
+  Average Total Rules: 3.81
+  Average Max Rule Depth: 4.52
+  Average Mean Rule Depth: 3.54
+  Average Sparsity Interpretability Score: 8.92
