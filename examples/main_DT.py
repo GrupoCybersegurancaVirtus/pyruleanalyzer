@@ -11,16 +11,7 @@ test_path = "examples/data/rapid_balanceado_teste.csv"
 
 # Model parameters
 model_parameters = {
-    'criterion': 'gini',
-    'splitter': 'best',
-    'max_leaf_nodes': None,
-    'min_impurity_decrease': 0.0,
-    'class_weight': None,
-    'ccp_alpha': 0.0,
-    'max_depth': 10,
-    'min_samples_split': 2,
-    'min_samples_leaf': 2,
-    'max_features': None,
+    'max_depth': 5,
     'random_state': 42
 }
 

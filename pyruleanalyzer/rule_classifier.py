@@ -308,36 +308,49 @@ class RuleClassifier:
 
             return predicted_class, votes, avg_proba.tolist()
     
-    # Method to extract variables and operators from conditions
+    # Method to extract variables, operators, and values from conditions
     def extract_variables_and_operators(self, conditions):
         """
-        Extracts variable-operator pairs from a list of rule conditions.
+        Extracts variable-operator-value triples from a list of rule conditions.
 
         This helper method parses each condition (e.g., "v1 <= 0.5") and returns a
-        normalized list of tuples containing the variable name and the comparison operator.
-        Operators '<=' and '<' are treated equivalently, as are '>=' and '>'.
+        normalized list of tuples containing the variable name, the comparison operator,
+        and the threshold value. Operators '<=' and '<' are treated equivalently, as are '>=' and '>'.
 
         Args:
             conditions (List[str]): A list of string conditions from a rule.
 
         Returns:
-            List[Tuple[str,str]]: A sorted list of (variable, operator) pairs, with normalized operators.
+            List[Tuple[str, str, float]]: A sorted list of (variable, operator, value) triples, with normalized operators.
         """
 
-        vars_ops = []
+        vars_ops_vals = []
         for cond in conditions:
-            parts = cond.split(' ')
+            # Split condition into variable, operator, value (robust to spaces in variable names or values)
+            for op in ['<=', '>=', '<', '>']:
+                if op in cond:
+                    idx = cond.index(op)
+                    var = cond[:idx].strip()
+                    value = cond[idx + len(op):].strip()
+                    parts = [var, op, value]
+                    break
+            else:
+                raise ValueError(f"Condition '{cond}' does not contain a recognized operator.")
             if len(parts) >= 3:  # Granting that the condition is well-formed (e.g., "var op value")
                 var = parts[0]
                 op = parts[1]
+                try:
+                    value = float(parts[2])
+                except ValueError:
+                    value = parts[2]
                 # Normalizes similar operators (<= and < are treated as equivalent, > and >= also)
                 if op in ['<=', '<']:
                     op = '<='
                 elif op in ['>=', '>']:
                     op = '>='
-                vars_ops.append((var, op))
+                vars_ops_vals.append((var, op, value))
         # Sort by variable name and operator
-        return sorted(vars_ops)
+        return sorted(vars_ops_vals)
 
     # Method to find similar rules between trees, considering the variables and operators
     def find_duplicated_rules_between_trees(self):
@@ -359,14 +372,14 @@ class RuleClassifier:
                     continue
                 vars_ops1 = self.extract_variables_and_operators(rule1.conditions)
                 vars_ops2 = self.extract_variables_and_operators(rule2.conditions)
-                
+
                 # Verify if the variables and operators are the same (values may differ) and if the resulting classes are equal
                 if vars_ops1 == vars_ops2 and rule1.class_ == rule2.class_:
                     similar_rules.append((rule1, rule2))
         return similar_rules
     
     # Method to find duplicated rules in the same tree
-    def find_duplicated_rules(self):
+    def find_duplicated_rules(self, type='soft'):
         """
         Identifies nearly identical rules within the the same decision tree.
 
@@ -400,17 +413,46 @@ class RuleClassifier:
                         last_cond2 = rule2.conditions[-1]
                         # Check if the last condition differs only by the operator and value,
                         # and both are for the same feature
-                        last_parts1 = last_cond1.split(' ')
-                        last_parts2 = last_cond2.split(' ')
-                        if (
-                            len(last_parts1) >= 3 and len(last_parts2) >= 3 and
-                            last_parts1[0] == last_parts2[0] and  # same feature
-                            (
-                                ('<=' in last_parts1[1] and '>' in last_parts2[1]) or
-                                ('>' in last_parts1[1] and '<=' in last_parts2[1])
-                            )
-                        ):
-                            duplicated_rules.append((rule1, rule2))
+                        # Split for operator and value (handles spaces)
+                        for op in ['<=', '>=', '<', '>']:
+                            if op in last_cond1:
+                                idx = last_cond1.index(op)
+                                var1 = last_cond1[:idx].strip()
+                                op1 = op
+                                value1 = last_cond1[idx + len(op):].strip()
+                                last_parts1 = [var1, op1, value1]
+                                break
+                        else:
+                            last_parts1 = [last_cond1]  # fallback, should not happen
+
+                        for op in ['<=', '>=', '<', '>']:
+                            if op in last_cond2:
+                                idx = last_cond2.index(op)
+                                var2 = last_cond2[:idx].strip()
+                                op2 = op
+                                value2 = last_cond2[idx + len(op):].strip()
+                                last_parts2 = [var2, op2, value2]
+                                break
+                        else:
+                            last_parts2 = [last_cond2]  # fallback, should not 
+                            
+                        # Check if the last parts are the same feature and differ only by operator
+                        if type == 'soft':
+                            if (
+                                len(last_parts1) >= 3 and len(last_parts2) >= 3 and
+                                last_parts1[0] == last_parts2[0] and  # same feature
+                                (
+                                    ('<=' in last_parts1[1] and '>' in last_parts2[1]) or
+                                    ('>' in last_parts1[1] and '<=' in last_parts2[1])
+                                )
+                            ):
+                                duplicated_rules.append((rule1, rule2))
+                        if type == 'medium':
+                            if (('<=' in last_parts1[1] and '>' in last_parts2[1]) or
+                                    ('>' in last_parts1[1] and '<=' in last_parts2[1]) or
+                                    ('>=' in last_parts1[1] and '<' in last_parts2[1]) or
+                                    ('<' in last_parts1[1] and '>=' in last_parts2[1])):
+                                duplicated_rules.append((rule1, rule2))
         return duplicated_rules
     
     # Method to set a custom rule removal function
@@ -466,7 +508,13 @@ class RuleClassifier:
             return self.custom_rule_removal(self.initial_rules)
         
         print("\nANALYSING DUPLICATED RULES IN THE SAME TREE")
-        similar_rules = self.find_duplicated_rules()
+        if method not in ["soft", "medium", "hard", 'custom']:
+            raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium', 'hard' or 'custom'.")
+        
+        if method == "medium":
+            similar_rules = self.find_duplicated_rules(type='medium')
+        else:
+            similar_rules = self.find_duplicated_rules(type='soft')
 
         unique_rules = []
         duplicated_rules = set()
@@ -511,9 +559,9 @@ class RuleClassifier:
                 print(f"{rule2.name}: {rule2.conditions}")
 
                 # Create a new rule based on the common conditions of the duplicated rules
-                common_conditions = rule1.conditions[:-1]  # Use the common conditions up to the penultimate condition
+                common_conditions = rule1.conditions
                 new_rule_name = f"{rule1.name}_&_{rule2.name}"
-                new_rule_class = rule1.class_  # Assuming both rules have the same class
+                new_rule_class = rule1.class_ 
                 new_rule = Rule(new_rule_name, new_rule_class, common_conditions)
 
 
@@ -733,8 +781,8 @@ class RuleClassifier:
             elapsed_time = end_time - start_time
             
             # Print the time elapsed in executing rule analysis and adjustment
-            print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds")
-            f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds\n")
+            print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
+            f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds\n")
 
         return self
     
@@ -958,8 +1006,8 @@ class RuleClassifier:
                 elapsed_time = end_time - start_time
                 
                 # Print the time elapsed in executing rule analysis and adjustment
-                print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds")
-                f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.2f} seconds\n")
+                print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
+                f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds\n")
 
                 # Save the initial model to a .pkl file
                 with open('examples/files/final_model.pkl', 'wb') as file:
@@ -1182,8 +1230,8 @@ class RuleClassifier:
             # Finalize the timer for the initial model
             end_time_initial = time.time()
             elapsed_time_initial = end_time_initial - start_time_initial
-            print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds")
-            f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds\n")
+            print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.3f} seconds")
+            f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.3f} seconds\n")
 
             print("\n******************************* FINAL MODEL *******************************\n")
             f.write("\n******************************* FINAL MODEL *******************************\n")
@@ -1234,8 +1282,8 @@ class RuleClassifier:
             # Finalize the timer for the final model
             end_time_final = time.time()
             elapsed_time_final = end_time_final - start_time_final
-            print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds")
-            f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds\n")
+            print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.3f} seconds")
+            f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.3f} seconds\n")
 
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
@@ -1433,8 +1481,8 @@ class RuleClassifier:
                 # Finalize the timer for the initial model
                 end_time_initial = time.time()
                 elapsed_time_initial = end_time_initial - start_time_initial
-                print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds")
-                f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.2f} seconds\n")
+                print(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.3f} seconds")
+                f.write(f"\nTime elapsed in executing initial model classifications: {elapsed_time_initial:.3f} seconds\n")
 
 
                 print("\n******************************* FINAL MODEL *******************************\n")
@@ -1504,8 +1552,8 @@ class RuleClassifier:
                 # Finalize the timer for the final model
                 end_time_final = time.time()
                 elapsed_time_final = end_time_final - start_time_final
-                print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds")
-                f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.2f} seconds\n")
+                print(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.3f} seconds")
+                f.write(f"\nTime elapsed in executing final model classifications: {elapsed_time_final:.3f} seconds\n")
 
                 # Track cases where the initial classification diverged from the final classification
 
@@ -1601,13 +1649,13 @@ class RuleClassifier:
                     avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
 
                     print("\nAverage Metrics Across Trees (Initial Rules):")
-                    print(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}")
+                    print(f"  Average Features Used: {avg_features_used:.2f}")
                     print(f"  Average Total Rules: {avg_rules:.2f}")
                     print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
                     print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
                     print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
                     f.write("\nAverage Metrics Across Trees (Initial Rules):\n")
-                    f.write(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}\n")
+                    f.write(f"  Average Features Used: {avg_features_used:.2f}\n")
                     f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
                     f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
                     f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
@@ -1649,13 +1697,13 @@ class RuleClassifier:
                     avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
 
                     print("\nAverage Metrics Across Trees (Final Rules):")
-                    print(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}")
+                    print(f"  Average Features Used: {avg_features_used:.2f}")
                     print(f"  Average Total Rules: {avg_rules:.2f}")
                     print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
                     print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
                     print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
                     f.write("\nAverage Metrics Across Trees (Final Rules):\n")
-                    f.write(f"  Average Features Used: {avg_features_used:.2f}/{avg_features:.2f}\n")
+                    f.write(f"  Average Features Used: {avg_features_used:.2f}\n")
                     f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
                     f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
                     f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
