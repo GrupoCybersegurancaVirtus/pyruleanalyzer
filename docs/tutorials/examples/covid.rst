@@ -15,13 +15,12 @@ Prepare Your Dataset
 
 As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` `new_classifier` method expects a dataset split into two files: `train.csv` and `test.csv`. The dataset must also be formatted with the following characteristics:
 
-- No header row.
 - Each row represents a single sample.
 - The last column is the target class label.
 - All other columns are feature values.
 - All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
 
-We can use the following script to remove the header row and split the data, be sure to adapt it to your current pipeline as needed:
+We can use the following script to split the data, be sure to adapt it to your current pipeline as needed:
 
 .. code-block:: python
     
@@ -40,12 +39,12 @@ We can use the following script to remove the header row and split the data, be 
         X, y, test_size=0.25, stratify=True
     )
 
-    # Save to CSV files without headers and index
+    # Save to CSV files without index
     train_df = pd.concat([X_train, y_train], axis=1)
     test_df = pd.concat([X_test, y_test], axis=1)
 
-    train_df.to_csv("train.csv", index=False, header=False)
-    test_df.to_csv("test.csv", index=False, header=False)
+    train_df.to_csv("train.csv", index=False)
+    test_df.to_csv("test.csv", index=False)
 
 Training the Tree and Extracting Its Rules
 ---------------------------------------------------
@@ -82,10 +81,10 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 Using the model
 ---------------
 
-To use the refined model to classify new entries we can use the `classify` method with the `final` parameter set to `True`, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. You must name your features as “v{column}” where `column` is the column index in the csv.
+To use the refined model to classify new entries we can use the `classify` method with the `final` parameter set to `True`, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. If your dataset didn't include a header row you must name your features as “v{column}” where `column` is the column index in the csv.
 
 .. code-block:: python
     
     # Replace with actual values of your dataset
-    sample = {"v1": 1, "v2": 23, "v3": 34, ..., "vn": 654}
+    sample = {"Symptom- Throat Pain": 0, "Symptom- Dyspnea": 1, "Symptom- Fever": 0, ..., "Are you a health professional?": 0}
     predicted_class, votes, probabilities = classifier.classify(sample, final=True)

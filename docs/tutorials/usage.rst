@@ -35,7 +35,6 @@ Prepare Your Dataset
 
 Your dataset should be in CSV format with the following characteristics:
 
-- No header row.
 - Each row represents a single sample.
 - The last column is the target class label.
 - All other columns are feature values.
@@ -58,8 +57,6 @@ Split your dataset into training and testing sets. Here's how you can do it usin
 
     # Load the dataset
     df = pd.read_csv("your_dataset.csv")
-    # If your csv already omits the header line, you should use this instead:
-    # df = pd.read_csv("rapid_balanced.csv", header=None)
 
     # Split into features and target
     X = df.iloc[:, :-1]
@@ -70,12 +67,12 @@ Split your dataset into training and testing sets. Here's how you can do it usin
         X, y, test_size=0.25, stratify=True
     )
 
-    # Save to CSV files without headers and index
+    # Save to CSV files without index
     train_df = pd.concat([X_train, y_train], axis=1)
     test_df = pd.concat([X_test, y_test], axis=1)
 
-    train_df.to_csv("train.csv", index=False, header=False)
-    test_df.to_csv("test.csv", index=False, header=False)
+    train_df.to_csv("train.csv", index=False)
+    test_df.to_csv("test.csv", index=False)
 
 Train a Model and Extract Rules
 -------------------------------
@@ -152,11 +149,11 @@ This method will:
 Make Predictions
 ----------------
 
-Use the `classify` method to make predictions on new samples. You must name your features as "v{column}" where `column` is the column index in the csv. If `final` is set to true the classifier will use the refined rule set to classify the sample.
+Use the `classify` method to make predictions on new samples. If your dataset didn't include a header row you must name your features as “v{column}” where `column` is the column index in the csv. If `final` is set to true the classifier will use the refined rule set to classify the sample.
 
 .. code-block:: python
     
-    sample = {"v1": 1, "v2": 23, "v3": 34, ..., "vn": 654}
+    sample = {"feature_1": 1, "feature_2": 23, "feature_4": 34, ..., "feature_n": 654}
     predicted_class, votes, probabilities = classifier.classify(sample, final=True)
 
 Returns:
