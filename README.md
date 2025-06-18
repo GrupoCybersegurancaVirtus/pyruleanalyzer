@@ -1,29 +1,15 @@
 # PyRuleAnalyzer
 
-# Rule Extraction Examples
+PyRuleAnalyzer is a Python-based tool designed to support rule extraction, analysis, and simplification from decision tree and random forest models. It provides a comprehensive pipeline to generate interpretable models, remove redundancies, and evaluate model accuracy and interpretability.
 
-This repository contains execution examples for rule extraction using the scripts `main_RF.py` and `main_DT.py`.
+Key functionalities include:
 
-## Prerequisites
+- Extracting decision rules from Random Forests and Decision Trees.
 
-Make sure you have the following installed:
+- Identifying and removing redundant and duplicate rules.
 
-- Python 3.7 or higher
-- Required libraries listed in the `requirements.txt` file
+- Evaluating initial and simplified models through classification accuracy, confusion matrices, and interpretability metrics.
 
-To install the dependencies, run:
-pip install -r requirements.txt
+- Computing sparsity and interpretability scores to assess model complexity and understandability.
 
-
-### 1. Prepare the Dataset
-- Place your training and testing datasets in the `data/` directory.
-- Ensure the files are in CSV format.
-
-### 2. Configure the Model
-- Open the script you want to execute (`main_RF.py` or `main_DT.py`).
-- Adjust the model parameters and file paths as needed.
-
-### 3. Run the Script
-- Execute the script using Python:
-  ```bash
-  python main_RF.py
+For guides on installation and usage refer to the documentation on https://grupocybersegurancavirtus.github.io/pyruleanalyzer/
