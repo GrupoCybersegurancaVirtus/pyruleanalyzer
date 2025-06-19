@@ -19,6 +19,10 @@ dependencies = [
     "scikit-learn",
     "matplotlib"
 ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 
 [project.optional-dependencies]
 docs = [
@@ -27,3 +31,7 @@ docs = [
     "sphinx_rtd_theme",
     "sphinxcontrib-bibtex",
 ]
+
+[project.urls]
+Homepage = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer"
+Documentation = "https://grupocybersegurancavirtus.github.io/pyruleanalyzer/"
