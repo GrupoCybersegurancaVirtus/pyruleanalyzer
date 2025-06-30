@@ -39,7 +39,7 @@ Index: 13
 Predicted: 1, Actual: 1
 
 Index: 14
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 15
 Predicted: 0, Actual: 0
@@ -66,7 +66,7 @@ Index: 22
 Predicted: 0, Actual: 0
 
 Index: 23
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 24
 Predicted: 0, Actual: 0
@@ -93,7 +93,7 @@ Index: 31
 Predicted: 1, Actual: 1
 
 Index: 32
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 33
 Predicted: 1, Actual: 1
@@ -105,7 +105,7 @@ Index: 35
 Predicted: 1, Actual: 1
 
 Index: 36
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 37
 Predicted: 1, Actual: 1
@@ -138,7 +138,7 @@ Index: 46
 Predicted: 0, Actual: 0
 
 Index: 47
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 48
 Predicted: 1, Actual: 1
@@ -162,7 +162,7 @@ Index: 54
 Predicted: 0, Actual: 0
 
 Index: 55
-Predicted: 0, Actual: 0
+ERROR: Predicted: 1, Actual: 0
 
 Index: 56
 Predicted: 1, Actual: 1
@@ -192,7 +192,7 @@ Index: 64
 Predicted: 1, Actual: 1
 
 Index: 65
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 66
 Predicted: 0, Actual: 0
@@ -258,7 +258,7 @@ Index: 86
 Predicted: 0, Actual: 0
 
 Index: 87
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 88
 Predicted: 1, Actual: 1
@@ -279,7 +279,7 @@ Index: 93
 Predicted: 1, Actual: 1
 
 Index: 94
-Predicted: 0, Actual: 0
+ERROR: Predicted: 1, Actual: 0
 
 Index: 95
 Predicted: 1, Actual: 1
@@ -312,7 +312,7 @@ Index: 104
 Predicted: 1, Actual: 1
 
 Index: 105
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 106
 Predicted: 0, Actual: 0
@@ -348,7 +348,7 @@ Index: 116
 Predicted: 0, Actual: 0
 
 Index: 117
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 118
 Predicted: 1, Actual: 1
@@ -480,7 +480,7 @@ Index: 160
 Predicted: 0, Actual: 0
 
 Index: 161
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 162
 Predicted: 0, Actual: 0
@@ -498,7 +498,7 @@ Index: 166
 Predicted: 1, Actual: 1
 
 Index: 167
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 168
 Predicted: 1, Actual: 1
@@ -585,10 +585,10 @@ Index: 195
 Predicted: 0, Actual: 0
 
 Index: 196
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 197
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 198
 Predicted: 1, Actual: 1
@@ -609,7 +609,7 @@ Index: 203
 Predicted: 0, Actual: 0
 
 Index: 204
-Predicted: 0, Actual: 0
+ERROR: Predicted: 1, Actual: 0
 
 Index: 205
 Predicted: 1, Actual: 1
@@ -657,7 +657,7 @@ Index: 219
 Predicted: 0, Actual: 0
 
 Index: 220
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 221
 Predicted: 0, Actual: 0
@@ -687,7 +687,7 @@ Index: 229
 Predicted: 0, Actual: 0
 
 Index: 230
-Predicted: 0, Actual: 0
+ERROR: Predicted: 1, Actual: 0
 
 Index: 231
 Predicted: 0, Actual: 0
@@ -696,7 +696,7 @@ Index: 232
 Predicted: 0, Actual: 0
 
 Index: 233
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 234
 Predicted: 0, Actual: 0
@@ -768,7 +768,7 @@ Index: 256
 Predicted: 0, Actual: 0
 
 Index: 257
-Predicted: 0, Actual: 0
+ERROR: Predicted: 1, Actual: 0
 
 Index: 258
 Predicted: 1, Actual: 1
@@ -777,7 +777,7 @@ Index: 259
 Predicted: 1, Actual: 1
 
 Index: 260
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 261
 Predicted: 0, Actual: 0
@@ -816,7 +816,7 @@ Index: 272
 Predicted: 1, Actual: 1
 
 Index: 273
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 274
 Predicted: 1, Actual: 1
@@ -840,7 +840,7 @@ Index: 280
 Predicted: 1, Actual: 1
 
 Index: 281
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 282
 Predicted: 0, Actual: 0
@@ -870,16 +870,16 @@ Index: 290
 Predicted: 0, Actual: 0
 
 Index: 291
-ERROR: Predicted: 1, Actual: 0
+Predicted: 0, Actual: 0
 
 Index: 292
 Predicted: 0, Actual: 0
 
 Index: 293
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 294
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 295
 Predicted: 0, Actual: 0
@@ -987,7 +987,7 @@ Index: 329
 Predicted: 0, Actual: 0
 
 Index: 330
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 331
 Predicted: 1, Actual: 1
@@ -1002,13 +1002,13 @@ Index: 334
 ERROR: Predicted: 1, Actual: 0
 
 Index: 335
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 336
 Predicted: 1, Actual: 1
 
 Index: 337
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 338
 Predicted: 1, Actual: 1
@@ -1056,7 +1056,7 @@ Index: 352
 Predicted: 1, Actual: 1
 
 Index: 353
-ERROR: Predicted: 0, Actual: 1
+Predicted: 1, Actual: 1
 
 Index: 354
 Predicted: 0, Actual: 0
@@ -1162,46 +1162,25 @@ ERROR: Predicted: 0, Actual: 1
 
 RESULTS SUMMARY:
 
-Correct: 341, Errors: 46, Accuracy: 0.88114
+Correct: 361, Errors: 26, Accuracy: 0.93282
 
 Confusion Matrix with Labels:
 Labels: [0, 1]
-[[182  16]
- [ 30 159]]
+[[186  12]
+ [ 14 175]]
 
 Errors: 
-
-Index: 14
-ERROR: Predicted: 0, Actual: 1
 
 Index: 16
 ERROR: Predicted: 0, Actual: 1
 
-Index: 23
-ERROR: Predicted: 1, Actual: 0
-
-Index: 32
-ERROR: Predicted: 0, Actual: 1
-
-Index: 36
-ERROR: Predicted: 1, Actual: 0
-
-Index: 47
-ERROR: Predicted: 1, Actual: 0
-
-Index: 65
+Index: 55
 ERROR: Predicted: 1, Actual: 0
 
 Index: 72
 ERROR: Predicted: 0, Actual: 1
 
-Index: 87
-ERROR: Predicted: 0, Actual: 1
-
-Index: 105
-ERROR: Predicted: 1, Actual: 0
-
-Index: 117
+Index: 94
 ERROR: Predicted: 1, Actual: 0
 
 Index: 124
@@ -1213,76 +1192,37 @@ ERROR: Predicted: 1, Actual: 0
 Index: 155
 ERROR: Predicted: 0, Actual: 1
 
-Index: 161
-ERROR: Predicted: 0, Actual: 1
-
-Index: 167
-ERROR: Predicted: 0, Actual: 1
-
 Index: 184
 ERROR: Predicted: 1, Actual: 0
 
-Index: 196
-ERROR: Predicted: 0, Actual: 1
-
-Index: 197
-ERROR: Predicted: 0, Actual: 1
+Index: 204
+ERROR: Predicted: 1, Actual: 0
 
 Index: 217
 ERROR: Predicted: 0, Actual: 1
 
-Index: 220
-ERROR: Predicted: 1, Actual: 0
-
 Index: 227
 ERROR: Predicted: 1, Actual: 0
 
-Index: 233
-ERROR: Predicted: 0, Actual: 1
+Index: 230
+ERROR: Predicted: 1, Actual: 0
 
 Index: 238
 ERROR: Predicted: 0, Actual: 1
 
-Index: 260
+Index: 257
 ERROR: Predicted: 1, Actual: 0
-
-Index: 273
-ERROR: Predicted: 0, Actual: 1
 
 Index: 277
-ERROR: Predicted: 0, Actual: 1
-
-Index: 281
-ERROR: Predicted: 0, Actual: 1
-
-Index: 291
-ERROR: Predicted: 1, Actual: 0
-
-Index: 293
-ERROR: Predicted: 0, Actual: 1
-
-Index: 294
 ERROR: Predicted: 0, Actual: 1
 
 Index: 296
 ERROR: Predicted: 0, Actual: 1
 
-Index: 330
-ERROR: Predicted: 0, Actual: 1
-
 Index: 334
 ERROR: Predicted: 1, Actual: 0
 
-Index: 335
-ERROR: Predicted: 0, Actual: 1
-
-Index: 337
-ERROR: Predicted: 0, Actual: 1
-
 Index: 347
-ERROR: Predicted: 0, Actual: 1
-
-Index: 353
 ERROR: Predicted: 0, Actual: 1
 
 Index: 356
@@ -1311,84 +1251,208 @@ ERROR: Predicted: 0, Actual: 1
 
 
 Rule Usage Counts:
-Rule: DT1_Rule1_Class0, Count: 0
-Rule: DT1_Rule2_Class0, Count: 0
-Rule: DT1_Rule3_Class0, Count: 26
-Rule: DT1_Rule4_Class0, Count: 0
-Rule: DT1_Rule5_Class0, Count: 11
-Rule: DT1_Rule6_Class0, Count: 11
-Rule: DT1_Rule7_Class0, Count: 0
-Rule: DT1_Rule8_Class0, Count: 0
-Rule: DT1_Rule9_Class0, Count: 0
-Rule: DT1_Rule10_Class0, Count: 0
-Rule: DT1_Rule11_Class0, Count: 0
-Rule: DT1_Rule12_Class0, Count: 0
+Rule: DT1_Rule1_Class0, Count: 61
+Rule: DT1_Rule2_Class0, Count: 19
+Rule: DT1_Rule3_Class0, Count: 18
+Rule: DT1_Rule4_Class0, Count: 11
+Rule: DT1_Rule5_Class0, Count: 10
+Rule: DT1_Rule6_Class0, Count: 9
+Rule: DT1_Rule7_Class0, Count: 3
+Rule: DT1_Rule8_Class0, Count: 1
+Rule: DT1_Rule9_Class0, Count: 9
+Rule: DT1_Rule10_Class0, Count: 4
+Rule: DT1_Rule11_Class0, Count: 3
+Rule: DT1_Rule12_Class0, Count: 6
 Rule: DT1_Rule13_Class0, Count: 7
 Rule: DT1_Rule14_Class0, Count: 8
-Rule: DT1_Rule15_Class0, Count: 7
-Rule: DT1_Rule16_Class0, Count: 0
-Rule: DT1_Rule17_Class0, Count: 0
+Rule: DT1_Rule15_Class0, Count: 8
+Rule: DT1_Rule16_Class0, Count: 5
+Rule: DT1_Rule17_Class0, Count: 2
 Rule: DT1_Rule18_Class0, Count: 4
-Rule: DT1_Rule19_Class0, Count: 0
-Rule: DT1_Rule20_Class0, Count: 0
+Rule: DT1_Rule19_Class0, Count: 3
+Rule: DT1_Rule20_Class0, Count: 2
 Rule: DT1_Rule21_Class0, Count: 0
-Rule: DT1_Rule1_Class1, Count: 0
-Rule: DT1_Rule2_Class1, Count: 25
-Rule: DT1_Rule3_Class1, Count: 0
-Rule: DT1_Rule4_Class1, Count: 5
-Rule: DT1_Rule5_Class1, Count: 0
+Rule: DT1_Rule22_Class0, Count: 2
+Rule: DT1_Rule23_Class0, Count: 0
+Rule: DT1_Rule24_Class0, Count: 1
+Rule: DT1_Rule25_Class0, Count: 2
+Rule: DT1_Rule26_Class0, Count: 1
+Rule: DT1_Rule27_Class0, Count: 3
+Rule: DT1_Rule28_Class0, Count: 0
+Rule: DT1_Rule29_Class0, Count: 1
+Rule: DT1_Rule30_Class0, Count: 0
+Rule: DT1_Rule31_Class0, Count: 0
+Rule: DT1_Rule32_Class0, Count: 0
+Rule: DT1_Rule33_Class0, Count: 0
+Rule: DT1_Rule34_Class0, Count: 0
+Rule: DT1_Rule35_Class0, Count: 0
+Rule: DT1_Rule36_Class0, Count: 0
+Rule: DT1_Rule37_Class0, Count: 0
+Rule: DT1_Rule38_Class0, Count: 0
+Rule: DT1_Rule39_Class0, Count: 2
+Rule: DT1_Rule40_Class0, Count: 1
+Rule: DT1_Rule41_Class0, Count: 0
+Rule: DT1_Rule42_Class0, Count: 2
+Rule: DT1_Rule43_Class0, Count: 0
+Rule: DT1_Rule44_Class0, Count: 0
+Rule: DT1_Rule45_Class0, Count: 1
+Rule: DT1_Rule46_Class0, Count: 2
+Rule: DT1_Rule47_Class0, Count: 0
+Rule: DT1_Rule48_Class0, Count: 1
+Rule: DT1_Rule1_Class1, Count: 91
+Rule: DT1_Rule2_Class1, Count: 17
+Rule: DT1_Rule3_Class1, Count: 18
+Rule: DT1_Rule4_Class1, Count: 16
+Rule: DT1_Rule5_Class1, Count: 5
 Rule: DT1_Rule6_Class1, Count: 7
-Rule: DT1_Rule7_Class1, Count: 6
-Rule: DT1_Rule8_Class1, Count: 5
-Rule: DT1_Rule9_Class1, Count: 0
-Rule: DT1_Rule10_Class1, Count: 3
-Rule: DT1_Rule11_Class1, Count: 0
+Rule: DT1_Rule7_Class1, Count: 5
+Rule: DT1_Rule8_Class1, Count: 4
+Rule: DT1_Rule9_Class1, Count: 5
+Rule: DT1_Rule10_Class1, Count: 2
+Rule: DT1_Rule11_Class1, Count: 3
+Rule: DT1_Rule12_Class1, Count: 3
+Rule: DT1_Rule13_Class1, Count: 1
+Rule: DT1_Rule14_Class1, Count: 0
+Rule: DT1_Rule15_Class1, Count: 3
+Rule: DT1_Rule16_Class1, Count: 0
+Rule: DT1_Rule17_Class1, Count: 0
+Rule: DT1_Rule18_Class1, Count: 0
+Rule: DT1_Rule19_Class1, Count: 0
+Rule: DT1_Rule20_Class1, Count: 1
+Rule: DT1_Rule21_Class1, Count: 0
+Rule: DT1_Rule22_Class1, Count: 1
+Rule: DT1_Rule23_Class1, Count: 4
+Rule: DT1_Rule24_Class1, Count: 4
+Rule: DT1_Rule25_Class1, Count: 1
+Rule: DT1_Rule26_Class1, Count: 0
+Rule: DT1_Rule27_Class1, Count: 0
+Rule: DT1_Rule28_Class1, Count: 0
+Rule: DT1_Rule29_Class1, Count: 0
+Rule: DT1_Rule30_Class1, Count: 1
+Rule: DT1_Rule31_Class1, Count: 0
+Rule: DT1_Rule32_Class1, Count: 1
+Rule: DT1_Rule33_Class1, Count: 0
+Rule: DT1_Rule34_Class1, Count: 2
+Rule: DT1_Rule35_Class1, Count: 0
+Rule: DT1_Rule36_Class1, Count: 2
+Rule: DT1_Rule37_Class1, Count: 0
+Rule: DT1_Rule38_Class1, Count: 0
+Rule: DT1_Rule39_Class1, Count: 0
+Rule: DT1_Rule40_Class1, Count: 2
 
 Rules with most Errors:
-Rule: DT1_Rule2_Class0_&_DT1_Rule16_Class0_&_DT1_Rule8_Class0_&_DT1_Rule9_Class0, Errors: 9
-Rule: DT1_Rule1_Class1_&_DT1_Rule3_Class1, Errors: 6
-Rule: DT1_Rule3_Class0, Errors: 6
-Rule: DT1_Rule5_Class1_&_DT1_Rule9_Class1, Errors: 4
-Rule: DT1_Rule4_Class0_&_DT1_Rule21_Class0, Errors: 3
-Rule: DT1_Rule2_Class1, Errors: 3
-Rule: DT1_Rule1_Class0_&_DT1_Rule20_Class0, Errors: 2
-Rule: DT1_Rule7_Class0_&_DT1_Rule12_Class0, Errors: 2
+Rule: DT1_Rule4_Class1, Errors: 4
+Rule: DT1_Rule3_Class0, Errors: 3
+Rule: DT1_Rule2_Class0, Errors: 2
 Rule: DT1_Rule14_Class0, Errors: 2
-Rule: DT1_Rule15_Class0, Errors: 2
-Rule: DT1_Rule7_Class1, Errors: 2
-Rule: DT1_Rule11_Class0_&_DT1_Rule19_Class0, Errors: 1
-Rule: DT1_Rule5_Class0, Errors: 1
+Rule: DT1_Rule4_Class0, Errors: 1
 Rule: DT1_Rule6_Class0, Errors: 1
-Rule: DT1_Rule18_Class0, Errors: 1
-Rule: DT1_Rule10_Class1, Errors: 1
+Rule: DT1_Rule16_Class0, Errors: 1
+Rule: DT1_Rule19_Class0, Errors: 1
+Rule: DT1_Rule27_Class0, Errors: 1
+Rule: DT1_Rule42_Class0, Errors: 1
+Rule: DT1_Rule46_Class0, Errors: 1
+Rule: DT1_Rule2_Class1, Errors: 1
+Rule: DT1_Rule8_Class1, Errors: 1
+Rule: DT1_Rule15_Class1, Errors: 1
+Rule: DT1_Rule23_Class1, Errors: 1
+Rule: DT1_Rule24_Class1, Errors: 1
+Rule: DT1_Rule34_Class1, Errors: 1
+Rule: DT1_Rule36_Class1, Errors: 1
+Rule: DT1_Rule40_Class1, Errors: 1
 
 Final Rules:
-Rule: DT1_Rule2_Class0_&_DT1_Rule16_Class0_&_DT1_Rule8_Class0_&_DT1_Rule9_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5']
-Rule: DT1_Rule1_Class0_&_DT1_Rule20_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5']
-Rule: DT1_Rule4_Class0_&_DT1_Rule21_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 > 0.5']
-Rule: DT1_Rule7_Class0_&_DT1_Rule12_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5']
-Rule: DT1_Rule10_Class0_&_DT1_Rule17_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 <= 0.5']
-Rule: DT1_Rule11_Class0_&_DT1_Rule19_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 <= 0.5']
-Rule: DT1_Rule1_Class1_&_DT1_Rule3_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5']
-Rule: DT1_Rule5_Class1_&_DT1_Rule9_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 > 0.5']
-Rule: DT1_Rule3_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5']
-Rule: DT1_Rule5_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 <= 0.5']
-Rule: DT1_Rule6_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 <= 0.5']
+Rule: DT1_Rule23_Class0_&_DT1_Rule37_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 > 0.5', 'v1 > 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule1_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 > 0.5']
+Rule: DT1_Rule2_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 > 0.5', 'v9 <= 0.5']
+Rule: DT1_Rule3_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 > 0.5', 'v8 > 0.5']
+Rule: DT1_Rule4_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule5_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 <= 0.5', 'v6 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule6_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5', 'v4 <= 0.5']
+Rule: DT1_Rule7_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 > 0.5', 'v9 > 0.5', 'v4 > 0.5']
+Rule: DT1_Rule8_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule9_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 <= 0.5', 'v4 <= 0.5', 'v1 > 0.5']
+Rule: DT1_Rule10_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 <= 0.5', 'v4 <= 0.5']
+Rule: DT1_Rule11_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 > 0.5', 'v8 <= 0.5', 'v10 > 0.5']
+Rule: DT1_Rule12_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 <= 0.5', 'v1 <= 0.5']
 Rule: DT1_Rule13_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 <= 0.5']
 Rule: DT1_Rule14_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 <= 0.5']
-Rule: DT1_Rule15_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 > 0.5', 'v1 > 0.5']
-Rule: DT1_Rule18_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 <= 0.5', 'v9 <= 0.5']
-Rule: DT1_Rule2_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5']
-Rule: DT1_Rule4_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5']
-Rule: DT1_Rule6_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 > 0.5']
-Rule: DT1_Rule7_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5']
-Rule: DT1_Rule8_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 <= 0.5']
-Rule: DT1_Rule10_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 > 0.5', 'v1 <= 0.5']
-Rule: DT1_Rule11_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 <= 0.5', 'v9 > 0.5']
+Rule: DT1_Rule15_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule16_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5', 'v4 > 0.5', 'v6 > 0.5']
+Rule: DT1_Rule17_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5']
+Rule: DT1_Rule18_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v5 <= 0.5', 'v4 <= 0.5']
+Rule: DT1_Rule19_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 > 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule20_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule21_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 > 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule22_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 <= 0.5', 'v4 > 0.5', 'v9 <= 0.5']
+Rule: DT1_Rule24_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule25_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 <= 0.5', 'v5 <= 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule26_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 <= 0.5', 'v1 > 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule27_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 <= 0.5', 'v9 <= 0.5', 'v1 > 0.5']
+Rule: DT1_Rule28_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 <= 0.5', 'v7 <= 0.5']
+Rule: DT1_Rule29_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5', 'v8 > 0.5', 'v10 <= 0.5']
+Rule: DT1_Rule30_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v7 <= 0.5']
+Rule: DT1_Rule31_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule32_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 <= 0.5', 'v9 > 0.5']
+Rule: DT1_Rule33_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule34_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 > 0.5', 'v8 <= 0.5', 'v4 <= 0.5']
+Rule: DT1_Rule35_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v6 <= 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule36_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 > 0.5', 'v10 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule38_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 > 0.5', 'v10 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule39_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 <= 0.5', 'v6 > 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule40_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 <= 0.5', 'v6 <= 0.5', 'v5 <= 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule41_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 <= 0.5', 'v8 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule42_Class0, Class: Class0, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 > 0.5', 'v8 > 0.5', 'v10 <= 0.5']
+Rule: DT1_Rule43_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v10 <= 0.5', 'v4 <= 0.5', 'v9 > 0.5']
+Rule: DT1_Rule44_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v7 <= 0.5', 'v6 > 0.5']
+Rule: DT1_Rule45_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 <= 0.5', 'v5 > 0.5', 'v1 > 0.5', 'v7 > 0.5']
+Rule: DT1_Rule46_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 <= 0.5', 'v5 > 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule47_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5', 'v4 > 0.5', 'v6 <= 0.5', 'v8 > 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule48_Class0, Class: Class0, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5', 'v4 > 0.5', 'v6 <= 0.5', 'v8 <= 0.5']
+Rule: DT1_Rule1_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 > 0.5']
+Rule: DT1_Rule2_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 > 0.5']
+Rule: DT1_Rule3_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v3 > 0.5']
+Rule: DT1_Rule4_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 > 0.5', 'v10 > 0.5']
+Rule: DT1_Rule5_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v6 > 0.5']
+Rule: DT1_Rule6_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 > 0.5', 'v10 > 0.5']
+Rule: DT1_Rule7_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 <= 0.5', 'v8 > 0.5']
+Rule: DT1_Rule8_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v7 > 0.5']
+Rule: DT1_Rule9_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 > 0.5', 'v8 > 0.5']
+Rule: DT1_Rule10_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule11_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 > 0.5', 'v8 > 0.5', 'v10 > 0.5']
+Rule: DT1_Rule12_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v10 > 0.5']
+Rule: DT1_Rule13_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 <= 0.5', 'v4 > 0.5']
+Rule: DT1_Rule14_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 > 0.5', 'v10 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule15_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 > 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule16_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 <= 0.5', 'v3 <= 0.5', 'v4 <= 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule17_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v6 <= 0.5', 'v1 > 0.5']
+Rule: DT1_Rule18_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 <= 0.5', 'v9 <= 0.5']
+Rule: DT1_Rule19_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 <= 0.5', 'v6 > 0.5', 'v1 > 0.5']
+Rule: DT1_Rule20_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 > 0.5', 'v10 <= 0.5', 'v5 > 0.5']
+Rule: DT1_Rule21_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v5 <= 0.5', 'v4 > 0.5']
+Rule: DT1_Rule22_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 <= 0.5', 'v1 > 0.5', 'v8 > 0.5']
+Rule: DT1_Rule23_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 > 0.5', 'v6 <= 0.5', 'v4 > 0.5', 'v1 > 0.5', 'v5 > 0.5']
+Rule: DT1_Rule24_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 <= 0.5', 'v5 <= 0.5', 'v8 > 0.5']
+Rule: DT1_Rule25_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v10 <= 0.5', 'v4 <= 0.5', 'v9 <= 0.5']
+Rule: DT1_Rule26_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v10 <= 0.5', 'v4 > 0.5']
+Rule: DT1_Rule27_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 <= 0.5', 'v8 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule28_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 > 0.5', 'v9 <= 0.5', 'v10 > 0.5', 'v4 <= 0.5', 'v6 <= 0.5', 'v5 <= 0.5', 'v1 > 0.5']
+Rule: DT1_Rule29_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 <= 0.5', 'v1 > 0.5', 'v8 <= 0.5', 'v10 <= 0.5']
+Rule: DT1_Rule30_Class1, Class: Class1, Conditions: ['v2 > 0.5', 'v7 <= 0.5', 'v3 <= 0.5', 'v6 > 0.5', 'v10 > 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5']
+Rule: DT1_Rule31_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 > 0.5', 'v8 <= 0.5', 'v4 > 0.5', 'v9 > 0.5']
+Rule: DT1_Rule32_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 > 0.5', 'v1 <= 0.5', 'v5 > 0.5', 'v7 > 0.5']
+Rule: DT1_Rule33_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 <= 0.5', 'v9 > 0.5']
+Rule: DT1_Rule34_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 <= 0.5', 'v9 <= 0.5', 'v1 <= 0.5']
+Rule: DT1_Rule35_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 > 0.5', 'v5 > 0.5', 'v8 > 0.5', 'v10 > 0.5', 'v7 <= 0.5', 'v6 <= 0.5']
+Rule: DT1_Rule36_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 > 0.5', 'v7 <= 0.5', 'v10 > 0.5', 'v8 <= 0.5', 'v4 > 0.5']
+Rule: DT1_Rule37_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 <= 0.5', 'v7 > 0.5']
+Rule: DT1_Rule38_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 > 0.5', 'v4 <= 0.5', 'v8 > 0.5', 'v6 <= 0.5', 'v5 > 0.5', 'v1 > 0.5', 'v7 <= 0.5']
+Rule: DT1_Rule39_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 > 0.5', 'v8 > 0.5', 'v10 <= 0.5', 'v5 <= 0.5']
+Rule: DT1_Rule40_Class1, Class: Class1, Conditions: ['v2 <= 0.5', 'v3 <= 0.5', 'v9 <= 0.5', 'v7 <= 0.5', 'v4 > 0.5', 'v6 <= 0.5', 'v8 > 0.5', 'v1 > 0.5']
 
-Total Initial Rules: 32
-Total Final Rules: 22
+Total Initial Rules: 88
+Total Final Rules: 87
 
-Total Duplicated Rules: 10
+Total Duplicated Rules: 1
 
-Time elapsed in executing rule analysis and adjustment: 0.009 seconds
+Time elapsed in executing rule analysis and adjustment: 0.029 seconds

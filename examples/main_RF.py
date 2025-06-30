@@ -2,26 +2,18 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-# train_path = "examples/data/rapid_balanceado_treinamento.csv"
-# test_path = "examples/data/rapid_balanceado_teste.csv"
+train_path = "examples/data/covid_train.csv"
+test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/mushrooms_encoded_train.csv"
 # test_path = "examples/data/mushrooms_encoded_test.csv"
 
-train_path = "examples/data/iris_train.csv"
-test_path = "examples/data/iris_test.csv"
+# train_path = "examples/data/iris_train.csv"
+# test_path = "examples/data/iris_test.csv"
 
 # Model parameters
 model_parameters = {
-    'criterion': 'gini',
-    'bootstrap': True,
-    'oob_score': False,
-    'n_jobs': None,
-    'verbose': 0,
-    'warm_start': False,
-    'ccp_alpha': 0.0,
-    'max_samples': None,
-    'n_estimators': 100,
+    'n_estimators': 10,
     'random_state': 42
 }
 

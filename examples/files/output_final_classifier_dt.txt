@@ -1,35 +1,35 @@
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 341, Errors: 46
-Accuracy: 0.88114
-Precision: 0.90857
-Recall: 0.84127
-F1 Score: 0.87363
-Specificity: 0.91919
+Correct: 361, Errors: 26
+Accuracy: 0.93282
+Precision: 0.93583
+Recall: 0.92593
+F1 Score: 0.93085
+Specificity: 0.93939
 
 Confusion Matrix with Labels:
 Labels: [0, 1]
-[182, 16]
-[30, 159]
+[186, 12]
+[14, 175]
 
-Time elapsed in executing initial model classifications: 0.007 seconds
+Time elapsed in executing initial model classifications: 0.020 seconds
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 341, Errors: 46
-Accuracy: 0.88114
-Precision: 0.90857
-Recall: 0.84127
-F1 Score: 0.87363
-Specificity: 0.91919
+Correct: 361, Errors: 26
+Accuracy: 0.93282
+Precision: 0.93583
+Recall: 0.92593
+F1 Score: 0.93085
+Specificity: 0.93939
 
 Confusion Matrix with Labels:
 Labels: [0, 1]
-[182, 16]
-[30, 159]
+[186, 12]
+[14, 175]
 
-Time elapsed in executing final model classifications: 0.004 seconds
+Time elapsed in executing final model classifications: 0.018 seconds
 
 ******************************* DIVERGENT CASES *******************************
 No divergent cases found.
@@ -38,14 +38,14 @@ No divergent cases found.
 Tree (Initial): DT1
   Features Used: 10/10
   Sparsity: 0.00
-  Total Rules: 32
-  Max Rule Depth: 5
-  Mean Rule Depth: 5.00
-  Sparsity Interpretability Score: 2.38
+  Total Rules: 88
+  Max Rule Depth: 10
+  Mean Rule Depth: 6.95
+  Sparsity Interpretability Score: 0.95
 Tree (Final): DT1
   Features Used: 10/10
   Sparsity: 0.00
-  Total Rules: 22
-  Max Rule Depth: 5
-  Mean Rule Depth: 4.59
-  Sparsity Interpretability Score: 3.17
+  Total Rules: 87
+  Max Rule Depth: 10
+  Mean Rule Depth: 6.94
+  Sparsity Interpretability Score: 0.96
