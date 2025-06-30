@@ -768,8 +768,8 @@ class RuleClassifier:
             f.write(f"Total Final Rules: {len(self.final_rules)}\n")
 
             # Print the total number of duplicated rules
-            print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) + len(self.specific_rules)}")
-            f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) + len(self.specific_rules)}\n")
+            print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}")
+            f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}\n")
 
             # Print the total number of specific rules
             if remove_below_n_classifications > -1:
@@ -993,8 +993,8 @@ class RuleClassifier:
                 f.write(f"Total Final Rules: {len(self.final_rules)}\n")
                 
                 # Print the total number of duplicated rules
-                print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) + len(self.specific_rules)}")
-                f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) + len(self.specific_rules)}\n")
+                print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}")
+                f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}\n")
 
                 # Print the total number of specific rules
                 if remove_below_n_classifications > -1:
