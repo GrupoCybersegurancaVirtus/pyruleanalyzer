@@ -714,6 +714,11 @@ class RuleClassifier:
                         f.write(f"Rule: {rule.name}, Count: {rule.usage_count}\n")
                         self.specific_rules.append(rule)
                         self.final_rules.remove(rule)
+         
+            # Print the final rules
+            f.write("\nFinal Rules:\n")
+            for rule in self.final_rules:
+                f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
 
             accuracy = correct / total if total > 0 else 0
             
@@ -738,12 +743,14 @@ class RuleClassifier:
             print("\nErrors: \n" + errors + "\n")
             f.write("\nErrors: \n" + errors + "\n")
 
-            # Print each rule with its usage count
-            print("\nRule Usage Counts:")
-            f.write("\nRule Usage Counts:\n")
-            for rule in self.initial_rules:
-                print(f"Rule: {rule.name}, Count: {rule.usage_count}")
-                f.write(f"Rule: {rule.name}, Count: {rule.usage_count}\n")
+            # Print the rules with the most classifications (usage)
+            print("\nRules with most Classifications:")
+            f.write("\nRules with most Classifications:\n")
+            sorted_by_usage = sorted(self.final_rules, key=lambda r: r.usage_count, reverse=True)
+            for rule in sorted_by_usage:
+                if rule.usage_count > 0:
+                    print(f"- {rule.name}, Classifications: {rule.usage_count}")
+                    f.write(f"- {rule.name}, Classifications: {rule.usage_count}\n")
 
             # Print the rules with the most errors
             print("\nRules with most Errors:")
@@ -751,13 +758,28 @@ class RuleClassifier:
             sorted_rules = sorted(self.final_rules, key=lambda r: r.error_count, reverse=True)
             for rule in sorted_rules:
                 if rule.error_count > 0:
-                    print(f"Rule: {rule.name}, Errors: {rule.error_count}")
-                    f.write(f"Rule: {rule.name}, Errors: {rule.error_count}\n")
+                    error_percentage = (rule.error_count / rule.usage_count) * 100 if rule.usage_count > 0 else 0
+                    print(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} classifications ({error_percentage:.2f}%)")
+                    f.write(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} classifications ({error_percentage:.2f}%)\n")
 
-            # Print the final rules
-            f.write("\nFinal Rules:\n")
-            for rule in self.final_rules:
-                f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
+            # Print rules with error percentage above the average
+            print("\nRules with most Error Percentage:")
+            f.write("\nRules with most Error Percentage:\n")
+            # Calculate error percentages for all rules with usage > 0
+            error_percentages = [
+                (rule, (rule.error_count / rule.usage_count) * 100)
+                for rule in self.final_rules if rule.usage_count > 0
+            ]
+            if error_percentages:
+                avg_error_percentage = np.mean([ep for _, ep in error_percentages])
+                for rule, error_percentage in sorted(error_percentages, key=lambda x: x[1], reverse=True):
+                    if error_percentage > avg_error_percentage:
+                        print(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} ({error_percentage:.2f}%)")
+                        f.write(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} ({error_percentage:.2f}%)\n")
+            else:
+                print("No rules with usage > 0 to calculate error percentage.")
+                f.write("No rules with usage > 0 to calculate error percentage.\n")
+
 
             print("\n******************************* SUMMARY *******************************\n")
 
@@ -909,28 +931,6 @@ class RuleClassifier:
                 print("\nErrors: \n" + errors + "\n")
                 f.write("\nErrors: \n" + errors + "\n")
 
-                # Print each rule with its usage count
-                print("\nRule Usage Counts:")
-                f.write("\nRule Usage Counts:\n")
-                for rule in self.initial_rules:
-                    print(f"Rule: {rule.name}, Count: {rule.usage_count}")
-                    f.write(f"Rule: {rule.name}, Count: {rule.usage_count}\n")
-
-                # Sum the usage counts by tree
-                tree_usage_counts = {}
-                for rule in self.initial_rules:
-                    tree_name = rule.name.split('_')[0]
-                    if tree_name not in tree_usage_counts:
-                        tree_usage_counts[tree_name] = 0
-                    tree_usage_counts[tree_name] += rule.usage_count
-
-                # Print the usage counts for each tree
-                print("\nTree Usage Counts:")
-                f.write("\nTree Usage Counts:\n")
-                for tree_name, count in tree_usage_counts.items():
-                    print(f"Tree: {tree_name}, Total Usage Count: {count}")
-                    f.write(f"Tree: {tree_name}, Total Usage Count: {count}\n")
-
                 # Print the initial rules
                 print("\nInitial Rules:")
                 f.write("\nInitial Rules:\n")
@@ -975,14 +975,42 @@ class RuleClassifier:
                     print(f"Tree: {tree_name}, Rule Count: {count}")
                     f.write(f"Tree: {tree_name}, Rule Count: {count}\n")
 
-                # Print the rules with errors and their error counts
+                # Print the rules with the most classifications (usage)
+                print("\nRules with most Classifications:")
+                f.write("\nRules with most Classifications:\n")
+                sorted_by_usage = sorted(self.final_rules, key=lambda r: r.usage_count, reverse=True)
+                for rule in sorted_by_usage:
+                    if rule.usage_count > 0:
+                        print(f"- {rule.name}, Classifications: {rule.usage_count}")
+                        f.write(f"- {rule.name}, Classifications: {rule.usage_count}\n")
+
+                # Print the rules with the most errors
                 print("\nRules with most Errors:")
                 f.write("\nRules with most Errors:\n")
                 sorted_rules = sorted(self.final_rules, key=lambda r: r.error_count, reverse=True)
                 for rule in sorted_rules:
                     if rule.error_count > 0:
-                        print(f"Rule: {rule.name}, Errors: {rule.error_count}")
-                        f.write(f"Rule: {rule.name}, Errors: {rule.error_count}\n")
+                        error_percentage = (rule.error_count / rule.usage_count) * 100 if rule.usage_count > 0 else 0
+                        print(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} classifications ({error_percentage:.2f}%)")
+                        f.write(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} classifications ({error_percentage:.2f}%)\n")
+                
+                # Print rules with error percentage above the average
+                print("\nRules with most Error Percentage:")
+                f.write("\nRules with most Error Percentage:\n")
+                # Calculate error percentages for all rules with usage > 0
+                error_percentages = [
+                    (rule, (rule.error_count / rule.usage_count) * 100)
+                    for rule in self.final_rules if rule.usage_count > 0
+                ]
+                if error_percentages:
+                    avg_error_percentage = np.mean([ep for _, ep in error_percentages])
+                    for rule, error_percentage in sorted(error_percentages, key=lambda x: x[1], reverse=True):
+                        if error_percentage > avg_error_percentage:
+                            print(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} ({error_percentage:.2f}%)")
+                            f.write(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} ({error_percentage:.2f}%)\n")
+                else:
+                    print("No rules with usage > 0 to calculate error percentage.")
+                    f.write("No rules with usage > 0 to calculate error percentage.\n")
 
                 print("\n******************************* SUMMARY *******************************\n")
 
@@ -1351,14 +1379,12 @@ class RuleClassifier:
                 n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
                 sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
                 print(f"\nTree (Initial):")
-                print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
                 print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
                 print(f"  Total Rules: {sparsity_info['total_rules']}")
                 print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
                 print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
                 print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
                 f.write(f"Tree (Initial): {tree_name}\n")
-                f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
                 f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
                 f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
                 f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
@@ -1377,14 +1403,12 @@ class RuleClassifier:
                 n_features_total = len(set(cond.split(' ')[0] for rule in rules for cond in rule.conditions))
                 sparsity_info = RuleClassifier.calculate_sparsity_interpretability(rules, n_features_total)
                 print(f"\nTree (Final):")
-                print(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}")
                 print(f"  Sparsity: {sparsity_info['sparsity']:.2f}")
                 print(f"  Total Rules: {sparsity_info['total_rules']}")
                 print(f"  Max Rule Depth: {sparsity_info['max_depth']}")
                 print(f"  Mean Rule Depth: {sparsity_info['mean_rule_depth']:.2f}")
                 print(f"  Sparsity Interpretability Score: {sparsity_info['sparsity_interpretability_score']:.2f}")
                 f.write(f"Tree (Final): {tree_name}\n")
-                f.write(f"  Features Used: {sparsity_info['features_used']}/{sparsity_info['total_features']}\n")
                 f.write(f"  Sparsity: {sparsity_info['sparsity']:.2f}\n")
                 f.write(f"  Total Rules: {sparsity_info['total_rules']}\n")
                 f.write(f"  Max Rule Depth: {sparsity_info['max_depth']}\n")
@@ -1649,13 +1673,11 @@ class RuleClassifier:
                     avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
 
                     print("\nAverage Metrics Across Trees (Initial Rules):")
-                    print(f"  Average Features Used: {avg_features_used:.2f}")
                     print(f"  Average Total Rules: {avg_rules:.2f}")
                     print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
                     print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
                     print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
                     f.write("\nAverage Metrics Across Trees (Initial Rules):\n")
-                    f.write(f"  Average Features Used: {avg_features_used:.2f}\n")
                     f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
                     f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
                     f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
@@ -1697,13 +1719,11 @@ class RuleClassifier:
                     avg_sparsity_interpretability_score = total_sparsity_interpretability_score / tree_count
 
                     print("\nAverage Metrics Across Trees (Final Rules):")
-                    print(f"  Average Features Used: {avg_features_used:.2f}")
                     print(f"  Average Total Rules: {avg_rules:.2f}")
                     print(f"  Average Max Rule Depth: {avg_max_depth:.2f}")
                     print(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}")
                     print(f"  Average Sparsity Interpretability Score: {avg_sparsity_interpretability_score:.2f}")
                     f.write("\nAverage Metrics Across Trees (Final Rules):\n")
-                    f.write(f"  Average Features Used: {avg_features_used:.2f}\n")
                     f.write(f"  Average Total Rules: {avg_rules:.2f}\n")
                     f.write(f"  Average Max Rule Depth: {avg_max_depth:.2f}\n")
                     f.write(f"  Average Mean Rule Depth: {avg_mean_rule_depth:.2f}\n")
