@@ -1,51 +1,57 @@
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 361, Errors: 26
-Accuracy: 0.93282
-Precision: 0.93583
-Recall: 0.92593
-F1 Score: 0.93085
-Specificity: 0.93939
+Correct: 245685, Errors: 141
+Accuracy: 0.99987
+Precision: 0.99984
+Recall: 0.99958
+F1 Score: 0.99971
+Specificity: 0.99995
 
 Confusion Matrix with Labels:
-Labels: [0, 1]
-[186, 12]
-[14, 175]
+Labels: [0, 1, 2, 3, 4, 5]
+[131852, 3, 7, 28, 5, 10]
+[4, 38400, 0, 2, 0, 1]
+[1, 2, 3075, 10, 0, 0]
+[6, 1, 5, 69024, 1, 0]
+[2, 0, 2, 0, 1639, 7]
+[3, 0, 0, 1, 40, 1695]
 
-Time elapsed in executing initial model classifications: 0.020 seconds
+Time elapsed in executing initial model classifications: 100.446 seconds
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 361, Errors: 26
-Accuracy: 0.93282
-Precision: 0.93583
-Recall: 0.92593
-F1 Score: 0.93085
-Specificity: 0.93939
+Correct: 245685, Errors: 141
+Accuracy: 0.99987
+Precision: 0.99984
+Recall: 0.99958
+F1 Score: 0.99971
+Specificity: 0.99995
 
 Confusion Matrix with Labels:
-Labels: [0, 1]
-[186, 12]
-[14, 175]
+Labels: [0, 1, 2, 3, 4, 5]
+[131852, 3, 7, 28, 5, 10]
+[4, 38400, 0, 2, 0, 1]
+[1, 2, 3075, 10, 0, 0]
+[6, 1, 5, 69024, 1, 0]
+[2, 0, 2, 0, 1639, 7]
+[3, 0, 0, 1, 40, 1695]
 
-Time elapsed in executing final model classifications: 0.018 seconds
+Time elapsed in executing final model classifications: 108.996 seconds
 
 ******************************* DIVERGENT CASES *******************************
 No divergent cases found.
 
 ******************************* INTERPRETABILITY METRICS *******************************
 Tree (Initial): DT1
-  Features Used: 10/10
   Sparsity: 0.00
-  Total Rules: 88
-  Max Rule Depth: 10
-  Mean Rule Depth: 6.95
-  Sparsity Interpretability Score: 0.95
+  Total Rules: 482
+  Max Rule Depth: 37
+  Mean Rule Depth: 17.26
+  Sparsity Interpretability Score: 0.19
 Tree (Final): DT1
-  Features Used: 10/10
   Sparsity: 0.00
-  Total Rules: 87
-  Max Rule Depth: 10
-  Mean Rule Depth: 6.94
-  Sparsity Interpretability Score: 0.96
+  Total Rules: 426
+  Max Rule Depth: 37
+  Mean Rule Depth: 16.73
+  Sparsity Interpretability Score: 0.21

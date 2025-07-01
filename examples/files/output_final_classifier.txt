@@ -18,7 +18,7 @@ Labels: [0, 1, 2, 3, 4, 5]
 [3, 0, 0, 0, 2, 1734]
 Total Rules: 8127
 
-Time elapsed in executing initial model classifications: 7757.478 seconds
+Time elapsed in executing initial model classifications: 8035.894 seconds
 
 ******************************* FINAL MODEL *******************************
 
@@ -39,7 +39,7 @@ Labels: [0, 1, 2, 3, 4, 5]
 [3, 0, 0, 0, 2, 1734]
 Total Rules: 4904
 
-Time elapsed in executing final model classifications: 4531.668 seconds
+Time elapsed in executing final model classifications: 5799.409 seconds
 
 ******************************* DIVERGENT CASES *******************************
 Index: 12416, Data: {'Destination Port': 80.0, 'Flow Duration': 167.0, 'Total Fwd Packets': 2.0, 'Total Backward Packets': 0.0, 'Total Length of Fwd Packets': 0.0, 'Total Length of Bwd Packets': 0.0, 'Fwd Packet Length Max': 0.0, 'Fwd Packet Length Min': 0.0, 'Fwd Packet Length Mean': 0.0, 'Fwd Packet Length Std': 0.0, 'Bwd Packet Length Max': 0.0, 'Bwd Packet Length Min': 0.0, 'Bwd Packet Length Mean': 0.0, 'Bwd Packet Length Std': 0.0, 'Flow Bytes/s': 0.0, 'Flow Packets/s': 11976.0479, 'Flow IAT Mean': 167.0, 'Flow IAT Std': 0.0, 'Flow IAT Max': 167.0, 'Flow IAT Min': 167.0, 'Fwd IAT Total': 167.0, 'Fwd IAT Mean': 167.0, 'Fwd IAT Std': 0.0, 'Fwd IAT Max': 167.0, 'Fwd IAT Min': 167.0, 'Bwd IAT Total': 0.0, 'Bwd IAT Mean': 0.0, 'Bwd IAT Std': 0.0, 'Bwd IAT Max': 0.0, 'Bwd IAT Min': 0.0, 'Fwd PSH Flags': 0.0, 'Fwd Header Length': 64.0, 'Bwd Header Length': 0.0, 'Fwd Packets/s': 11976.0479, 'Bwd Packets/s': 0.0, 'Min Packet Length': 0.0, 'Max Packet Length': 0.0, 'Packet Length Mean': 0.0, 'Packet Length Std': 0.0, 'Packet Length Variance': 0.0, 'FIN Flag Count': 0.0, 'SYN Flag Count': 0.0, 'RST Flag Count': 0.0, 'PSH Flag Count': 0.0, 'ACK Flag Count': 1.0, 'URG Flag Count': 0.0, 'ECE Flag Count': 0.0, 'Down/Up Ratio': 0.0, 'Average Packet Size': 0.0, 'Avg Fwd Segment Size': 0.0, 'Avg Bwd Segment Size': 0.0, 'Fwd Header Length.1': 64.0, 'Subflow Fwd Packets': 2.0, 'Subflow Fwd Bytes': 0.0, 'Subflow Bwd Packets': 0.0, 'Subflow Bwd Bytes': 0.0, 'Init_Win_bytes_forward': 264.0, 'Init_Win_bytes_backward': -1.0, 'act_data_pkt_fwd': 0.0, 'min_seg_size_forward': 32.0, 'Active Mean': 0.0, 'Active Std': 0.0, 'Active Max': 0.0, 'Active Min': 0.0, 'Idle Mean': 0.0, 'Idle Std': 0.0, 'Idle Max': 0.0, 'Idle Min': 0.0}, Initial Class: 0, Final Class: 3, Actual Class: 0
@@ -52,14 +52,12 @@ Index: 226830, Data: {'Destination Port': 80.0, 'Flow Duration': 1350.0, 'Total 
 ******************************* INTERPRETABILITY METRICS *******************************
 
 Average Metrics Across Trees (Initial Rules):
-  Average Features Used: 21.60
   Average Total Rules: 812.70
   Average Max Rule Depth: 30.30
   Average Mean Rule Depth: 16.13
   Average Sparsity Interpretability Score: 0.12
 
 Average Metrics Across Trees (Final Rules):
-  Average Features Used: 21.50
   Average Total Rules: 490.40
   Average Max Rule Depth: 29.50
   Average Mean Rule Depth: 14.95
