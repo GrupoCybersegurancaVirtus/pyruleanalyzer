@@ -1,13 +1,19 @@
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-train_path = "examples/data/covid_train.csv"
-test_path = "examples/data/covid_test.csv"
+# train_path = "examples/data/covid_train.csv"
+# test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/mushrooms_encoded_train.csv"
 # test_path = "examples/data/mushrooms_encoded_test.csv"
 
-# train_path = "examples/data/iris_train.csv"
-# test_path = "examples/data/iris_test.csv"
+train_path = "examples/data/iris_train.csv"
+test_path = "examples/data/iris_test.csv"
+
+# train_path = "examples/data/CICIDS2017-Wed2_train.csv"
+# test_path = "examples/data/CICIDS2017-Wed2_test.csv"
+
+# train_path = "examples/data/train-set1.csv"
+# test_path = "examples/data/test-set1.csv"
 
 # Model parameters
 model_parameters = {
