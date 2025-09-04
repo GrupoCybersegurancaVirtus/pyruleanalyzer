@@ -2,8 +2,8 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-train_path = "examples/data/covid_train.csv"
-test_path = "examples/data/covid_test.csv"
+# train_path = "examples/data/covid_train.csv"
+# test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/mushrooms_encoded_train.csv"
 # test_path = "examples/data/mushrooms_encoded_test.csv"
@@ -11,10 +11,19 @@ test_path = "examples/data/covid_test.csv"
 # train_path = "examples/data/iris_train.csv"
 # test_path = "examples/data/iris_test.csv"
 
+# train_path = "examples/data/CICIDS2017-Wed2_train.csv"
+# test_path = "examples/data/CICIDS2017-Wed2_test.csv"
+
+train_path = "examples/data/train-set1.csv"
+test_path = "examples/data/test-set1.csv"
+
+# train_path = "examples/data/ddos-train.csv"
+# test_path = "examples/data/ddos-test.csv"
+
 # Model parameters
 model_parameters = {
-    'n_estimators': 10,
-    'random_state': 42
+    'random_state': 42,
+    'n_estimators': 10  # Number of trees in the forest
 }
 
 # Generating the initial rule based model

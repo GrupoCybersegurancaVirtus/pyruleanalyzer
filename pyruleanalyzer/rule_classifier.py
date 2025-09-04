@@ -154,22 +154,34 @@ class RuleClassifier:
             tuple contains (variable name, operator, numeric threshold).
         """
         parsed_conditions = []
-        if not conditions or conditions[0] == '':
+        if not conditions or conditions[0] == '' or conditions == []:
             return []
         for condition in conditions:
             if '<=' in condition:
-                var, value = condition.split(' <= ')
-                parsed_conditions.append((var, '<=', float(value)))
+                parts = condition.split(' <= ')
+                if len(parts) == 2:
+                    var, value = parts
+                    parsed_conditions.append((var, '<=', float(value)))
             elif '>=' in condition:
-                var, value = condition.split(' >= ')
-                parsed_conditions.append((var, '>=', float(value)))
+                parts = condition.split(' >= ')
+                if len(parts) == 2:
+                    var, value = parts
+                    parsed_conditions.append((var, '>=', float(value)))
             elif '<' in condition:
-                var, value = condition.split(' < ')
-                parsed_conditions.append((var, '<', float(value)))
+                parts = condition.split(' < ')
+                if len(parts) == 2:
+                    var, value = parts
+                    parsed_conditions.append((var, '<', float(value)))
             elif '>' in condition:
-                var, value = condition.split(' > ')
-                parsed_conditions.append((var, '>', float(value)))
+                parts = condition.split(' > ')
+                if len(parts) == 2:
+                    var, value = parts
+                    parsed_conditions.append((var, '>', float(value)))
+            else:
+                # Ignore or log conditions that do not match expected format
+                continue
         return parsed_conditions
+
 
     # Method to execute the classification process
     def classify(self, data, final=False):
@@ -700,6 +712,11 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
             f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds\n")
 
+        # Save the final classifier to a pickle file
+        with open('examples/files/final_model.pkl', 'wb') as model_file:
+            pickle.dump(self, model_file)
+        print("Final classifier saved to 'examples/files/final_model.pkl'.")
+
         return self
 
     # Method to execute the rule analysis for Random Forest
@@ -863,6 +880,11 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
             f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds\n")
             
+        # Save the final classifier to a pickle file
+        with open('examples/files/final_model.pkl', 'wb') as model_file:
+            pickle.dump(self, model_file)
+        print("Final classifier saved to 'examples/files/final_model.pkl'.")
+
         return self
 
     @staticmethod
@@ -1067,8 +1089,14 @@ class RuleClassifier:
             correct_initial = (y_pred_initial == y_true).sum()
             RuleClassifier.display_metrics(y_true.tolist(), y_pred_initial.tolist(), correct_initial, len(y_true), f)
             end_time_initial = time.time()
+
+            print(f"\nNumber of initial rules: {len(self.initial_rules)}")
+            f.write(f"\nNumber of initial rules: {len(self.initial_rules)}\n")
+
             print(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds")
             f.write(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds\n")
+
+
 
             
             print("\n******************************* FINAL MODEL *******************************\n")
@@ -1095,12 +1123,18 @@ class RuleClassifier:
                 rule.usage_count = len(matches)
                 if not matches.empty:
                     errors = matches[matches[target_column_name] != predicted_class]
-            y_pred_final = y_pred_final.infer_objects(copy=False).astype(int)
+            y_pred_final = y_pred_final.infer_objects(copy=False).fillna(-1).astype(int)
             correct_final = (y_pred_final == y_true).sum()
             RuleClassifier.display_metrics(y_true.tolist(), y_pred_final.tolist(), correct_final, len(y_true), f)
             end_time_final = time.time()
+
+            print(f"\nNumber of final rules: {len(self.final_rules)}")
+            f.write(f"\nNumber of final rules: {len(self.final_rules)}\n")
+
             print(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds")
             f.write(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds\n")
+
+
 
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
@@ -1136,15 +1170,41 @@ class RuleClassifier:
             f.write("\nMetrics (Initial):\n")
             sparsity_info_initial = RuleClassifier.calculate_sparsity_interpretability(self.initial_rules, n_features_total)
             for key, value in sparsity_info_initial.items():
-                print(f"  {key.replace('_', ' ').title()}: {value:.2f}" if isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value}")
-                f.write(f"  {key.replace('_', ' ').title()}: {value}\n" if not isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value:.2f}\n")
+                if isinstance(value, float):
+                    # Use scientific notation for very small or large numbers
+                    if abs(value) < 1e-3 or abs(value) > 1e4:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2e}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2e}\n")
+                    else:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2f}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2f}\n")
+                else:
+                    print(f"  {key.replace('_', ' ').title()}: {value}")
+                    f.write(f"  {key.replace('_', ' ').title()}: {value}\n")
 
             print("\nMetrics (Final):")
             f.write("\nMetrics (Final):\n")
             sparsity_info_final = RuleClassifier.calculate_sparsity_interpretability(self.final_rules, n_features_total)
+            # Calculate percentage difference for each metric
             for key, value in sparsity_info_final.items():
-                print(f"  {key.replace('_', ' ').title()}: {value:.2f}" if isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value}")
-                f.write(f"  {key.replace('_', ' ').title()}: {value}\n" if not isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value:.2f}\n")
+                initial_value = sparsity_info_initial.get(key)
+                percent_diff_str = ""
+                # Only compute percentage if initial_value is not None and is a number
+                if isinstance(value, (int, float)) and isinstance(initial_value, (int, float)) and initial_value != 0:
+                    percent_diff = ((value - initial_value) / initial_value) * 100
+                    sign = "+" if percent_diff >= 0 else ""
+                    percent_diff_str = f" ({sign}{percent_diff:.1f}%)"
+                # Formatting
+                if isinstance(value, float):
+                    if abs(value) < 1e-1 or abs(value) > 1e5:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}\n")
+                    else:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2f}{percent_diff_str}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2f}{percent_diff_str}\n")
+                else:
+                    print(f"  {key.replace('_', ' ').title()}: {value}{percent_diff_str}")
+                    f.write(f"  {key.replace('_', ' ').title()}: {value}{percent_diff_str}\n")
 
     # Method to compare initial and final results for Random Forest using vectorized methodology
     def compare_initial_final_results_rf(self, df_test, target_column_name):
@@ -1219,8 +1279,14 @@ class RuleClassifier:
             correct_initial = (y_pred_initial == y_true.values).sum()
             RuleClassifier.display_metrics(y_true.tolist(), y_pred_initial.tolist(), correct_initial, len(y_true), f)
             end_time_initial = time.time()
+
+            print(f"\nNumber of initial rules: {len(self.initial_rules)}")
+            f.write(f"\nNumber of initial rules: {len(self.initial_rules)}\n")
+
             print(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds")
             f.write(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds\n")
+
+
 
             print("\n******************************* FINAL MODEL *******************************\n")
             f.write("\n******************************* FINAL MODEL *******************************\n")
@@ -1264,8 +1330,13 @@ class RuleClassifier:
             correct_final = (y_pred_final == y_true.values).sum()
             RuleClassifier.display_metrics(y_true.tolist(), y_pred_final.tolist(), correct_final, len(y_true), f)
             end_time_final = time.time()
+
+            print(f"\nNumber of final rules: {len(self.final_rules)}")
+            f.write(f"\nNumber of final rules: {len(self.final_rules)}\n")
+
             print(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds")
             f.write(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds\n")
+
 
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
@@ -1300,17 +1371,187 @@ class RuleClassifier:
             f.write("\nMetrics (Initial):\n")
             sparsity_info_initial = RuleClassifier.calculate_sparsity_interpretability(self.initial_rules, n_features_total)
             for key, value in sparsity_info_initial.items():
-                print(f"  {key.replace('_', ' ').title()}: {value:.2f}" if isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value}")
-                f.write(f"  {key.replace('_', ' ').title()}: {value}\n" if not isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value:.2f}\n")
+                if isinstance(value, float):
+                    # Use scientific notation for very small or large numbers
+                    if abs(value) < 1e-1 or abs(value) > 1e5:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.4e}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.4e}\n")
+                    else:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.4f}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.4f}\n")
+                else:
+                    print(f"  {key.replace('_', ' ').title()}: {value}")
+                    f.write(f"  {key.replace('_', ' ').title()}: {value}\n")
 
             print("\nMetrics (Final):")
             f.write("\nMetrics (Final):\n")
             sparsity_info_final = RuleClassifier.calculate_sparsity_interpretability(self.final_rules, n_features_total)
+            # Calculate percentage difference for each metric
             for key, value in sparsity_info_final.items():
-                print(f"  {key.replace('_', ' ').title()}: {value:.2f}" if isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value}")
-                f.write(f"  {key.replace('_', ' ').title()}: {value}\n" if not isinstance(value, float) else f"  {key.replace('_', ' ').title()}: {value:.2f}\n")
+                initial_value = sparsity_info_initial.get(key)
+                percent_diff_str = ""
+                # Only compute percentage if initial_value is not None and is a number
+                if isinstance(value, (int, float)) and isinstance(initial_value, (int, float)) and initial_value != 0:
+                    percent_diff = ((value - initial_value) / initial_value) * 100
+                    sign = "+" if percent_diff >= 0 else ""
+                    percent_diff_str = f" ({sign}{percent_diff:.1f}%)"
+                # Formatting
+                if isinstance(value, float):
+                    if abs(value) < 1e-1 or abs(value) > 1e5:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}\n")
+                    else:
+                        print(f"  {key.replace('_', ' ').title()}: {value:.2f}{percent_diff_str}")
+                        f.write(f"  {key.replace('_', ' ').title()}: {value:.2f}{percent_diff_str}\n")
+                else:
+                    print(f"  {key.replace('_', ' ').title()}: {value}{percent_diff_str}")
+                    f.write(f"  {key.replace('_', ' ').title()}: {value}{percent_diff_str}\n")
+
+    # ************************ RULE EDITING MODULE ************************
     
-    
+    # Add this helper method inside the RuleClassifier class
+    def _validate_and_parse_condition(self, condition_str):
+        """Validates and parses a condition string entered by the user."""
+        try:
+            parts = condition_str.split(' ')
+            if len(parts) != 3:
+                return None
+            
+            var, op, value_str = parts
+            value = float(value_str)
+
+            if op not in ['<=', '>=', '<', '>']:
+                return None
+            
+            # Returns the condition as a string and as a parsed tuple
+            return f"{var} {op} {value}", (var, op, value)
+        except (ValueError, IndexError):
+            return None
+
+    # Method to edit rules manually
+    def edit_rules(self):
+        """
+        Starts an interactive prompt in the terminal to allow manual editing of rules.
+        The user can list, select, and modify the conditions or the class of a rule.
+        """
+        print("\n*********************************************************************************************************")
+        print("************************************* MANUAL RULE EDITING MODE *************************************")
+        print("*********************************************************************************************************\n")
+        
+        # Always work on the list of final rules
+        if not self.final_rules:
+            print("No final rules to edit. Please run the analysis first.")
+            return
+
+        while True:
+            print("\n--- Current Rules ---")
+            for i, rule in enumerate(self.final_rules):
+                print(f"  [{i+1}] {rule.name}: Class={rule.class_}, Conditions={rule.conditions}")
+
+            print("\nEnter the NUMBER or NAME of the rule you want to edit (or 'exit' to finish):")
+            user_input = input("> ").strip()
+
+            if user_input.lower() == 'exit':
+                break
+
+            selected_rule = None
+            # Try to interpret as number (1-based index)
+            try:
+                rule_index = int(user_input) - 1
+                if 0 <= rule_index < len(self.final_rules):
+                    selected_rule = self.final_rules[rule_index]
+                else:
+                    print(f"ERROR: Number '{user_input}' is out of range. Try again.")
+                    continue
+            except ValueError:
+                # Not a number, try to match by rule name (case-insensitive)
+                for rule in self.final_rules:
+                    if rule.name.lower() == user_input.lower():
+                        selected_rule = rule
+                        break
+                if not selected_rule:
+                    print(f"ERROR: No rule found with name '{user_input}'. Try again.")
+                    continue
+            # Editing loop for the selected rule
+            while True:
+                print(f"\n--- Editing Rule: {selected_rule.name} ---")
+                print(f"  Current Class: {selected_rule.class_}")
+                print(f"  Current Conditions:")
+                for i, cond in enumerate(selected_rule.conditions):
+                    print(f"    [{i}] {cond}")
+                
+                print("\nEdit Options:")
+                print("  [a]dd condition")
+                print("  [r]emove condition")
+                print("  [c]lass (change the prediction class)")
+                print("  [s]ave and return to main menu")
+                
+                action = input("Choose an action > ").strip().lower()
+
+                if action == 'a':
+                    new_cond_str = input("Enter the new condition (format: 'variable operator value', e.g., 'v5 > 10.5'): ")
+                    validation_result = self._validate_and_parse_condition(new_cond_str)
+                    if validation_result:
+                        formatted_cond, parsed_cond = validation_result
+                        selected_rule.conditions.append(formatted_cond)
+                        print(f"Condition '{formatted_cond}' added.")
+                    else:
+                        print("ERROR: Invalid condition format. Use 'variable operator value' (e.g., v1 <= 0.5).")
+                
+                elif action == 'r':
+                    if not selected_rule.conditions:
+                        print("This rule has no conditions to remove.")
+                        continue
+                    try:
+                        idx_to_remove = int(input("Enter the index of the condition to remove: "))
+                        if 0 <= idx_to_remove < len(selected_rule.conditions):
+                            removed = selected_rule.conditions.pop(idx_to_remove)
+                            print(f"Condition '{removed}' removed.")
+                        else:
+                            print("ERROR: Index out of range.")
+                    except ValueError:
+                        print("ERROR: Please enter a valid index number.")
+
+                elif action == 'c':
+                    new_class = input("Enter the new class for this rule (e.g., 'Class1'): ")
+                    selected_rule.class_ = new_class
+                    print(f"Rule class changed to '{new_class}'.")
+
+                elif action == 's':
+                    # *** Crucial step: Re-parse the conditions to maintain consistency ***
+                    selected_rule.parsed_conditions = self.parse_conditions_static(selected_rule.conditions)
+                    
+                    # Add a mark to indicate it was manually edited
+                    if not selected_rule.name.endswith("_edited"):
+                        selected_rule.name += "_edited"
+                        
+                    print(f"Rule '{selected_rule.name}' successfully updated.")
+                    # Save the edited classifier to a file for later access
+                    with open('examples/files/edited_model.pkl', 'wb') as f_out:
+                        pickle.dump(self, f_out)
+                    print("Edited classifier saved to 'examples/files/edited_model.pkl'.")
+                    break # Exit the editing loop for the current rule
+                
+                else:
+                    print("Invalid option. Try again.")
+
+        print("\n************************************** END OF EDITING MODE **************************************\n")
+
+
+    @staticmethod
+    def load(path):
+        """
+        Loads a saved RuleClassifier model from a pickle (.pkl) file.
+
+        Args:
+            path (str): Path to the .pkl file.
+
+        Returns:
+            RuleClassifier: The loaded classifier instance.
+        """
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+
     # ************************ GENERATING SCIKIT-LEARN MODEL ************************
     @staticmethod
     def process_data (train_path, test_path, is_test_only=False):
@@ -1479,47 +1720,6 @@ class RuleClassifier:
             raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
         return rules
 
-    # Method to save rules in a text file
-    @staticmethod
-    def save_tree_rules(rules, class_names_map):
-        """
-        Saves extracted decision rules to a text file in a standardized format.
-
-        Each rule is assigned a unique name that includes the tree index, rule index, and class index.
-        The output is saved to 'examples/files/rules_sklearn.txt'.
-
-        Args:
-            rules (List[Dict[str, List[str]]]): List of rule dictionaries organized by class name.
-            class_names_map (Dict[str, int]): A map from class name to class index.
-        """
-        output_path = 'examples/files/rules_sklearn.txt'
-        with open(output_path, 'w') as file:
-            for i, rule_set in enumerate(rules):
-                rule_index_counter = 1
-                for class_name, class_rules in rule_set.items():
-                    class_index = class_names_map.get(str(class_name), -1)
-                    for rule in class_rules:
-                        rule_name = f"DT{i+1}_Rule{rule_index_counter}_Class{class_index}"
-                        file.write(f"{rule_name}: {rule}\n")
-                        rule_index_counter += 1
-        print(f"Rules file saved: {output_path}")
-
-    # Method to save the Scikit-Learn model
-    @staticmethod
-    def save_sklearn_model(model):
-        """
-        Saves a trained scikit-learn model to disk as a pickle (.pkl) file.
-
-        The model is stored at 'examples/files/sklearn_model.pkl' for later reuse or inspection.
-
-        Args:
-            model (BaseEstimator): A trained scikit-learn classifier (e.g., DecisionTreeClassifier or RandomForestClassifier).
-        """
-        path = 'examples/files/sklearn_model.pkl'
-        with open(path, 'wb') as model_file:
-            pickle.dump(model, model_file)
-        print(f"Sklearn file saved: {path}")
-
     # Method to generate a classifier model based on rules
     @staticmethod
     def generate_classifier_model(rules, class_names_map, algorithm_type='Random Forest'):
@@ -1604,14 +1804,10 @@ class RuleClassifier:
         total = len(y_test)
         RuleClassifier.display_metrics(y_test, y_pred, correct, total)
 
-        print("\nSaving Scikit-Learn model:")
-        RuleClassifier.save_sklearn_model(model)
-
         # Create a mapping from class names to their integer labels
         class_names_map = {str(name): i for i, name in enumerate(np.unique(y_train))}
 
         rules = RuleClassifier.get_tree_rules(model, feature_names, np.unique(y_train), algorithm_type=algorithm_type)
-        RuleClassifier.save_tree_rules(rules, class_names_map)
 
         print("\nGenerating classifier model:")
         classifier = RuleClassifier.generate_classifier_model(rules, class_names_map, algorithm_type)

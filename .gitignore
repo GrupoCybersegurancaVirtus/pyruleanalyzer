@@ -175,3 +175,10 @@ cython_debug/
 
 # Editors:
 .vscode
+/examples/files
+examples/data/ddos-test.csv
+examples/data/ddos-train.csv
+examples/data/test-set1.csv
+examples/data/train-set1.csv
+examples/data/CICIDS2017-Wed2_train.csv
+examples/data/CICIDS2017-Wed2_test.csv
