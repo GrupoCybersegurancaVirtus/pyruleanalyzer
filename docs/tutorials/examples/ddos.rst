@@ -98,6 +98,43 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 
 Since this is a large dataset and the algorithm goes through many iterative steps to ensure no new duplicate rules are accidentally created during pruning, it may take a longer time to fully complete the analysis, specially if you use the "hard" removal method.
 
+Editing
+-------
+
+After pruning, you may also want to manually inspect and adjust the final rules before deploying the model.
+The :ref:`RuleClassifier<rule_classifier>` class provides an `edit_rules()` method that starts an interactive terminal session to perform these edits.
+
+You’ll be able to:
+
+- List all current final rules with their names, predicted classes, and conditions.
+- Select a rule by number or name.
+- Add new conditions (e.g. v5 > 10.5).
+- Remove existing conditions by index. 
+- Change the predicted class of a rule.
+- Save your edits, which will:
+    - Re-parse the conditions to keep them consistent,
+    - Append an _edited suffix to the rule’s name,
+    - Persist the entire classifier to examples/files/edited_model.pkl.
+
+.. code-block:: python
+
+    # Enter manual editing mode
+    classifier.edit_rules()
+
+
+During editing:
+
+- Type the rule number or name to open it.
+- Use:
+    - :code:`a` → add condition
+    - :code:`r` → remove condition
+    - :code:`c` → change class
+    - :code:`s` → save changes
+- Type exit at the main prompt to finish editing.
+
+This is useful if you want to refine the automatically extracted rules with domain knowledge.
+
+
 Using the model
 ---------------
 
