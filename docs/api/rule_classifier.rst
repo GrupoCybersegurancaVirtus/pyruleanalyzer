@@ -5,4 +5,3 @@ RuleClassifier
 
 .. autoclass:: pyruleanalyzer.RuleClassifier
    :members:
-   :undoc-members:
