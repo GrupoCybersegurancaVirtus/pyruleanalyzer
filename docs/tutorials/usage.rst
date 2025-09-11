@@ -170,3 +170,16 @@ You can use the `compare_initial_final_results` method to generate useful metric
 .. code-block:: python
     
     classifier.compare_initial_final_results(test_path)
+
+Editing
+-------
+
+You can also manually edit the final rules by calling the `edit_rules()` method in your classifier instance.
+
+The program will spawn an interactive menu that allows you to edit the rules.
+
+In the first screen you can select a rule for editing by typing its associated number or name. You may enter 'exit' to exit.
+
+After selecting a rule, you'll be presented with its conditions. You can use 'a' to add a new condition, 'r' to remove and 'c' to change the predicted class. By entering 's' you'll save the changes and return to the previous menu.
+
+New conditions are added as 'variable operator value', e.g.: "v5 > 10.5"
