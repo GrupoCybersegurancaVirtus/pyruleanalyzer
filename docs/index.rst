@@ -4,7 +4,7 @@ Overview
 
 Key functionalities include:
 
-* Extracting decision rules from Random Forests and Decision Trees.
+* Extracting decision rules from tree-based artificial intelligence models.
 * Identifying and removing redundant and duplicate rules.
 * Evaluating initial and simplified models through classification accuracy, confusion matrices, and interpretability metrics.
 * Computing sparsity and interpretability scores to assess model complexity and understandability.
