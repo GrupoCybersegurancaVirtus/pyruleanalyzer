@@ -1,6 +1,6 @@
 API Documentation
 =================
-The PyRuleAnalyzer module exports two main classes: the :ref:`Rule<rule>` class, and the :ref:`RuleClassifier<rule_classifier>` class.
+The pyRuleAnalyzer module exports two main classes: the :ref:`Rule<rule>` class, and the :ref:`RuleClassifier<rule_classifier>` class.
 
 .. toctree::
    rule
