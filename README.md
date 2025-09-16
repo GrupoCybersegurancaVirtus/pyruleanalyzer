@@ -1,6 +1,6 @@
-# PyRuleAnalyzer
+# pyRuleAnalyzer
 
-PyRuleAnalyzer is a Python-based tool designed to support rule extraction, analysis, and simplification from decision tree and random forest models. It provides a comprehensive pipeline to generate interpretable models, remove redundancies, and evaluate model accuracy and interpretability.
+pyRuleAnalyzer is a Python-based tool designed that supports rule extraction, analysis, and simplification from tree-based AI models. It provides a comprehensive pipeline to generate interpretable models, remove redundancies, and evaluate model accuracy and interpretability.
 
 Key functionalities include:
 

@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
-project = "PyRuleAnalyzer"
+project = "pyRuleAnalyzer"
 copyright = "2025, GrupoCybersegurancaVirtus"
 author = "GrupoCybersegurancaVirtus"
 version = "1.1.0"
