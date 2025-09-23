@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 import csv
+from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 import pickle
@@ -15,7 +16,7 @@ from sklearn.preprocessing import LabelEncoder
 class Rule:
     """
     Represents a complete ruleset (path from root to leaf) in a decision tree.
-
+    
     This class is not designed to be operated directly, but by instead using the main :ref:`RuleClassifier<rule_classifier>` class.
 
     Attributes:
@@ -24,7 +25,7 @@ class Rule:
         conditions (List[str]): List of condition strings (like "v2 > 0.5")
         usage_count (int): Number of times the rule matched during classification
         error_count (int): Number of times the rule matched but the prediction was wrong
-        parse_conditions (Tuple[str, str, float]): Provides caching for conditions
+        parsed_conditions (Tuple[str, str, float]): Provides caching for conditions
     """
 
     __slots__ = ['name', 'class_', 'conditions', 'usage_count', 'error_count', 'parsed_conditions']
@@ -48,21 +49,21 @@ class Rule:
 
 # Class to handle the rule classification process
 class RuleClassifier:
-    """
-    Represents a rule-based classifier built from decision paths in tree models.
-    
-    This class supports rule extraction, classification, refinement, and 
-    analysis of decision logic derived from scikit-learn Decision Tree and 
-    Random Forest models.
-
-    Attributes:
-        initial_rules (List[Rule]): List of all parsed rules extracted from the model.
-        final_rules (List[Rule]): Filtered rule list after duplicate removal or other processing.
-        duplicated_rules (List[Tuple[Rule, Rule]]): List of rules identified as structurally redundant.
-        specific_rules (List[Rule]): Rules removed based on low usage or specificity.
-        algorithm_type (str): Type of model used to generate the rules ('Decision Tree' or 'Random Forest').
-    """
     def __init__(self, rules, algorithm_type='Decision Tree'):
+        """
+        Represents a rule-based classifier built from decision paths in tree models.
+        
+        This class supports rule extraction, classification, refinement, and 
+        analysis of decision logic derived from scikit-learn Decision Tree and 
+        Random Forest models.
+
+        Attributes:
+            initial_rules (List[Rule]): List of all parsed rules extracted from the model.
+            final_rules (List[Rule]): Filtered rule list after duplicate removal or other processing.
+            duplicated_rules (List[Tuple[Rule, Rule]]): List of rules identified as structurally redundant.
+            specific_rules (List[Rule]): Rules removed based on low usage or specificity.
+            algorithm_type (str): Type of model used to generate the rules ('Decision Tree' or 'Random Forest').
+        """
         self.initial_rules = self.parse_rules(rules, algorithm_type)
         self.algorithm_type = algorithm_type
         self.final_rules = []
@@ -85,17 +86,17 @@ class RuleClassifier:
             List[Rule]: A list of Rule objects parsed from the input string.
         """
         rules = rules.replace('"', '').replace('- ', '').strip().split('\n')
-
+        
         parsed_rule_list = []
         if algorithm_type == 'Random Forest':
             parsed_rule_list = [self.parse_rf_rule(rule) for rule in rules if rule]
         elif algorithm_type == 'Decision Tree':
             parsed_rule_list = [self.parse_dt_rule(rule) for rule in rules if rule]
-
+        
         # Pre-parse all conditions for efficiency
         for rule in parsed_rule_list:
             rule.parsed_conditions = self.parse_conditions_static(rule.conditions)
-        
+            
         return parsed_rule_list
 
     # Method to parse the rules for Decision Tree
@@ -137,7 +138,7 @@ class RuleClassifier:
         class_ = rule_name.split('_')[-1]
         conditions = conditions_str.replace('[', '').replace(']', '').split(', ') if conditions_str != '[]' else []
         return Rule(rule_name, class_, conditions)
-
+    
     # Method to parse conditions from string to tuple (variable, operator, value)
     @staticmethod
     def parse_conditions_static(conditions):
@@ -183,6 +184,7 @@ class RuleClassifier:
                 continue
         return parsed_conditions
 
+
     # Method to execute the classification process
     def classify(self, data, final=False):
         """
@@ -214,7 +216,7 @@ class RuleClassifier:
                         return int(part.replace('Class', '')), None, None
             return None, None, None
         return None, None, None
-
+    
     # Method to classify data using Decision Tree rules
     @staticmethod
     def classify_dt(data, rules):
@@ -238,20 +240,20 @@ class RuleClassifier:
                 if instance_value is None:
                     rule_satisfied = False
                     break
-
+                
                 if not ( (op == '<=' and instance_value <= value) or \
                          (op == '>=' and instance_value >= value) or \
                          (op == '<'  and instance_value < value)  or \
                          (op == '>'  and instance_value > value) ):
                     rule_satisfied = False
                     break
-
+            
             if rule_satisfied:
                 return rule # Return the entire rule object
-
+        
         return None
 
-    # Method to classify data using Random Forest rules
+    # Method to classify data using Random Forest rules    
     @staticmethod
     def classify_rf(data, rules):
         """
@@ -276,7 +278,7 @@ class RuleClassifier:
         class_labels = sorted({int(rule.class_[-1]) for rule in rules})
         if not class_labels:
             return None, [], [], []
-
+            
         class_to_index = {label: idx for idx, label in enumerate(class_labels)}
         num_classes = len(class_labels)
 
@@ -308,7 +310,7 @@ class RuleClassifier:
                     class_label = int(rule.class_[-1])
                     matched_classes_in_tree.append(class_label)
                     all_matched_rules.append(rule)
-
+            
             if matched_classes_in_tree:
                 class_counts = Counter(matched_classes_in_tree)
                 total = sum(class_counts.values())
@@ -327,7 +329,7 @@ class RuleClassifier:
         votes = [class_labels[int(np.argmax(p))] for p in probas if p.any()]
 
         return predicted_class, votes, avg_proba.tolist(), all_matched_rules
-
+    
     # Method to extract variables, operators, and values from conditions
     @staticmethod
     def extract_variables_and_operators(conditions):
@@ -357,7 +359,7 @@ class RuleClassifier:
                     op = '<='
                 elif op == '>':
                     op = '>='
-
+                
                 try:
                     value = float(value_str)
                     vars_ops_vals.append((var, op, value))
@@ -374,7 +376,7 @@ class RuleClassifier:
                         norm_op = '<=' if op_str in ['<=', '<'] else '>='
                         vars_ops_vals.append((var, norm_op, float(value)))
                         break
-
+        
         return sorted(vars_ops_vals)
 
     # Method to find similar rules between trees, considering the variables and operators
@@ -397,10 +399,10 @@ class RuleClassifier:
             # The key includes the class and the logic signature
             signature = (rule.class_, tuple(v[0:2] for v in vars_ops))
             rules_by_signature[signature].append(rule)
-
+            
         # Return only the groups that have more than one similar rule
         return [group for group in rules_by_signature.values() if len(group) > 1]
-
+    
     # Method to find duplicated rules in the same tree
     def find_duplicated_rules(self, type='soft'):
         """
@@ -426,30 +428,30 @@ class RuleClassifier:
                 continue
             prefix_key = (rule.class_, tuple(rule.conditions[:-1]))
             rules_by_prefix[prefix_key].append(rule)
-
+            
         # Check for duplicates only within the smaller groups
         for prefix, candidates in rules_by_prefix.items():
             if len(candidates) < 2:
                 continue
-
+            
             for i in range(len(candidates)):
                 for j in range(i + 1, len(candidates)):
                     rule1 = candidates[i]
                     rule2 = candidates[j]
-
+                    
                     last_cond1 = rule1.conditions[-1]
                     last_cond2 = rule2.conditions[-1]
-
+                    
                     # Efficiently split last conditions
                     parts1 = last_cond1.split(' ')
                     parts2 = last_cond2.split(' ')
 
                     if len(parts1) != 3 or len(parts2) != 3:
                         continue
-
+                        
                     var1, op1, _ = parts1
                     var2, op2, _ = parts2
-
+                    
                     # Check for opposite operators on the same variable
                     is_duplicate = False
                     if var1 == var2:
@@ -463,9 +465,9 @@ class RuleClassifier:
 
                     if is_duplicate:
                         duplicated_rules.append((rule1, rule2))
-
+                            
         return duplicated_rules
-
+    
     # Method to set a custom rule removal function
     def set_custom_rule_removal(self, custom_function):
         """
@@ -512,14 +514,14 @@ class RuleClassifier:
         """
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
-
+        
         print("\nANALYSING DUPLICATED RULES IN THE SAME TREE")
         if method not in ["soft", "medium", "hard", 'custom']:
             raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium', 'hard' or 'custom'.")
-
+        
         # This list of pairs is only from the soft check and is used to decide if the loop should break.
         similar_rules_soft = self.find_duplicated_rules(type=method if method in ['soft', 'medium'] else 'soft')
-
+        
         duplicated_rules = set()
         unique_rules = []
 
@@ -549,28 +551,28 @@ class RuleClassifier:
                     # Add all rules in the group to the removal set
                     for rule in group:
                         duplicated_rules.add(rule)
-
+                    
                     # Create ONE representative rule from the group.
                     # We take the first rule's conditions as representative.
                     representative_rule = group[0]
                     new_rule_name = "_&_".join(sorted([r.name for r in group]))
                     new_rule_class = representative_rule.class_
                     new_rule_conditions = representative_rule.conditions
-
+                    
                     new_rule = Rule(new_rule_name, new_rule_class, new_rule_conditions)
                     new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
-
+                    
                     print(f"\nDuplicated group of {len(group)} rules found. Generalizing to {new_rule.name}")
-
+                    
                     print(f"New rule conditions: {new_rule.conditions}")
                     unique_rules.append(new_rule)
 
         # Construct the final list: the new generalized rules + the old rules that were not duplicates
         unique_rules.extend(rule for rule in self.final_rules if rule not in duplicated_rules)
-
+        
         # The break condition for the main loop is based only on the soft check duplicates.
         return unique_rules, similar_rules_soft
-
+    
     # Method to execute the rule analysis and identify duplicated rules
     def execute_rule_analysis(self, file_path, remove_duplicates="none", remove_below_n_classifications=-1):
         """
@@ -607,7 +609,7 @@ class RuleClassifier:
             self.execute_rule_analysis_dt(file_path, remove_below_n_classifications)
         else:
             raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
-
+        
     # Method to execute the rule analysis for Decision Tree
     def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
         """
@@ -646,7 +648,7 @@ class RuleClassifier:
                 # Build pandas query
                 query_parts = [f"`{var}` {op} {val}" for var, op, val in rule.parsed_conditions]
                 query = " & ".join(query_parts)
-
+                
                 # Find rows matching the rule AND not yet predicted
                 unpredicted_indices = y_pred[y_pred.isnull()].index
                 try:
@@ -659,14 +661,14 @@ class RuleClassifier:
             # Update predictions for matched rows
             predicted_class = int(rule.class_.replace('Class', ''))
             y_pred.loc[condition_query] = predicted_class
-
+            
             # Update usage and error counts
             matches = df_test[condition_query]
             rule.usage_count = len(matches)
             if not matches.empty:
                 errors = matches[matches[target_column_name] != predicted_class]
                 rule.error_count = len(errors)
-
+        
         y_pred.fillna(-1, inplace=True) # Fill remaining as error
         y_true = df_test[target_column_name]
 
@@ -699,14 +701,14 @@ class RuleClassifier:
             f.write(f"\nTotal Initial Rules: {len(self.initial_rules)}\n")
             print(f"Total Final Rules: {len(self.final_rules)}")
             f.write(f"Total Final Rules: {len(self.final_rules)}\n")
-
+            
             print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}")
             f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}\n")
 
             if remove_below_n_classifications > -1:
                 print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
                 f.write(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)\n")
-
+            
             end_time = time.time()
             elapsed_time = end_time - start_time
             print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
@@ -752,7 +754,7 @@ class RuleClassifier:
 
         class_labels = sorted({int(r.class_[-1]) for r in self.final_rules})
         class_to_index = {label: i for i, label in enumerate(class_labels)}
-
+        
         # DataFrame to store probabilities of each tree for each sample
         tree_probas = pd.DataFrame(0, index=df_test.index, columns=tree_rules.keys())
 
@@ -772,13 +774,13 @@ class RuleClassifier:
                         matched_indices = df_test.query(query).index
                     except Exception:
                         continue
-
+                
                 if not matched_indices.empty:
                     predicted_class = int(rule.class_.replace('Class', ''))
                     class_idx = class_to_index.get(predicted_class)
                     if class_idx is not None:
                         tree_class_votes[matched_indices, class_idx] += 1
-
+                    
                     # Update usage count
                     rule.usage_count = len(matched_indices)
 
@@ -791,13 +793,13 @@ class RuleClassifier:
         avg_probas = all_probas / len(tree_rules)
         y_pred_indices = np.argmax(avg_probas, axis=1)
         y_pred = np.array(class_labels)[y_pred_indices]
-
+        
         y_true = df_test[target_column_name].values
-
+        
         # Update error count
         error_indices = np.where(y_pred != y_true)[0]
         for rule in self.final_rules:
-            if rule.usage_count > 0:
+             if rule.usage_count > 0:
                 query = " & ".join([f"`{var}` {op} {val}" for var, op, val in rule.parsed_conditions]) if rule.conditions else None
                 if query:
                     matched_indices = df_test.query(query).index
@@ -817,10 +819,11 @@ class RuleClassifier:
                         self.specific_rules.append(rule)
                 self.final_rules = rules_to_keep
 
+
             f.write("\nInitial Rules:\n")
             for rule in self.initial_rules:
                 f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
-
+            
             f.write("\nFinal Rules:\n")
             for rule in self.final_rules:
                 f.write(f"Rule: {rule.name}, Class: {rule.class_}, Conditions: {rule.conditions}\n")
@@ -845,7 +848,7 @@ class RuleClassifier:
             for rule in sorted_rules:
                 error_percentage = (rule.error_count / rule.usage_count) * 100 if rule.usage_count > 0 else 0
                 f.write(f"- {rule.name}, Errors: {rule.error_count} / {rule.usage_count} classifications ({error_percentage:.2f}%)\n")
-
+            
             error_percentages = [
                 (rule, (rule.error_count / rule.usage_count) * 100)
                 for rule in self.final_rules if rule.usage_count > 0
@@ -866,19 +869,19 @@ class RuleClassifier:
             f.write(f"\nTotal Initial Rules: {len(self.initial_rules)}\n")
             print(f"Total Final Rules: {len(self.final_rules)}")
             f.write(f"Total Final Rules: {len(self.final_rules)}\n")
-
+            
             print(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}")
             f.write(f"\nTotal Duplicated Rules: {len(self.initial_rules) - len(self.final_rules) - len(self.specific_rules)}\n")
 
             if remove_below_n_classifications > -1:
                 print(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)")
                 f.write(f"\nTotal Specific Rules: {len(self.specific_rules)} (<= {remove_below_n_classifications} classifications)\n")
-
+            
             end_time = time.time()
             elapsed_time = end_time - start_time
             print(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds")
             f.write(f"\nTime elapsed in executing rule analysis and adjustment: {elapsed_time:.3f} seconds\n")
-
+            
         # Save the final classifier to a pickle file
         with open('examples/files/final_model.pkl', 'wb') as model_file:
             pickle.dump(self, model_file)
@@ -887,65 +890,105 @@ class RuleClassifier:
         return self
 
     @staticmethod
-    def calculate_sparsity_interpretability(rules, n_features_total):
+    def calculate_structural_complexity(rules: List[Rule], n_features_total: int) -> Dict[str, Any]:
         """
-        Computes sparsity and interpretability metrics for a given rule set.
+        Computes a normalized complexity score and other interpretability metrics for a rule set.
 
-        This method measures how concise and generalizable the rules are by evaluating:
-        - The proportion of total features actually used,
-        - The total number of rules,
-        - Rule depth statistics (max and mean),
-        - A combined Sparsity Interpretability (SI) score.
+        This method calculates a comprehensive set of metrics, including:
+        - A novel 'Structural Complexity Score' based on depth balance and attribute usage.
+        - Traditional metrics like rule counts and depth statistics.
+
+        The primary score combines two dimensions:
+        1.  Depth Balance (D_bal): Measures the structural balance of the rules. It is the ratio
+            of the mean rule depth to the maximum rule depth. A value closer to 1 indicates
+            a more balanced structure.
+            D_bal = mean_rule_depth / max_depth
+
+        2.  Normalized Attribute Usage (A_norm): Measures the diversity of attributes used across
+            all rules, normalized by the total number of rules and features. A higher value indicates
+            that the model leverages a wider range of features across its rules.
+            A_norm = sum(unique_attributes_per_rule) / (total_rules * n_features_total)
+
+        The final 'complexity_score' is the product (D_bal * A_norm), which rewards models that are
+        both structurally balanced and diverse in their feature usage.
 
         Args:
             rules (List[Rule]): A list of Rule objects to analyze.
-            n_features_total (int): Total number of available features in the dataset.
+            n_features_total (int): The total number of available features in the dataset.
 
         Returns:
-            Dict[str,Any]: A dictionary containing
-                - features_used (int): Number of unique features used in rules,
-                - total_features (int): Total number of features in the dataset,
-                - sparsity (float): 1 - (features_used / total_features),
-                - total_rules (int): Total number of rules,
-                - max_depth (int): Maximum number of conditions in a single rule,
-                - mean_rule_depth (float): Average number of conditions per rule,
-                - sparsity_interpretability_score (float): Combined interpretability score (higher is better).
+            Dict[str, Any]: A dictionary containing detailed complexity metrics.
         """
         if not rules:
             return {
-                "features_used": 0, "total_features": n_features_total, "sparsity": 1.0,
-                "total_rules": 0, "max_depth": 0, "mean_rule_depth": 0.0,
-                "sparsity_interpretability_score": float('inf')
+                "total_rules": 0,
+                "mean_rule_depth": 0.0,
+                "max_depth": 0,
+                "depth_balance": 0.0,
+                "attribute_usage_norm": 0.0,
+                "complexity_score": 0.0,
             }
 
-        features_used = set()
-        for rule in rules:
-            for condition in rule.conditions:
-                feature = condition.split(' ')[0]
-                features_used.add(feature)
-
-        n_features_used = len(features_used)
-        sparsity = 1 - (n_features_used / n_features_total) if n_features_total > 0 else 0
-
-        rule_depths = [len(rule.conditions) for rule in rules]
-        max_depth = max(rule_depths) if rule_depths else 0
-        mean_rule_depth = np.mean(rule_depths) if rule_depths else 0
-
         total_rules = len(rules)
+        # The depth of a rule is the number of its conditions
+        rule_depths = [len(rule.conditions) for rule in rules]
 
-        alpha, beta, gamma = 1, 1, 1
-        denominator = alpha * max_depth + beta * mean_rule_depth + gamma * total_rules
-        SI = 100 / denominator if denominator > 0 else float('inf')
+        # --- Traditional Metrics ---
+        max_depth = max(rule_depths) if rule_depths else 0
+        mean_rule_depth = np.mean(rule_depths) if rule_depths else 0.0
 
-        return {
+        all_features_used = set()
+        sum_of_unique_attributes_per_rule = 0
+        for rule in rules:
+            # Use parsed_conditions for robust feature extraction
+            unique_features_in_rule = {var for (var, _, _) in getattr(rule, 'parsed_conditions', [])}
+            all_features_used.update(unique_features_in_rule)
+            sum_of_unique_attributes_per_rule += len(unique_features_in_rule)
+
+        n_features_used = len(all_features_used)
+
+        # 1. Depth Balance (D_bal)
+        depth_balance = mean_rule_depth / max_depth if max_depth > 0 else 0.0
+
+        # 2. Normalized Attribute Usage (A_norm)
+        a_norm_denominator = total_rules * n_features_total
+        attribute_usage_norm = (sum_of_unique_attributes_per_rule / a_norm_denominator) if a_norm_denominator > 0 else 0.0
+
+        # 3. Final Complexity Score (Product)
+        complexity_score = depth_balance * attribute_usage_norm
+
+        # --- Extra metrics for Random Forest ---
+        # Detect if rules are from Random Forest by checking for multiple tree names
+        tree_names = [rule.name.split('_')[0] for rule in rules if '_' in rule.name]
+        unique_tree_names = set(tree_names)
+        rf_metrics = {}
+        if len(unique_tree_names) > 1:
+            # Group rules by tree
+            rules_by_tree = {}
+            for rule in rules:
+                tree_name = rule.name.split('_')[0]
+                rules_by_tree.setdefault(tree_name, []).append(rule)
+            rules_per_tree = [len(rules) for rules in rules_by_tree.values()]
+            max_depths_per_tree = [max(len(r.conditions) for r in rules) if rules else 0 for rules in rules_by_tree.values()]
+            mean_depths_per_tree = [np.mean([len(r.conditions) for r in rules]) if rules else 0 for rules in rules_by_tree.values()]
+            rf_metrics = {
+                "average_rules_per_tree": float(np.mean(rules_per_tree)) if rules_per_tree else 0.0,
+                "average_max_depth_per_tree": float(np.mean(max_depths_per_tree)) if max_depths_per_tree else 0.0,
+                "average_rule_depth_per_tree": float(np.mean(mean_depths_per_tree)) if mean_depths_per_tree else 0.0,
+            }
+
+        result = {
+            "total_rules": total_rules,
             "features_used": n_features_used,
             "total_features": n_features_total,
-            "sparsity": sparsity,
-            "total_rules": total_rules,
             "max_depth": max_depth,
-            "mean_rule_depth": mean_rule_depth,
-            "sparsity_interpretability_score": SI,
+            "mean_rule_depth": float(mean_rule_depth),
+            "depth_balance": depth_balance,           # D_bal
+            "attribute_usage_norm": attribute_usage_norm, # A_norm
+            "complexity_score": complexity_score,     # Final score
         }
+        result.update(rf_metrics)
+        return result
 
     @staticmethod
     def display_metrics(y_true, y_pred, correct, total, file=None):
@@ -964,12 +1007,12 @@ class RuleClassifier:
             file (Optional[TextIO]): File object to write the metrics to. If None, metrics are only printed.
         """
         y_pred_safe = [p if p is not None else -1 for p in y_pred] # Use a placeholder for None
-
+        
         tp = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 1 and yp == 1)
         fp = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt != 1 and yp == 1)
         tn = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 0 and yp == 0)
         fn = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 1 and yp == 0)
-
+        
         accuracy = correct / total if total > 0 else 0
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -990,7 +1033,7 @@ class RuleClassifier:
         print("\nConfusion Matrix with Labels:")
         print("Labels:", labels)
         print(cm)
-
+        
         if file:
             file.write(f'\nCorrect: {correct}, Errors: {total - correct}, Total: {total}\n')
             file.write(f'Accuracy: {accuracy:.5f}\n')
@@ -1007,7 +1050,8 @@ class RuleClassifier:
         """
         Compares the classification performance of the initial and final rule sets.
 
-        This method evaluates both the original (`initial_rules`) and pruned (`final_rules`) rule sets on the same dataset, and logs performance metrics such as:
+        This method evaluates both the original (`initial_rules`) and pruned (`final_rules`)
+        rule sets on the same dataset, and logs performance metrics such as:
         - Accuracy,
         - Confusion matrices,
         - Divergent predictions between the two rule sets,
@@ -1034,21 +1078,18 @@ class RuleClassifier:
     def compare_initial_final_results_dt(self, df_test, target_column_name):
         """
         Compares the performance of the initial and final rule sets for a Decision Tree model using a vectorized methodology similar to Random Forest.
-        This method evaluates both the initial and final rule sets on a given test DataFrame, computes classification metrics, identifies divergent cases (where predictions differ between the two rule sets), and calculates interpretability metrics such as sparsity. Results are printed to the console and saved to 'examples/files/output_final_classifier_dt.txt'.
-
+        This method evaluates both the initial and final rule sets on a given test DataFrame, computes classification metrics, identifies divergent cases (where predictions differ between the two rule sets), and calculates interpretability metrics. Results are printed to the console and saved to 'examples/files/output_final_classifier_dt.txt'.
         Args:
             df_test (pd.DataFrame): The test dataset to be classified.
             target_column_name (str): The name of the column containing the true class labels.
-
         Side Effects:
             - Prints classification results, divergent cases, and interpretability metrics to the console.
             - Writes the same information to 'examples/files/output_final_classifier_dt.txt'.
-
         Notes:
             - This method is intended to be used as part of the RuleClassifier class.
             - Rule usage and error counts are updated for both initial and final rule sets.
             - Divergent cases include the index, feature values, initial and final predictions, and the actual class.
-            - Interpretability metrics include sparsity and feature usage statistics for both rule sets.
+            - Interpretability metrics include complexity and feature usage statistics for both rule sets.
         """
         print("\n*********************************************************************************************************")
         print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
@@ -1059,7 +1100,7 @@ class RuleClassifier:
         indices = df.index
 
         with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
-
+           
             print("\n******************************* INITIAL MODEL *******************************\n")
             f.write("\n******************************* INITIAL MODEL *******************************\n")
             start_time_initial = time.time()
@@ -1097,6 +1138,9 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds")
             f.write(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds\n")
 
+
+
+            
             print("\n******************************* FINAL MODEL *******************************\n")
             f.write("\n******************************* FINAL MODEL *******************************\n")
             start_time_final = time.time()
@@ -1132,6 +1176,8 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds")
             f.write(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds\n")
 
+
+
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
             divergent_cases = []
@@ -1164,8 +1210,8 @@ class RuleClassifier:
 
             print("\nMetrics (Initial):")
             f.write("\nMetrics (Initial):\n")
-            sparsity_info_initial = RuleClassifier.calculate_sparsity_interpretability(self.initial_rules, n_features_total)
-            for key, value in sparsity_info_initial.items():
+            complexity_metrics_initial = RuleClassifier.calculate_structural_complexity(self.initial_rules, n_features_total)
+            for key, value in complexity_metrics_initial.items():
                 if isinstance(value, float):
                     # Use scientific notation for very small or large numbers
                     if abs(value) < 1e-3 or abs(value) > 1e4:
@@ -1180,10 +1226,10 @@ class RuleClassifier:
 
             print("\nMetrics (Final):")
             f.write("\nMetrics (Final):\n")
-            sparsity_info_final = RuleClassifier.calculate_sparsity_interpretability(self.final_rules, n_features_total)
+            complexity_metrics_final = RuleClassifier.calculate_structural_complexity(self.final_rules, n_features_total)
             # Calculate percentage difference for each metric
-            for key, value in sparsity_info_final.items():
-                initial_value = sparsity_info_initial.get(key)
+            for key, value in complexity_metrics_final.items():
+                initial_value = complexity_metrics_initial.get(key)
                 percent_diff_str = ""
                 # Only compute percentage if initial_value is not None and is a number
                 if isinstance(value, (int, float)) and isinstance(initial_value, (int, float)) and initial_value != 0:
@@ -1206,21 +1252,18 @@ class RuleClassifier:
     def compare_initial_final_results_rf(self, df_test, target_column_name):
         """
         Compares the performance of the initial and final rule sets for a Random Forest model using a vectorized methodology.
-        This method evaluates both the initial and final rule sets on a given test DataFrame, computes classification metrics, identifies divergent cases (where predictions differ between the two rule sets), and calculates interpretability metrics such as sparsity. Results are printed to the console and saved to 'examples/files/output_final_classifier_rf.txt'.
-
+        This method evaluates both the initial and final rule sets on a given test DataFrame, computes classification metrics, identifies divergent cases (where predictions differ between the two rule sets), and calculates interpretability metrics. Results are printed to the console and saved to 'examples/files/output_final_classifier_rf.txt'.
         Args:
             df_test (pd.DataFrame or list of dict): The test dataset to be classified. Can be a DataFrame or a list of dictionaries.
             target_column_name (str): The name of the column containing the true class labels.
-
         Side Effects:
             - Prints classification results, divergent cases, and interpretability metrics to the console.
             - Writes the same information to 'examples/files/output_final_classifier_rf.txt'.
-
         Notes:
             - This method is intended to be used as part of the RuleClassifier class.
             - Rule usage and error counts are updated for both initial and final rule sets.
             - Divergent cases include the index, feature values, initial and final predictions, and the actual class.
-            - Interpretability metrics include sparsity and feature usage statistics for both rule sets.
+            - Interpretability metrics including complexity and feature usage statistics for both rule sets.
         """
         print("\n*********************************************************************************************************")
         print("******************************* RUNNING INITIAL AND FINAL CLASSIFICATIONS *******************************")
@@ -1285,6 +1328,8 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds")
             f.write(f"\nTime elapsed in executing initial model classifications: {end_time_initial - start_time_initial:.3f} seconds\n")
 
+
+
             print("\n******************************* FINAL MODEL *******************************\n")
             f.write("\n******************************* FINAL MODEL *******************************\n")
             start_time_final = time.time()
@@ -1334,6 +1379,7 @@ class RuleClassifier:
             print(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds")
             f.write(f"\nTime elapsed in executing final model classifications: {end_time_final - start_time_final:.3f} seconds\n")
 
+
             print("\n******************************* DIVERGENT CASES *******************************\n")
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
             divergent_cases = []
@@ -1365,8 +1411,8 @@ class RuleClassifier:
 
             print("\nMetrics (Initial):")
             f.write("\nMetrics (Initial):\n")
-            sparsity_info_initial = RuleClassifier.calculate_sparsity_interpretability(self.initial_rules, n_features_total)
-            for key, value in sparsity_info_initial.items():
+            complexity_metrics_initial = RuleClassifier.calculate_structural_complexity(self.initial_rules, n_features_total)
+            for key, value in complexity_metrics_initial.items():
                 if isinstance(value, float):
                     # Use scientific notation for very small or large numbers
                     if abs(value) < 1e-1 or abs(value) > 1e5:
@@ -1381,10 +1427,10 @@ class RuleClassifier:
 
             print("\nMetrics (Final):")
             f.write("\nMetrics (Final):\n")
-            sparsity_info_final = RuleClassifier.calculate_sparsity_interpretability(self.final_rules, n_features_total)
+            complexity_metrics_final = RuleClassifier.calculate_structural_complexity(self.final_rules, n_features_total)
             # Calculate percentage difference for each metric
-            for key, value in sparsity_info_final.items():
-                initial_value = sparsity_info_initial.get(key)
+            for key, value in complexity_metrics_final.items():
+                initial_value = complexity_metrics_initial.get(key)
                 percent_diff_str = ""
                 # Only compute percentage if initial_value is not None and is a number
                 if isinstance(value, (int, float)) and isinstance(initial_value, (int, float)) and initial_value != 0:
@@ -1393,7 +1439,7 @@ class RuleClassifier:
                     percent_diff_str = f" ({sign}{percent_diff:.1f}%)"
                 # Formatting
                 if isinstance(value, float):
-                    if abs(value) < 1e-1 or abs(value) > 1e5:
+                    if abs(value) < 1e-3 or abs(value) > 1e5:
                         print(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}")
                         f.write(f"  {key.replace('_', ' ').title()}: {value:.2e}{percent_diff_str}\n")
                     else:
@@ -1404,33 +1450,21 @@ class RuleClassifier:
                     f.write(f"  {key.replace('_', ' ').title()}: {value}{percent_diff_str}\n")
 
     # ************************ RULE EDITING MODULE ************************
-
+    
     # Add this helper method inside the RuleClassifier class
     def _validate_and_parse_condition(self, condition_str):
-        """
-        Validates and parses a single rule condition string entered by the user.
-
-        This helper method ensures that a condition string follows the expected format "variable operator value" (e.g., "v5 > 10.5"). It validates the operator, attempts to cast the value to a float, and returns both a formatted condition string and a parsed tuple representation. If the condition is invalid, it returns None.
-
-        Args:
-            condition_str (str): The raw condition string provided by the user.
-
-        Returns:
-            Tuple[str,Tuple[str,str,float]]|None:
-                - If valid: A tuple containing formatted condition: string (e.g., "v5 > 10.5"), parsed representation (variable, operator, value) (e.g., ("v5", ">", 10.5)).
-                - If invalid: None.
-        """
+        """Validates and parses a condition string entered by the user."""
         try:
             parts = condition_str.split(' ')
             if len(parts) != 3:
                 return None
-
+            
             var, op, value_str = parts
             value = float(value_str)
 
             if op not in ['<=', '>=', '<', '>']:
                 return None
-
+            
             # Returns the condition as a string and as a parsed tuple
             return f"{var} {op} {value}", (var, op, value)
         except (ValueError, IndexError):
@@ -1439,26 +1473,13 @@ class RuleClassifier:
     # Method to edit rules manually
     def edit_rules(self):
         """
-        Starts an interactive terminal session to inspect and manually edit final rules.
-
-        This method provides a simple REPL-like interface to:
-        - List all current **final** rules with their names, predicted class labels, and conditions;
-        - Select a rule by number or exact name;
-        - Add or remove conditions to/from the selected rule;
-        - Change the predicted class of the selected rule;
-        - Persist the edits and return to the main menu.
-
-        On save, the method re-parses the rule's conditions to keep the cached `parsed_conditions` in sync and appends an "_edited" suffix to the rule's name (once) to indicate the rule was modified manually. The entire classifier (self) is serialized to ``'examples/files/edited_model.pkl'``.
-
-        Notes:
-            - Edits are applied to ``self.final_rules``. If you have not run the analysis or otherwise populated ``final_rules``, this method will exit early with a message.
-            - Condition format must be exactly: ``"<variable> <operator> <value>"`` where ``operator`` ∈ {``<=``, ``>=``, ``<``, ``>``} and ``value`` is numeric.
+        Starts an interactive prompt in the terminal to allow manual editing of rules.
+        The user can list, select, and modify the conditions or the class of a rule.
         """
-
         print("\n*********************************************************************************************************")
         print("************************************* MANUAL RULE EDITING MODE *************************************")
         print("*********************************************************************************************************\n")
-
+        
         # Always work on the list of final rules
         if not self.final_rules:
             print("No final rules to edit. Please run the analysis first.")
@@ -1500,13 +1521,13 @@ class RuleClassifier:
                 print(f"  Current Conditions:")
                 for i, cond in enumerate(selected_rule.conditions):
                     print(f"    [{i}] {cond}")
-
+                
                 print("\nEdit Options:")
                 print("  [a]dd condition")
                 print("  [r]emove condition")
                 print("  [c]lass (change the prediction class)")
                 print("  [s]ave and return to main menu")
-
+                
                 action = input("Choose an action > ").strip().lower()
 
                 if action == 'a':
@@ -1518,7 +1539,7 @@ class RuleClassifier:
                         print(f"Condition '{formatted_cond}' added.")
                     else:
                         print("ERROR: Invalid condition format. Use 'variable operator value' (e.g., v1 <= 0.5).")
-
+                
                 elif action == 'r':
                     if not selected_rule.conditions:
                         print("This rule has no conditions to remove.")
@@ -1541,22 +1562,23 @@ class RuleClassifier:
                 elif action == 's':
                     # *** Crucial step: Re-parse the conditions to maintain consistency ***
                     selected_rule.parsed_conditions = self.parse_conditions_static(selected_rule.conditions)
-
+                    
                     # Add a mark to indicate it was manually edited
                     if not selected_rule.name.endswith("_edited"):
                         selected_rule.name += "_edited"
-
+                        
                     print(f"Rule '{selected_rule.name}' successfully updated.")
                     # Save the edited classifier to a file for later access
                     with open('examples/files/edited_model.pkl', 'wb') as f_out:
                         pickle.dump(self, f_out)
                     print("Edited classifier saved to 'examples/files/edited_model.pkl'.")
                     break # Exit the editing loop for the current rule
-
+                
                 else:
                     print("Invalid option. Try again.")
 
         print("\n************************************** END OF EDITING MODE **************************************\n")
+
 
     @staticmethod
     def load(path):
@@ -1639,7 +1661,7 @@ class RuleClassifier:
                     # Apply the same encoding to the test set, handling unseen labels
                     df_test[col] = df_test[col].apply(lambda x: x if x in le.classes_ else le.classes_[0])
                     df_test[col] = le.transform(df_test[col].astype(str))
-
+        
         target_column_name = df_train.columns[-1]
         feature_names = df_train.columns[:-1].tolist()
         class_names = df_train[target_column_name].unique()
@@ -1673,7 +1695,7 @@ class RuleClassifier:
         Returns:
             Dict[str,List[str]]: A dictionary mapping each class name to a list of rule strings that lead to predictions for that class.
         """
-
+            
         tree_ = tree.tree_
         feature_name = [
             feature_names[i] if i != _tree.TREE_UNDEFINED else "undefined!"
@@ -1681,7 +1703,7 @@ class RuleClassifier:
         ]
 
         paths = []
-
+        
         def recurse(node, path):
             if tree_.feature[node] != _tree.TREE_UNDEFINED:
                 name = feature_name[node]
@@ -1697,17 +1719,17 @@ class RuleClassifier:
                 paths.append((path, predicted_class_index))
 
         recurse(0, [])
-
+        
         # Ensure class_names are strings for mapping
         class_names_str = [str(c) for c in class_names]
         rules_by_class = {class_name: [] for class_name in class_names_str}
-
+        
         for path, class_idx in paths:
             if class_idx < len(class_names_str):
                 class_name = class_names_str[class_idx]
                 rule_str = f"[{', '.join(path)}]" if path else "[]"
                 rules_by_class[class_name].append(rule_str)
-
+        
         return rules_by_class
 
     # Method to extract rules from a Random Forest model
@@ -1765,7 +1787,7 @@ class RuleClassifier:
                 for rule in class_rules:
                     rules_text += f"DT{i+1}_Rule{rule_index_counter}_Class{class_index}: {rule}\n"
                     rule_index_counter += 1
-
+                        
         classifier = RuleClassifier(rules_text, algorithm_type=algorithm_type)
         print(f"Algorithm Type: {classifier.algorithm_type}")
 
@@ -1795,11 +1817,11 @@ class RuleClassifier:
         Returns:
             RuleClassifier: A rule-based classifier instance constructed from the trained or loaded model.
         """
-
+        
         print("\n*********************************************************************************************************")
         print("************************************** GENERATING A NEW CLASSIFIER **************************************")
         print("*********************************************************************************************************\n")
-
+        
         print("\nDatabase details:")
         X_train, y_train, X_test, y_test, class_names, _, feature_names = RuleClassifier.process_data(train_path, test_path)
 
