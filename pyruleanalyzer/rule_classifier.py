@@ -275,7 +275,7 @@ class RuleClassifier:
         if not rules:
             return None, [], [], []
 
-        class_labels = sorted({int(rule.class_[-1]) for rule in rules})
+        class_labels = sorted({int(rule.class_.replace('Class', '')) for rule in rules})
         if not class_labels:
             return None, [], [], []
             
@@ -299,15 +299,15 @@ class RuleClassifier:
                 parsed_conditions = rule.parsed_conditions
                 matched = all(
                     var in data and (
-                        (op == '<=' and data[var] <= value) or
-                        (op == '>=' and data[var] >= value) or
-                        (op == '<' and data[var] < value) or
-                        (op == '>' and data[var] > value)
+                    (op == '<=' and data[var] <= value) or
+                    (op == '>=' and data[var] >= value) or
+                    (op == '<' and data[var] < value) or
+                    (op == '>' and data[var] > value)
                     ) for var, op, value in parsed_conditions
                 )
 
                 if matched:
-                    class_label = int(rule.class_[-1])
+                    class_label = int(rule.class_.replace('Class', ''))
                     matched_classes_in_tree.append(class_label)
                     all_matched_rules.append(rule)
             
@@ -318,7 +318,7 @@ class RuleClassifier:
                     if label in class_to_index:
                         idx = class_to_index[label]
                         proba_tree[idx] = count / total
-            probas.append(proba_tree)
+                probas.append(proba_tree)
 
         if not probas:
             return None, [], [0.0] * num_classes, []
@@ -515,7 +515,7 @@ class RuleClassifier:
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
         
-        print("\nANALYSING DUPLICATED RULES IN THE SAME TREE")
+        print("ANALYSING DUPLICATED RULES IN THE SAME TREE...")
         if method not in ["soft", "medium", "hard", 'custom']:
             raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium', 'hard' or 'custom'.")
         
@@ -528,9 +528,9 @@ class RuleClassifier:
         for rule1, rule2 in similar_rules_soft:
             duplicated_rules.add(rule1)
             duplicated_rules.add(rule2)
-            print(f"\nDuplicated rules from the same tree: {rule1.name} == {rule2.name}")
-            print(f"{rule1.name}: {rule1.conditions}")
-            print(f"{rule2.name}: {rule2.conditions}")
+            # print(f"\nDuplicated rules from the same tree: {rule1.name} == {rule2.name}")
+            # print(f"{rule1.name}: {rule1.conditions}")
+            # print(f"{rule2.name}: {rule2.conditions}")
 
             # Create a new rule that generalizes the two duplicated ones
             common_conditions = rule1.conditions[:-1]
@@ -539,11 +539,11 @@ class RuleClassifier:
             new_rule = Rule(new_rule_name, new_rule_class, common_conditions)
             # Also parse the new rule's conditions
             new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
-            print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
+            # print(f"New rule created: {new_rule.name} with conditions: {new_rule.conditions}")
             unique_rules.append(new_rule)
 
         if method == "hard":
-            print("\nANALYSING DUPLICATED RULES BETWEEN TREES")
+            print("ANALYSING DUPLICATED RULES BETWEEN TREES...")
             if self.algorithm_type == 'Random Forest':
                 # Find groups of similar rules across different trees
                 similar_rule_groups = self.find_duplicated_rules_between_trees()
@@ -562,10 +562,13 @@ class RuleClassifier:
                     new_rule = Rule(new_rule_name, new_rule_class, new_rule_conditions)
                     new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
                     
-                    print(f"\nDuplicated group of {len(group)} rules found. Generalizing to {new_rule.name}")
+                    # print(f"\nDuplicated group of {len(group)} rules found. Generalizing to {new_rule.name}")
                     
-                    print(f"New rule conditions: {new_rule.conditions}")
+                    # print(f"New rule conditions: {new_rule.conditions}")
+
                     unique_rules.append(new_rule)
+
+        print(f"Duplicated Rules Found: {len(duplicated_rules)}")
 
         # Construct the final list: the new generalized rules + the old rules that were not duplicates
         unique_rules.extend(rule for rule in self.final_rules if rule not in duplicated_rules)
@@ -752,7 +755,7 @@ class RuleClassifier:
             tree_name = rule.name.split('_')[0]
             tree_rules[tree_name].append(rule)
 
-        class_labels = sorted({int(r.class_[-1]) for r in self.final_rules})
+        class_labels = sorted({int(rule.class_.replace('Class', '')) for rule in self.final_rules})
         class_to_index = {label: i for i, label in enumerate(class_labels)}
         
         # DataFrame to store probabilities of each tree for each sample
@@ -1006,29 +1009,40 @@ class RuleClassifier:
             total (int): Total number of predictions.
             file (Optional[TextIO]): File object to write the metrics to. If None, metrics are only printed.
         """
+        from sklearn.metrics import precision_score, recall_score, f1_score
+        
         y_pred_safe = [p if p is not None else -1 for p in y_pred] # Use a placeholder for None
         
-        tp = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 1 and yp == 1)
-        fp = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt != 1 and yp == 1)
-        tn = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 0 and yp == 0)
-        fn = sum(1 for yt, yp in zip(y_true, y_pred_safe) if yt == 1 and yp == 0)
-        
         accuracy = correct / total if total > 0 else 0
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        
+        # Use sklearn's metrics with macro averaging for multi-class
+        precision = precision_score(y_true, y_pred_safe, average='macro', zero_division=0)
+        recall = recall_score(y_true, y_pred_safe, average='macro', zero_division=0)
+        f1 = f1_score(y_true, y_pred_safe, average='macro', zero_division=0)
+        
+        # For multi-class, specificity is computed per class and averaged
+        labels = sorted(int(l) for l in set(y_true) | set(y for y in y_pred_safe if y != -1))
+        cm = confusion_matrix(y_true, y_pred_safe, labels=labels)
+        
+        # Calculate specificity per class and average
+        specificities = []
+        for i, label in enumerate(labels):
+            if label == -1:
+                continue
+            tp = cm[i, i]
+            fn = cm[i, :].sum() - tp
+            fp = cm[:, i].sum() - tp
+            tn = cm.sum() - tp - fn - fp
+            spec = tn / (tn + fp) if (tn + fp) > 0 else 0
+            specificities.append(spec)
+        specificity = np.mean(specificities) if specificities else 0
 
         print(f'\nCorrect: {correct}, Errors: {total - correct}, Total: {total}')
         print(f'Accuracy: {accuracy:.5f}')
-        print(f'Precision: {precision:.5f}')
-        print(f'Recall: {recall:.5f}')
-        print(f'F1 Score: {f1:.5f}')
-        print(f'Specificity: {specificity:.5f}')
-
-        # Ensure labels are plain Python ints, not numpy types
-        labels = sorted(int(l) for l in set(y_true) | set(y for y in y_pred_safe if y != -1))
-        cm = confusion_matrix(y_true, y_pred_safe, labels=labels)
+        print(f'Precision (macro): {precision:.5f}')
+        print(f'Recall (macro): {recall:.5f}')
+        print(f'F1 Score (macro): {f1:.5f}')
+        print(f'Specificity (macro): {specificity:.5f}')
 
         print("\nConfusion Matrix with Labels:")
         print("Labels:", labels)
@@ -1037,10 +1051,10 @@ class RuleClassifier:
         if file:
             file.write(f'\nCorrect: {correct}, Errors: {total - correct}, Total: {total}\n')
             file.write(f'Accuracy: {accuracy:.5f}\n')
-            file.write(f'Precision: {precision:.5f}\n')
-            file.write(f'Recall: {recall:.5f}\n')
-            file.write(f'F1 Score: {f1:.5f}\n')
-            file.write(f'Specificity: {specificity:.5f}\n')
+            file.write(f'Precision (macro): {precision:.5f}\n')
+            file.write(f'Recall (macro): {recall:.5f}\n')
+            file.write(f'F1 Score (macro): {f1:.5f}\n')
+            file.write(f'Specificity (macro): {specificity:.5f}\n')
             file.write("\nConfusion Matrix with Labels:\n")
             file.write(f"Labels: {labels}\n")
             file.write(f"{cm}\n")
@@ -1100,6 +1114,30 @@ class RuleClassifier:
         indices = df.index
 
         with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
+
+            title_dt = "******************** INITIAL VS FINAL DECISION TREE CLASSIFICATION REPORT ********************"
+            print(f"\n{title_dt}\n")
+            f.write(title_dt + "\n\n")
+
+            print("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
+            f.write("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
+
+            model_path = 'examples/files/sklearn_model.pkl'
+            try:
+                with open(model_path, 'rb') as mf:
+                    sk_model = pickle.load(mf)
+                t0 = time.time()
+                X_eval = df.drop(columns=[target_column_name]).to_numpy()
+                y_pred_lib = sk_model.predict(X_eval)
+                hits = (y_pred_lib == y_true.to_numpy()).sum()
+                RuleClassifier.display_metrics(y_true.tolist(), y_pred_lib.tolist(), hits, len(y_true), f)
+                t1 = time.time()
+                # print(f"\nTime elapsed in executing sklearn model classifications: {t1 - t0:.3f} seconds")
+                # f.write(f"\nTime elapsed in executing sklearn model classifications: {t1 - t0:.3f} seconds\n")
+            except Exception as err:
+                msg = f"Could not load sklearn model: {err}"
+                print(msg)
+                f.write(msg + "\n")
            
             print("\n******************************* INITIAL MODEL *******************************\n")
             f.write("\n******************************* INITIAL MODEL *******************************\n")
@@ -1194,10 +1232,12 @@ class RuleClassifier:
                         'actual_class': actual
                     }
                     divergent_cases.append(case)
-                    print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                          f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
                     f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
                             f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                    
+            total_divergent = len(divergent_cases)
+            print(f"Total divergent cases: {total_divergent}")
+            f.write(f"Total divergent cases: {total_divergent}\n")
             if not divergent_cases:
                 print("No divergent cases found.")
                 f.write("No divergent cases found.\n")
@@ -1278,6 +1318,33 @@ class RuleClassifier:
         indices = df.index
 
         with open('examples/files/output_final_classifier_rf.txt', 'w') as f:
+
+            title = "******************** INITIAL VS FINAL RANDOM FOREST CLASSIFICATION REPORT ********************"
+            print(f"\n{title}\n")
+            f.write(title + "\n\n")
+
+            # Compute predictions for sklearn model on the same test set
+            print("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
+            f.write("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
+
+            # Load the sklearn model if it exists
+            sklearn_model_path = 'examples/files/sklearn_model.pkl'
+            try:
+                with open(sklearn_model_path, 'rb') as model_file:
+                    sklearn_model = pickle.load(model_file)
+                start_time_sklearn = time.time()
+                X_test = df.drop(columns=[target_column_name]).values
+                y_pred_sklearn = sklearn_model.predict(X_test)
+                correct_sklearn = (y_pred_sklearn == y_true.values).sum()
+                RuleClassifier.display_metrics(y_true.tolist(), y_pred_sklearn.tolist(), correct_sklearn, len(y_true), f)
+                end_time_sklearn = time.time()
+                # print(f"\nTime elapsed in executing sklearn model classifications: {end_time_sklearn - start_time_sklearn:.3f} seconds")
+                # f.write(f"\nTime elapsed in executing sklearn model classifications: {end_time_sklearn - start_time_sklearn:.3f} seconds\n")
+                
+            except Exception as e:
+                print(f"Could not load sklearn model: {e}")
+                f.write(f"Could not load sklearn model: {e}\n")
+
             print("\n******************************* INITIAL MODEL *******************************\n")
             f.write("\n******************************* INITIAL MODEL *******************************\n")
             start_time_initial = time.time()
@@ -1290,7 +1357,7 @@ class RuleClassifier:
                 tree_name = rule.name.split('_')[0]
                 tree_rules[tree_name].append(rule)
 
-            class_labels = sorted({int(r.class_[-1]) for r in self.initial_rules})
+            class_labels = sorted({int(rule.class_.replace('Class', '')) for rule in self.initial_rules})
             class_to_index = {label: i for i, label in enumerate(class_labels)}
             all_probas = np.zeros((len(df), len(class_labels)))
 
@@ -1341,7 +1408,7 @@ class RuleClassifier:
                 tree_name = rule.name.split('_')[0]
                 tree_rules_final[tree_name].append(rule)
 
-            class_labels_final = sorted({int(r.class_[-1]) for r in self.final_rules})
+            class_labels_final = sorted({int(rule.class_.replace('Class', '')) for rule in self.final_rules})
             class_to_index_final = {label: i for i, label in enumerate(class_labels_final)}
             all_probas_final = np.zeros((len(df), len(class_labels_final)))
 
@@ -1396,10 +1463,13 @@ class RuleClassifier:
                         'actual_class': actual
                     }
                     divergent_cases.append(case)
-                    print(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
-                          f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}")
                     f.write(f"Index: {case['index']}, Data: {case['data']}, Initial Class: {case['initial_class']}, "
                             f"Final Class: {case['final_class']}, Actual Class: {case['actual_class']}\n")
+                    
+            total_divergent = len(divergent_cases)
+            print(f"Total divergent cases: {total_divergent}")
+            f.write(f"Total divergent cases: {total_divergent}\n")
+
             if not divergent_cases:
                 print("No divergent cases found.")
                 f.write("No divergent cases found.\n")
@@ -1838,6 +1908,12 @@ class RuleClassifier:
             else:
                 raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
             model.fit(X_train, y_train)
+
+            # Save the trained model
+            model_save_path = 'examples/files/sklearn_model.pkl'
+            with open(model_save_path, 'wb') as model_file: 
+                pickle.dump(model, model_file)
+            print(f"Trained model saved at: {model_save_path}")
 
         print("\nTesting model:")
         y_pred = model.predict(X_test)
