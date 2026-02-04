@@ -4,20 +4,20 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-# train_path = "examples/data/covid_train.csv"
-# test_path = "examples/data/covid_test.csv"
-
-# train_path = "examples/data/mushrooms_encoded_train.csv"
-# test_path = "examples/data/mushrooms_encoded_test.csv"
-
-train_path = "examples/data/iris_train.csv"
-test_path = "examples/data/iris_test.csv"
+train_path = "examples/data/covid_train.csv"
+test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/CICIDS2017-Wed2_train.csv"
 # test_path = "examples/data/CICIDS2017-Wed2_test.csv"
 
 # train_path = "examples/data/train-set1.csv"
 # test_path = "examples/data/test-set1.csv"
+
+# train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
+# test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
+
+# train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
+# test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
 # Model parameters
 model_parameters = {
