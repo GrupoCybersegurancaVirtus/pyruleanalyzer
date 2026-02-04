@@ -6,14 +6,8 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-# train_path = "examples/data/covid_train.csv"
-# test_path = "examples/data/covid_test.csv"
-
-# train_path = "examples/data/mushrooms_encoded_train.csv"
-# test_path = "examples/data/mushrooms_encoded_test.csv"
-
-# train_path = "examples/data/iris_train.csv"
-# test_path = "examples/data/iris_test.csv"
+train_path = "examples/data/covid_train.csv"
+test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/CICIDS2017-Wed2_train.csv"
 # test_path = "examples/data/CICIDS2017-Wed2_test.csv"
@@ -27,14 +21,14 @@ from pyruleanalyzer.rule_classifier import RuleClassifier
 # train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
 # test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
 
-train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
-test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
+# train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
+# test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
 # Model parameters
-model_parameters = {"min_samples_leaf": 1, "min_samples_split": 2, "max_features": "sqrt", "max_depth": None, "n_estimators": 100, "bootstrap": True}
+model_parameters = {"min_samples_leaf": 1, "min_samples_split": 2, "max_features": "sqrt", "max_depth": None, "n_estimators": 100, "bootstrap": True, "random_state": 42 }
 
 # Generating the initial rule based model
-classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Random Forest')
+classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Random Forest', use_gpu=True)
 
 # Executing the rule analysis method
 # remove_duplicates = "soft" (in the same tree, probably does not affect the final metrics), "hard" (between trees, may affect the final metrics), "custom" (custom function to remove duplicates) or "none" (no removal)

@@ -1,61 +1,629 @@
+******************** INITIAL VS FINAL DECISION TREE CLASSIFICATION REPORT ********************
+
+
+******************************* SCIKIT-LEARN MODEL *******************************
+
+Correct: 20942, Errors: 3758, Total: 24700
+Accuracy: 0.84785
+Precision (macro): 0.51385
+Recall (macro): 0.51292
+F1 Score (macro): 0.51188
+Specificity (macro): 0.98199
+
+Confusion Matrix with Labels:
+    0   1    2     3     4     5      6    7   8   9
+0  13  12   32   103    43     0      0    0   0   0
+1  13   4   17    90    42     0      3    4   2   0
+2  15  20  567   508    54    17     20   18   8   0
+3  42  31  662  2141   167    67    119   83  18  10
+4  41  37   79   247  1137    11    248    8  10   1
+5   0   2   29    58     8  5550     11    0   3   0
+6   0   2   25   105   256    16  10654   15  24   3
+7   0   3   84   109    12     1      7  825   8   0
+8   0   0    8    18     3     1     29    5  49   0
+9   0   0    1     9     0     0      1    0   0   2
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 18, Errors: 12, Total: 30
-Accuracy: 0.60000
-Precision: 0.00000
-Recall: 0.00000
-F1 Score: 0.00000
-Specificity: 0.83333
+Correct: 20936, Errors: 3764, Total: 24700
+Accuracy: 0.84761
+Precision (macro): 0.51362
+Recall (macro): 0.51284
+F1 Score (macro): 0.51172
+Specificity (macro): 0.98197
 
 Confusion Matrix with Labels:
-Labels: [0, 1, 2]
-[[10  0  0]
- [ 0  0 10]
- [ 0  2  8]]
+    0   1    2     3     4     5      6    7   8   9
+0  13  12   32   103    43     0      0    0   0   0
+1  13   4   17    90    42     0      3    4   2   0
+2  15  20  567   508    54    17     20   18   8   0
+3  42  31  663  2140   167    67    119   83  18  10
+4  41  37   79   247  1137    11    248    8  10   1
+5   0   2   30    58     8  5549     11    0   3   0
+6   0   2   25   105   260    16  10650   15  24   3
+7   0   3   84   109    12     1      7  825   8   0
+8   0   0    8    18     3     1     29    5  49   0
+9   0   0    2     8     0     0      1    0   0   2
 
-Number of initial rules: 8
-
-Time elapsed in executing initial model classifications: 0.012 seconds
+Number of initial rules: 3430
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 18, Errors: 12, Total: 30
-Accuracy: 0.60000
-Precision: 0.00000
-Recall: 0.00000
-F1 Score: 0.00000
-Specificity: 0.83333
+Correct: 20835, Errors: 3865, Total: 24700
+Accuracy: 0.84352
+Precision (macro): 0.51719
+Recall (macro): 0.49903
+F1 Score (macro): 0.50597
+Specificity (macro): 0.98155
 
 Confusion Matrix with Labels:
-Labels: [0, 1, 2]
-[[10  0  0]
- [ 0  0 10]
- [ 0  2  8]]
+    0   1    2     3     4     5      6    7   8  9
+0  13  12   32   103    43     0      0    0   0  0
+1  13   2   17    97    42     0      2    1   1  0
+2  15  18  547   544    53    12     17   15   6  0
+3  42  31  610  2267   153    46    108   63  13  7
+4  41  36   74   336  1082     8    227    5   9  1
+5   0   2   24    82     7  5532     11    0   3  0
+6   0   2   16   296   199    12  10544    8  20  3
+7   0   3   80   138    10     0      5  807   6  0
+8   0   0    4    41     2     1     22    4  39  0
+9   0   0    2     8     0     0      1    0   0  2
 
-Number of final rules: 8
-
-Time elapsed in executing final model classifications: 0.010 seconds
+Number of final rules: 1302
 
 ******************************* DIVERGENT CASES *******************************
-No divergent cases found.
+Index: 1, Initial: 7, Final: 3, Actual: 4
+Index: 61, Initial: 2, Final: 3, Actual: 7
+Index: 128, Initial: 6, Final: 3, Actual: 4
+Index: 210, Initial: 2, Final: 3, Actual: 5
+Index: 248, Initial: 2, Final: 3, Actual: 3
+Index: 292, Initial: 2, Final: 3, Actual: 6
+Index: 314, Initial: 6, Final: 3, Actual: 6
+Index: 326, Initial: 5, Final: 3, Actual: 2
+Index: 433, Initial: 5, Final: 3, Actual: 2
+Index: 443, Initial: 7, Final: 3, Actual: 7
+Index: 483, Initial: 4, Final: 3, Actual: 3
+Index: 501, Initial: 2, Final: 3, Actual: 2
+Index: 515, Initial: 5, Final: 3, Actual: 5
+Index: 701, Initial: 6, Final: 3, Actual: 6
+Index: 712, Initial: 4, Final: 3, Actual: 6
+Index: 803, Initial: 4, Final: 3, Actual: 6
+Index: 816, Initial: 4, Final: 3, Actual: 6
+Index: 835, Initial: 6, Final: 3, Actual: 6
+Index: 853, Initial: 1, Final: 3, Actual: 2
+Index: 864, Initial: 5, Final: 3, Actual: 5
+Index: 911, Initial: 7, Final: 3, Actual: 3
+Index: 951, Initial: 1, Final: 3, Actual: 1
+Index: 959, Initial: 6, Final: 3, Actual: 3
+Index: 981, Initial: 9, Final: 3, Actual: 3
+Index: 1002, Initial: 5, Final: 3, Actual: 2
+Index: 1024, Initial: 7, Final: 3, Actual: 7
+Index: 1074, Initial: 2, Final: 3, Actual: 6
+Index: 1086, Initial: 2, Final: 3, Actual: 3
+Index: 1105, Initial: 4, Final: 3, Actual: 6
+Index: 1152, Initial: 4, Final: 3, Actual: 3
+Index: 1182, Initial: 6, Final: 3, Actual: 4
+Index: 1243, Initial: 6, Final: 3, Actual: 6
+Index: 1284, Initial: 4, Final: 3, Actual: 6
+Index: 1505, Initial: 7, Final: 3, Actual: 7
+Index: 1511, Initial: 4, Final: 3, Actual: 6
+Index: 1676, Initial: 6, Final: 3, Actual: 6
+Index: 1722, Initial: 6, Final: 3, Actual: 6
+Index: 1784, Initial: 4, Final: 3, Actual: 4
+Index: 1801, Initial: 4, Final: 3, Actual: 4
+Index: 1843, Initial: 5, Final: 3, Actual: 3
+Index: 1876, Initial: 5, Final: 3, Actual: 3
+Index: 1883, Initial: 4, Final: 3, Actual: 4
+Index: 1897, Initial: 4, Final: 3, Actual: 3
+Index: 1919, Initial: 2, Final: 3, Actual: 6
+Index: 1926, Initial: 6, Final: 3, Actual: 6
+Index: 1943, Initial: 6, Final: 3, Actual: 4
+Index: 1962, Initial: 6, Final: 3, Actual: 3
+Index: 1984, Initial: 4, Final: 3, Actual: 4
+Index: 2046, Initial: 7, Final: 3, Actual: 3
+Index: 2081, Initial: 4, Final: 3, Actual: 6
+Index: 2150, Initial: 4, Final: 3, Actual: 4
+Index: 2312, Initial: 7, Final: 3, Actual: 6
+Index: 2330, Initial: 4, Final: 3, Actual: 3
+Index: 2347, Initial: 7, Final: 3, Actual: 3
+Index: 2431, Initial: 2, Final: 3, Actual: 4
+Index: 2544, Initial: 6, Final: 3, Actual: 6
+Index: 2551, Initial: 2, Final: 3, Actual: 3
+Index: 2572, Initial: 5, Final: 3, Actual: 3
+Index: 2635, Initial: 6, Final: 3, Actual: 6
+Index: 2734, Initial: 4, Final: 3, Actual: 6
+Index: 2834, Initial: 2, Final: 3, Actual: 6
+Index: 2864, Initial: 8, Final: 3, Actual: 6
+Index: 2881, Initial: 5, Final: 3, Actual: 3
+Index: 2936, Initial: 4, Final: 3, Actual: 6
+Index: 2961, Initial: 2, Final: 3, Actual: 6
+Index: 3063, Initial: 4, Final: 3, Actual: 4
+Index: 3083, Initial: 5, Final: 3, Actual: 5
+Index: 3092, Initial: 4, Final: 3, Actual: 4
+Index: 3097, Initial: 4, Final: 3, Actual: 6
+Index: 3106, Initial: 4, Final: 3, Actual: 3
+Index: 3150, Initial: 2, Final: 3, Actual: 5
+Index: 3190, Initial: 4, Final: 3, Actual: 3
+Index: 3238, Initial: 2, Final: 3, Actual: 2
+Index: 3240, Initial: 2, Final: 3, Actual: 2
+Index: 3262, Initial: 7, Final: 3, Actual: 3
+Index: 3288, Initial: 7, Final: 3, Actual: 7
+Index: 3371, Initial: 6, Final: 3, Actual: 6
+Index: 3379, Initial: 6, Final: 3, Actual: 6
+Index: 3419, Initial: 2, Final: 3, Actual: 5
+Index: 3596, Initial: 2, Final: 3, Actual: 3
+Index: 3608, Initial: 5, Final: 3, Actual: 4
+Index: 3616, Initial: 4, Final: 3, Actual: 4
+Index: 3635, Initial: 2, Final: 3, Actual: 3
+Index: 3685, Initial: 4, Final: 3, Actual: 6
+Index: 3691, Initial: 2, Final: 3, Actual: 3
+Index: 3817, Initial: 4, Final: 3, Actual: 2
+Index: 3828, Initial: 6, Final: 3, Actual: 6
+Index: 3869, Initial: 6, Final: 3, Actual: 6
+Index: 3922, Initial: 5, Final: 3, Actual: 3
+Index: 3946, Initial: 2, Final: 3, Actual: 2
+Index: 3997, Initial: 6, Final: 3, Actual: 6
+Index: 4072, Initial: 6, Final: 3, Actual: 6
+Index: 4087, Initial: 4, Final: 3, Actual: 4
+Index: 4259, Initial: 7, Final: 3, Actual: 7
+Index: 4281, Initial: 6, Final: 3, Actual: 6
+Index: 4293, Initial: 2, Final: 3, Actual: 3
+Index: 4395, Initial: 7, Final: 3, Actual: 3
+Index: 4446, Initial: 6, Final: 3, Actual: 8
+Index: 4448, Initial: 8, Final: 3, Actual: 8
+Index: 4486, Initial: 6, Final: 3, Actual: 6
+Index: 4516, Initial: 1, Final: 3, Actual: 1
+Index: 4540, Initial: 4, Final: 3, Actual: 6
+Index: 4544, Initial: 2, Final: 3, Actual: 3
+Index: 4574, Initial: 4, Final: 3, Actual: 3
+Index: 4584, Initial: 4, Final: 3, Actual: 4
+Index: 4590, Initial: 4, Final: 3, Actual: 6
+Index: 4670, Initial: 6, Final: 3, Actual: 3
+Index: 4798, Initial: 2, Final: 3, Actual: 8
+Index: 4819, Initial: 4, Final: 3, Actual: 6
+Index: 4829, Initial: 5, Final: 3, Actual: 5
+Index: 4987, Initial: 6, Final: 3, Actual: 6
+Index: 5016, Initial: 4, Final: 3, Actual: 4
+Index: 5052, Initial: 2, Final: 3, Actual: 3
+Index: 5064, Initial: 6, Final: 3, Actual: 4
+Index: 5082, Initial: 4, Final: 3, Actual: 3
+Index: 5085, Initial: 7, Final: 3, Actual: 3
+Index: 5088, Initial: 5, Final: 3, Actual: 3
+Index: 5127, Initial: 7, Final: 3, Actual: 7
+Index: 5157, Initial: 4, Final: 3, Actual: 6
+Index: 5159, Initial: 6, Final: 3, Actual: 4
+Index: 5231, Initial: 2, Final: 3, Actual: 3
+Index: 5354, Initial: 9, Final: 3, Actual: 3
+Index: 5361, Initial: 7, Final: 3, Actual: 6
+Index: 5376, Initial: 8, Final: 3, Actual: 8
+Index: 5378, Initial: 2, Final: 3, Actual: 3
+Index: 5382, Initial: 6, Final: 3, Actual: 6
+Index: 5467, Initial: 4, Final: 3, Actual: 6
+Index: 5552, Initial: 6, Final: 3, Actual: 6
+Index: 5564, Initial: 6, Final: 3, Actual: 6
+Index: 5577, Initial: 2, Final: 3, Actual: 3
+Index: 5582, Initial: 4, Final: 3, Actual: 4
+Index: 5642, Initial: 2, Final: 3, Actual: 2
+Index: 5723, Initial: 6, Final: 3, Actual: 4
+Index: 5746, Initial: 2, Final: 3, Actual: 4
+Index: 5772, Initial: 4, Final: 3, Actual: 4
+Index: 5974, Initial: 6, Final: 3, Actual: 4
+Index: 6012, Initial: 4, Final: 3, Actual: 4
+Index: 6016, Initial: 6, Final: 3, Actual: 4
+Index: 6043, Initial: 6, Final: 3, Actual: 3
+Index: 6270, Initial: 6, Final: 3, Actual: 6
+Index: 6300, Initial: 4, Final: 3, Actual: 8
+Index: 6302, Initial: 6, Final: 3, Actual: 4
+Index: 6315, Initial: 4, Final: 3, Actual: 6
+Index: 6335, Initial: 4, Final: 3, Actual: 6
+Index: 6419, Initial: 7, Final: 3, Actual: 3
+Index: 6464, Initial: 6, Final: 3, Actual: 6
+Index: 6472, Initial: 6, Final: 3, Actual: 6
+Index: 6481, Initial: 6, Final: 3, Actual: 6
+Index: 6490, Initial: 4, Final: 3, Actual: 6
+Index: 6601, Initial: 7, Final: 3, Actual: 7
+Index: 6839, Initial: 7, Final: 3, Actual: 4
+Index: 6907, Initial: 2, Final: 3, Actual: 3
+Index: 6929, Initial: 2, Final: 3, Actual: 3
+Index: 6994, Initial: 5, Final: 3, Actual: 3
+Index: 7025, Initial: 7, Final: 3, Actual: 6
+Index: 7194, Initial: 6, Final: 3, Actual: 4
+Index: 7219, Initial: 6, Final: 3, Actual: 8
+Index: 7280, Initial: 8, Final: 3, Actual: 3
+Index: 7385, Initial: 6, Final: 3, Actual: 6
+Index: 7418, Initial: 7, Final: 3, Actual: 7
+Index: 7454, Initial: 6, Final: 3, Actual: 6
+Index: 7479, Initial: 6, Final: 3, Actual: 6
+Index: 7500, Initial: 7, Final: 3, Actual: 3
+Index: 7555, Initial: 5, Final: 3, Actual: 3
+Index: 7659, Initial: 8, Final: 3, Actual: 1
+Index: 7669, Initial: 2, Final: 3, Actual: 3
+Index: 7704, Initial: 6, Final: 3, Actual: 6
+Index: 7837, Initial: 7, Final: 3, Actual: 2
+Index: 7981, Initial: 6, Final: 3, Actual: 4
+Index: 7983, Initial: 7, Final: 3, Actual: 2
+Index: 8112, Initial: 8, Final: 3, Actual: 3
+Index: 8132, Initial: 6, Final: 3, Actual: 3
+Index: 8172, Initial: 2, Final: 3, Actual: 8
+Index: 8247, Initial: 4, Final: 3, Actual: 6
+Index: 8288, Initial: 4, Final: 3, Actual: 4
+Index: 8345, Initial: 4, Final: 3, Actual: 6
+Index: 8378, Initial: 4, Final: 3, Actual: 3
+Index: 8384, Initial: 4, Final: 3, Actual: 6
+Index: 8385, Initial: 2, Final: 3, Actual: 7
+Index: 8392, Initial: 6, Final: 3, Actual: 6
+Index: 8431, Initial: 6, Final: 3, Actual: 6
+Index: 8509, Initial: 2, Final: 3, Actual: 3
+Index: 8614, Initial: 6, Final: 3, Actual: 4
+Index: 8621, Initial: 2, Final: 3, Actual: 3
+Index: 8655, Initial: 5, Final: 3, Actual: 6
+Index: 8662, Initial: 8, Final: 3, Actual: 8
+Index: 8789, Initial: 2, Final: 3, Actual: 2
+Index: 8802, Initial: 6, Final: 3, Actual: 6
+Index: 8935, Initial: 6, Final: 3, Actual: 4
+Index: 8958, Initial: 2, Final: 3, Actual: 5
+Index: 9056, Initial: 4, Final: 3, Actual: 4
+Index: 9168, Initial: 7, Final: 3, Actual: 1
+Index: 9180, Initial: 7, Final: 3, Actual: 3
+Index: 9210, Initial: 2, Final: 3, Actual: 2
+Index: 9228, Initial: 5, Final: 3, Actual: 3
+Index: 9239, Initial: 4, Final: 3, Actual: 6
+Index: 9495, Initial: 6, Final: 3, Actual: 6
+Index: 9505, Initial: 6, Final: 3, Actual: 2
+Index: 9592, Initial: 2, Final: 3, Actual: 3
+Index: 9604, Initial: 4, Final: 3, Actual: 4
+Index: 9612, Initial: 7, Final: 3, Actual: 7
+Index: 9760, Initial: 2, Final: 3, Actual: 4
+Index: 9801, Initial: 2, Final: 3, Actual: 3
+Index: 9806, Initial: 6, Final: 3, Actual: 6
+Index: 9816, Initial: 2, Final: 3, Actual: 5
+Index: 9855, Initial: 1, Final: 3, Actual: 4
+Index: 9877, Initial: 4, Final: 3, Actual: 6
+Index: 9894, Initial: 6, Final: 3, Actual: 6
+Index: 10059, Initial: 6, Final: 3, Actual: 6
+Index: 10085, Initial: 6, Final: 3, Actual: 6
+Index: 10111, Initial: 4, Final: 3, Actual: 6
+Index: 10170, Initial: 4, Final: 3, Actual: 4
+Index: 10247, Initial: 4, Final: 3, Actual: 4
+Index: 10343, Initial: 7, Final: 3, Actual: 2
+Index: 10379, Initial: 4, Final: 3, Actual: 6
+Index: 10407, Initial: 4, Final: 3, Actual: 6
+Index: 10576, Initial: 6, Final: 3, Actual: 2
+Index: 10657, Initial: 6, Final: 3, Actual: 6
+Index: 10731, Initial: 7, Final: 3, Actual: 1
+Index: 10823, Initial: 6, Final: 3, Actual: 6
+Index: 10852, Initial: 4, Final: 3, Actual: 6
+Index: 10898, Initial: 5, Final: 3, Actual: 3
+Index: 10935, Initial: 2, Final: 3, Actual: 3
+Index: 10948, Initial: 6, Final: 3, Actual: 6
+Index: 10966, Initial: 6, Final: 3, Actual: 3
+Index: 11052, Initial: 2, Final: 3, Actual: 3
+Index: 11076, Initial: 4, Final: 3, Actual: 6
+Index: 11101, Initial: 7, Final: 3, Actual: 7
+Index: 11134, Initial: 6, Final: 3, Actual: 6
+Index: 11166, Initial: 4, Final: 3, Actual: 6
+Index: 11177, Initial: 6, Final: 3, Actual: 4
+Index: 11179, Initial: 4, Final: 3, Actual: 4
+Index: 11227, Initial: 4, Final: 3, Actual: 6
+Index: 11230, Initial: 6, Final: 3, Actual: 6
+Index: 11244, Initial: 6, Final: 3, Actual: 6
+Index: 11297, Initial: 4, Final: 3, Actual: 4
+Index: 11317, Initial: 7, Final: 3, Actual: 1
+Index: 11345, Initial: 5, Final: 3, Actual: 4
+Index: 11354, Initial: 4, Final: 3, Actual: 3
+Index: 11355, Initial: 4, Final: 3, Actual: 6
+Index: 11376, Initial: 6, Final: 3, Actual: 6
+Index: 11409, Initial: 7, Final: 3, Actual: 7
+Index: 11417, Initial: 7, Final: 3, Actual: 3
+Index: 11449, Initial: 4, Final: 3, Actual: 4
+Index: 11482, Initial: 2, Final: 3, Actual: 4
+Index: 11483, Initial: 4, Final: 3, Actual: 4
+Index: 11490, Initial: 8, Final: 3, Actual: 8
+Index: 11514, Initial: 6, Final: 3, Actual: 6
+Index: 11546, Initial: 2, Final: 3, Actual: 3
+Index: 11612, Initial: 7, Final: 3, Actual: 3
+Index: 11649, Initial: 4, Final: 3, Actual: 4
+Index: 11662, Initial: 9, Final: 3, Actual: 3
+Index: 11671, Initial: 4, Final: 3, Actual: 6
+Index: 11693, Initial: 6, Final: 3, Actual: 6
+Index: 11785, Initial: 6, Final: 3, Actual: 8
+Index: 11866, Initial: 6, Final: 3, Actual: 6
+Index: 11890, Initial: 6, Final: 3, Actual: 6
+Index: 11919, Initial: 6, Final: 3, Actual: 4
+Index: 11972, Initial: 2, Final: 3, Actual: 2
+Index: 11988, Initial: 5, Final: 3, Actual: 3
+Index: 12019, Initial: 5, Final: 3, Actual: 3
+Index: 12030, Initial: 2, Final: 3, Actual: 2
+Index: 12057, Initial: 6, Final: 3, Actual: 6
+Index: 12058, Initial: 5, Final: 3, Actual: 3
+Index: 12073, Initial: 2, Final: 3, Actual: 2
+Index: 12218, Initial: 2, Final: 3, Actual: 3
+Index: 12241, Initial: 2, Final: 3, Actual: 6
+Index: 12245, Initial: 6, Final: 3, Actual: 8
+Index: 12292, Initial: 6, Final: 3, Actual: 6
+Index: 12314, Initial: 4, Final: 3, Actual: 6
+Index: 12337, Initial: 2, Final: 3, Actual: 3
+Index: 12351, Initial: 6, Final: 3, Actual: 6
+Index: 12354, Initial: 2, Final: 3, Actual: 6
+Index: 12378, Initial: 5, Final: 3, Actual: 5
+Index: 12387, Initial: 6, Final: 3, Actual: 3
+Index: 12437, Initial: 6, Final: 3, Actual: 6
+Index: 12513, Initial: 7, Final: 3, Actual: 6
+Index: 12527, Initial: 6, Final: 3, Actual: 6
+Index: 12557, Initial: 2, Final: 3, Actual: 2
+Index: 12581, Initial: 4, Final: 3, Actual: 4
+Index: 12611, Initial: 4, Final: 3, Actual: 6
+Index: 12640, Initial: 7, Final: 3, Actual: 3
+Index: 12662, Initial: 8, Final: 3, Actual: 2
+Index: 12669, Initial: 4, Final: 3, Actual: 4
+Index: 12744, Initial: 4, Final: 3, Actual: 6
+Index: 12834, Initial: 4, Final: 3, Actual: 6
+Index: 12856, Initial: 6, Final: 3, Actual: 6
+Index: 12860, Initial: 4, Final: 3, Actual: 6
+Index: 12919, Initial: 4, Final: 3, Actual: 6
+Index: 12957, Initial: 2, Final: 3, Actual: 3
+Index: 12984, Initial: 6, Final: 3, Actual: 6
+Index: 13085, Initial: 6, Final: 3, Actual: 6
+Index: 13105, Initial: 8, Final: 3, Actual: 7
+Index: 13142, Initial: 6, Final: 3, Actual: 6
+Index: 13173, Initial: 5, Final: 3, Actual: 6
+Index: 13177, Initial: 2, Final: 3, Actual: 3
+Index: 13182, Initial: 4, Final: 3, Actual: 6
+Index: 13189, Initial: 4, Final: 3, Actual: 6
+Index: 13243, Initial: 6, Final: 3, Actual: 6
+Index: 13366, Initial: 8, Final: 3, Actual: 6
+Index: 13402, Initial: 6, Final: 3, Actual: 6
+Index: 13462, Initial: 8, Final: 3, Actual: 6
+Index: 13539, Initial: 4, Final: 3, Actual: 4
+Index: 13569, Initial: 4, Final: 3, Actual: 3
+Index: 13629, Initial: 4, Final: 3, Actual: 6
+Index: 13649, Initial: 4, Final: 3, Actual: 6
+Index: 13675, Initial: 6, Final: 3, Actual: 6
+Index: 13752, Initial: 2, Final: 3, Actual: 3
+Index: 13790, Initial: 2, Final: 3, Actual: 2
+Index: 13863, Initial: 6, Final: 3, Actual: 7
+Index: 13868, Initial: 5, Final: 3, Actual: 5
+Index: 14007, Initial: 6, Final: 3, Actual: 6
+Index: 14202, Initial: 6, Final: 3, Actual: 6
+Index: 14212, Initial: 2, Final: 3, Actual: 2
+Index: 14273, Initial: 6, Final: 3, Actual: 6
+Index: 14280, Initial: 4, Final: 3, Actual: 4
+Index: 14282, Initial: 6, Final: 3, Actual: 6
+Index: 14345, Initial: 5, Final: 3, Actual: 6
+Index: 14359, Initial: 4, Final: 3, Actual: 7
+Index: 14579, Initial: 8, Final: 3, Actual: 6
+Index: 14593, Initial: 4, Final: 3, Actual: 4
+Index: 14713, Initial: 2, Final: 3, Actual: 3
+Index: 14750, Initial: 2, Final: 3, Actual: 3
+Index: 14806, Initial: 6, Final: 3, Actual: 6
+Index: 14812, Initial: 2, Final: 3, Actual: 3
+Index: 14831, Initial: 4, Final: 3, Actual: 4
+Index: 14864, Initial: 4, Final: 3, Actual: 4
+Index: 14902, Initial: 5, Final: 3, Actual: 2
+Index: 15062, Initial: 4, Final: 3, Actual: 4
+Index: 15115, Initial: 7, Final: 3, Actual: 3
+Index: 15184, Initial: 2, Final: 3, Actual: 8
+Index: 15376, Initial: 2, Final: 3, Actual: 3
+Index: 15448, Initial: 8, Final: 3, Actual: 8
+Index: 15664, Initial: 6, Final: 3, Actual: 6
+Index: 15673, Initial: 6, Final: 3, Actual: 8
+Index: 15727, Initial: 4, Final: 3, Actual: 3
+Index: 15729, Initial: 7, Final: 3, Actual: 3
+Index: 15793, Initial: 2, Final: 3, Actual: 3
+Index: 15851, Initial: 6, Final: 3, Actual: 6
+Index: 15855, Initial: 4, Final: 3, Actual: 6
+Index: 15919, Initial: 5, Final: 3, Actual: 3
+Index: 15922, Initial: 5, Final: 3, Actual: 3
+Index: 15943, Initial: 6, Final: 3, Actual: 4
+Index: 16044, Initial: 6, Final: 3, Actual: 6
+Index: 16065, Initial: 6, Final: 3, Actual: 6
+Index: 16081, Initial: 2, Final: 3, Actual: 3
+Index: 16083, Initial: 2, Final: 3, Actual: 7
+Index: 16169, Initial: 6, Final: 3, Actual: 6
+Index: 16257, Initial: 8, Final: 3, Actual: 8
+Index: 16267, Initial: 7, Final: 3, Actual: 3
+Index: 16326, Initial: 6, Final: 3, Actual: 3
+Index: 16439, Initial: 4, Final: 3, Actual: 6
+Index: 16464, Initial: 4, Final: 3, Actual: 4
+Index: 16495, Initial: 7, Final: 3, Actual: 3
+Index: 16526, Initial: 6, Final: 3, Actual: 4
+Index: 16644, Initial: 6, Final: 3, Actual: 6
+Index: 16657, Initial: 4, Final: 3, Actual: 4
+Index: 16836, Initial: 7, Final: 3, Actual: 7
+Index: 16984, Initial: 4, Final: 3, Actual: 6
+Index: 17017, Initial: 4, Final: 3, Actual: 4
+Index: 17114, Initial: 2, Final: 3, Actual: 3
+Index: 17155, Initial: 6, Final: 3, Actual: 6
+Index: 17180, Initial: 2, Final: 3, Actual: 2
+Index: 17269, Initial: 8, Final: 3, Actual: 8
+Index: 17321, Initial: 5, Final: 3, Actual: 3
+Index: 17357, Initial: 6, Final: 3, Actual: 6
+Index: 17388, Initial: 5, Final: 3, Actual: 5
+Index: 17397, Initial: 7, Final: 3, Actual: 7
+Index: 17407, Initial: 2, Final: 3, Actual: 6
+Index: 17511, Initial: 2, Final: 3, Actual: 8
+Index: 17513, Initial: 6, Final: 3, Actual: 6
+Index: 17547, Initial: 4, Final: 3, Actual: 6
+Index: 17577, Initial: 7, Final: 3, Actual: 6
+Index: 17578, Initial: 4, Final: 3, Actual: 4
+Index: 17613, Initial: 2, Final: 3, Actual: 2
+Index: 17640, Initial: 4, Final: 3, Actual: 6
+Index: 17652, Initial: 6, Final: 3, Actual: 6
+Index: 17653, Initial: 6, Final: 3, Actual: 6
+Index: 17716, Initial: 2, Final: 3, Actual: 5
+Index: 17754, Initial: 2, Final: 3, Actual: 3
+Index: 17830, Initial: 5, Final: 3, Actual: 3
+Index: 17854, Initial: 2, Final: 3, Actual: 3
+Index: 17916, Initial: 6, Final: 3, Actual: 6
+Index: 17937, Initial: 6, Final: 3, Actual: 1
+Index: 17947, Initial: 6, Final: 3, Actual: 6
+Index: 17968, Initial: 6, Final: 3, Actual: 8
+Index: 18042, Initial: 4, Final: 3, Actual: 4
+Index: 18067, Initial: 7, Final: 3, Actual: 3
+Index: 18077, Initial: 6, Final: 3, Actual: 6
+Index: 18162, Initial: 2, Final: 3, Actual: 3
+Index: 18185, Initial: 6, Final: 3, Actual: 4
+Index: 18233, Initial: 4, Final: 3, Actual: 6
+Index: 18305, Initial: 4, Final: 3, Actual: 4
+Index: 18416, Initial: 4, Final: 3, Actual: 6
+Index: 18467, Initial: 2, Final: 3, Actual: 2
+Index: 18489, Initial: 8, Final: 3, Actual: 7
+Index: 18493, Initial: 4, Final: 3, Actual: 6
+Index: 18528, Initial: 5, Final: 3, Actual: 5
+Index: 18601, Initial: 6, Final: 3, Actual: 6
+Index: 18747, Initial: 5, Final: 3, Actual: 5
+Index: 18799, Initial: 4, Final: 3, Actual: 4
+Index: 18864, Initial: 2, Final: 3, Actual: 4
+Index: 19262, Initial: 6, Final: 3, Actual: 6
+Index: 19294, Initial: 2, Final: 3, Actual: 7
+Index: 19350, Initial: 5, Final: 3, Actual: 3
+Index: 19382, Initial: 4, Final: 3, Actual: 6
+Index: 19385, Initial: 6, Final: 3, Actual: 6
+Index: 19396, Initial: 7, Final: 3, Actual: 7
+Index: 19409, Initial: 4, Final: 3, Actual: 4
+Index: 19505, Initial: 4, Final: 3, Actual: 4
+Index: 19642, Initial: 6, Final: 3, Actual: 6
+Index: 19715, Initial: 5, Final: 3, Actual: 6
+Index: 19788, Initial: 2, Final: 3, Actual: 3
+Index: 19887, Initial: 8, Final: 3, Actual: 8
+Index: 19912, Initial: 8, Final: 3, Actual: 3
+Index: 19929, Initial: 5, Final: 3, Actual: 5
+Index: 20009, Initial: 6, Final: 3, Actual: 6
+Index: 20021, Initial: 2, Final: 3, Actual: 3
+Index: 20113, Initial: 4, Final: 3, Actual: 6
+Index: 20142, Initial: 5, Final: 3, Actual: 5
+Index: 20144, Initial: 7, Final: 3, Actual: 3
+Index: 20199, Initial: 8, Final: 3, Actual: 4
+Index: 20211, Initial: 5, Final: 3, Actual: 4
+Index: 20259, Initial: 5, Final: 3, Actual: 5
+Index: 20292, Initial: 7, Final: 3, Actual: 3
+Index: 20382, Initial: 7, Final: 3, Actual: 7
+Index: 20431, Initial: 6, Final: 3, Actual: 6
+Index: 20451, Initial: 4, Final: 3, Actual: 4
+Index: 20456, Initial: 4, Final: 3, Actual: 4
+Index: 20562, Initial: 6, Final: 3, Actual: 8
+Index: 20773, Initial: 6, Final: 3, Actual: 4
+Index: 20932, Initial: 4, Final: 3, Actual: 7
+Index: 20989, Initial: 7, Final: 3, Actual: 7
+Index: 21040, Initial: 8, Final: 3, Actual: 3
+Index: 21106, Initial: 4, Final: 3, Actual: 6
+Index: 21171, Initial: 5, Final: 3, Actual: 5
+Index: 21255, Initial: 6, Final: 3, Actual: 6
+Index: 21378, Initial: 4, Final: 3, Actual: 5
+Index: 21392, Initial: 5, Final: 3, Actual: 7
+Index: 21398, Initial: 2, Final: 3, Actual: 3
+Index: 21422, Initial: 2, Final: 3, Actual: 2
+Index: 21461, Initial: 4, Final: 3, Actual: 6
+Index: 21564, Initial: 6, Final: 3, Actual: 6
+Index: 21589, Initial: 6, Final: 3, Actual: 6
+Index: 21687, Initial: 6, Final: 3, Actual: 3
+Index: 21753, Initial: 2, Final: 3, Actual: 3
+Index: 21763, Initial: 6, Final: 3, Actual: 6
+Index: 21816, Initial: 6, Final: 3, Actual: 6
+Index: 21849, Initial: 7, Final: 3, Actual: 7
+Index: 21870, Initial: 2, Final: 3, Actual: 2
+Index: 21874, Initial: 6, Final: 3, Actual: 2
+Index: 21882, Initial: 2, Final: 3, Actual: 3
+Index: 21898, Initial: 4, Final: 3, Actual: 4
+Index: 21907, Initial: 6, Final: 3, Actual: 4
+Index: 21915, Initial: 5, Final: 3, Actual: 5
+Index: 21955, Initial: 5, Final: 3, Actual: 5
+Index: 21967, Initial: 1, Final: 3, Actual: 2
+Index: 21974, Initial: 4, Final: 3, Actual: 4
+Index: 22017, Initial: 4, Final: 3, Actual: 4
+Index: 22077, Initial: 2, Final: 3, Actual: 3
+Index: 22080, Initial: 6, Final: 3, Actual: 6
+Index: 22115, Initial: 6, Final: 3, Actual: 6
+Index: 22158, Initial: 7, Final: 3, Actual: 6
+Index: 22166, Initial: 2, Final: 3, Actual: 3
+Index: 22175, Initial: 8, Final: 3, Actual: 8
+Index: 22228, Initial: 2, Final: 3, Actual: 3
+Index: 22233, Initial: 4, Final: 3, Actual: 6
+Index: 22296, Initial: 6, Final: 3, Actual: 6
+Index: 22332, Initial: 4, Final: 3, Actual: 4
+Index: 22470, Initial: 4, Final: 3, Actual: 6
+Index: 22484, Initial: 4, Final: 3, Actual: 4
+Index: 22505, Initial: 8, Final: 3, Actual: 3
+Index: 22567, Initial: 2, Final: 3, Actual: 3
+Index: 22575, Initial: 2, Final: 3, Actual: 3
+Index: 22585, Initial: 6, Final: 3, Actual: 6
+Index: 22605, Initial: 5, Final: 3, Actual: 5
+Index: 22653, Initial: 2, Final: 3, Actual: 2
+Index: 22672, Initial: 6, Final: 3, Actual: 6
+Index: 22722, Initial: 2, Final: 3, Actual: 3
+Index: 22723, Initial: 7, Final: 3, Actual: 8
+Index: 22753, Initial: 7, Final: 3, Actual: 3
+Index: 22782, Initial: 2, Final: 3, Actual: 3
+Index: 22854, Initial: 5, Final: 3, Actual: 3
+Index: 22906, Initial: 4, Final: 3, Actual: 6
+Index: 22938, Initial: 2, Final: 3, Actual: 3
+Index: 23177, Initial: 4, Final: 3, Actual: 3
+Index: 23228, Initial: 6, Final: 3, Actual: 6
+Index: 23261, Initial: 6, Final: 3, Actual: 7
+Index: 23287, Initial: 6, Final: 3, Actual: 6
+Index: 23318, Initial: 5, Final: 3, Actual: 2
+Index: 23337, Initial: 6, Final: 3, Actual: 3
+Index: 23344, Initial: 5, Final: 3, Actual: 5
+Index: 23426, Initial: 5, Final: 3, Actual: 3
+Index: 23439, Initial: 6, Final: 3, Actual: 6
+Index: 23492, Initial: 8, Final: 3, Actual: 2
+Index: 23524, Initial: 2, Final: 3, Actual: 6
+Index: 23526, Initial: 2, Final: 3, Actual: 2
+Index: 23544, Initial: 4, Final: 3, Actual: 3
+Index: 23549, Initial: 2, Final: 3, Actual: 3
+Index: 23643, Initial: 4, Final: 3, Actual: 6
+Index: 23781, Initial: 6, Final: 3, Actual: 6
+Index: 23782, Initial: 4, Final: 3, Actual: 6
+Index: 23822, Initial: 6, Final: 3, Actual: 6
+Index: 23913, Initial: 6, Final: 3, Actual: 6
+Index: 23962, Initial: 6, Final: 3, Actual: 6
+Index: 23970, Initial: 4, Final: 3, Actual: 4
+Index: 23991, Initial: 6, Final: 3, Actual: 6
+Index: 24073, Initial: 4, Final: 3, Actual: 4
+Index: 24081, Initial: 4, Final: 3, Actual: 4
+Index: 24092, Initial: 4, Final: 3, Actual: 4
+Index: 24115, Initial: 2, Final: 3, Actual: 3
+Index: 24127, Initial: 7, Final: 3, Actual: 4
+Index: 24169, Initial: 5, Final: 3, Actual: 3
+Index: 24207, Initial: 6, Final: 3, Actual: 4
+Index: 24239, Initial: 6, Final: 3, Actual: 3
+Index: 24283, Initial: 7, Final: 3, Actual: 6
+Index: 24308, Initial: 6, Final: 3, Actual: 6
+Index: 24337, Initial: 4, Final: 3, Actual: 4
+Index: 24395, Initial: 6, Final: 3, Actual: 6
+Index: 24423, Initial: 8, Final: 3, Actual: 8
+Index: 24447, Initial: 7, Final: 3, Actual: 7
+Index: 24465, Initial: 4, Final: 3, Actual: 6
+Index: 24468, Initial: 6, Final: 3, Actual: 6
+Index: 24569, Initial: 2, Final: 3, Actual: 3
+Index: 24610, Initial: 4, Final: 3, Actual: 4
+Index: 24638, Initial: 4, Final: 3, Actual: 4
+Total divergent cases: 526
 
 ******************************* INTERPRETABILITY METRICS *******************************
 
 Metrics (Initial):
-  Features Used: 2
-  Total Features: 4
-  Sparsity: 0.50
-  Total Rules: 8
-  Max Depth: 5
-  Mean Rule Depth: 3.62
-  Sparsity Interpretability Score: 6.02
+  total_rules: 3430
+  features_used: 36
+  total_features: 42
+  max_depth: 43
+  mean_rule_depth: 18.652186588921282
+  depth_balance: 0.4337717811377042
+  attribute_usage_norm: 0.3159308621407747
+  complexity_score: 0.13704189278717432
+  average_rules_per_tree: 1.0
+  average_max_depth_per_tree: 18.652186588921282
+  average_rule_depth_per_tree: 18.652186588921282
 
 Metrics (Final):
-  Features Used: 2 (+0.0%)
-  Total Features: 4 (+0.0%)
-  Sparsity: 0.50 (+0.0%)
-  Total Rules: 8 (+0.0%)
-  Max Depth: 5 (+0.0%)
-  Mean Rule Depth: 3.62 (+0.0%)
-  Sparsity Interpretability Score: 6.02 (+0.0%)
+  total_rules: 1302 (-62.0%)
+  features_used: 36 (+0.0%)
+  total_features: 42 (+0.0%)
+  max_depth: 43 (+0.0%)
+  mean_rule_depth: 18.383256528417817 (-1.4%)
+  depth_balance: 0.4275175936841353 (-1.4%)
+  attribute_usage_norm: 0.30822544071392 (-2.4%)
+  complexity_score: 0.13177179872624717 (-3.8%)
+  average_rules_per_tree: 1.0 (+0.0%)
+  average_max_depth_per_tree: 18.383256528417817 (-1.4%)
+  average_rule_depth_per_tree: 18.383256528417817 (-1.4%)
