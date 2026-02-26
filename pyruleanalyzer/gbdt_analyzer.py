@@ -167,7 +167,7 @@ class GBDTAnalyzer:
                 current_time = time.time()
                 elapsed = current_time - start_time
                 if i > 0:
-                    rate = i / elapsed
+                    rate = i / elapsed if elapsed > 0 else 0
                     remaining = (total_samples - i) / rate if rate > 0 else 0
                 else:
                     remaining = 0
@@ -318,7 +318,7 @@ class GBDTAnalyzer:
                     current_time = time.time()
                     elapsed = current_time - start_time
                     if i > 0:
-                        rate = i / elapsed
+                        rate = i / elapsed if elapsed > 0 else 0
                         remaining = (total_samples - i) / rate if rate > 0 else 0
                     else:
                         remaining = 0
