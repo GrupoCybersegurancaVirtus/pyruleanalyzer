@@ -108,12 +108,18 @@ def safe_speed(n, t):
 
 # --- Contagem de regras/folhas ---
 # Sklearn: GBDT tem estimators_ como array 2D (n_estimators, n_classes) para multiclass
-# ou (n_estimators, 1) para binario
+# ou (n_estimators, 1) para binario.
+# Devemos contar as folhas de TODAS as colunas (classes), nao apenas da coluna 0.
 if hasattr(sk_orig, 'estimators_'):
+    n_estimators, n_cols = sk_orig.estimators_.shape
     leaves_sklearn = sum(
-        tree[0].get_n_leaves()
-        for tree in sk_orig.estimators_
+        sk_orig.estimators_[i, j].get_n_leaves()
+        for i in range(n_estimators)
+        for j in range(n_cols)
     )
+    # Adicionar as init rules (1 por classe) para comparacao justa com o pyRuleAnalyzer
+    n_classes = len(sk_orig.classes_)
+    leaves_sklearn += n_classes if not (n_classes == 2 and n_cols == 1) else 1
 else:
     leaves_sklearn = "N/A"
 

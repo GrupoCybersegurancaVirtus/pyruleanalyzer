@@ -155,32 +155,57 @@ class RFAnalyzer:
             if lookup_fn:
                 tree_lookups[tree_id] = (lookup_fn, rules)
 
-        # Main Classification Loop
+        # Main Classification Loop (Soft Voting)
         for i, sample in enumerate(sample_dicts):
             true_label = int(y_test[i])
 
-            # Fast RF Voting
-            votes: List[Any] = []
+            # Fast RF Voting — collect distributions for soft voting
             matched_rules: list = []
+            tree_probas: list = []
+            has_distributions = True
 
             for tree_id, (lookup_fn, rules) in tree_lookups.items():
                 try:
                     rule_idx = lookup_fn(sample)
                     if rule_idx != -1:
                         matched_rule = rules[rule_idx]
-                        try:
-                            label = int(str(matched_rule.class_).replace('Class', '').strip())
-                        except Exception:
-                            label = matched_rule.class_
-                        votes.append(label)
                         matched_rules.append(matched_rule)
+
+                        # Collect distribution for soft voting
+                        if matched_rule.class_distribution is not None:
+                            dist = matched_rule.class_distribution
+                            total_c = sum(dist)
+                            if total_c > 0:
+                                tree_probas.append([c / total_c for c in dist])
+                            else:
+                                tree_probas.append(dist)
+                        else:
+                            has_distributions = False
                 except Exception:
                     pass
 
-            # Aggregate Votes
-            if votes:
-                counts = Counter(votes)
-                pred_label = counts.most_common(1)[0][0]
+            # Aggregate using soft voting
+            if matched_rules:
+                if has_distributions and tree_probas:
+                    n_cls = len(tree_probas[0])
+                    avg_proba = [0.0] * n_cls
+                    for proba in tree_probas:
+                        for j in range(n_cls):
+                            avg_proba[j] += proba[j]
+                    n_trees_voted = len(tree_probas)
+                    avg_proba = [p / n_trees_voted for p in avg_proba]
+                    pred_label = avg_proba.index(max(avg_proba))
+                else:
+                    # Fallback: hard voting
+                    votes: List[Any] = []
+                    for rule in matched_rules:
+                        try:
+                            label = int(str(rule.class_).replace('Class', '').strip())
+                        except Exception:
+                            label = rule.class_
+                        votes.append(label)
+                    counts = Counter(votes)
+                    pred_label = counts.most_common(1)[0][0]
             else:
                 pred_label = clf.default_class
                 try:
@@ -205,7 +230,7 @@ class RFAnalyzer:
                 current_time = time.time()
                 elapsed = current_time - start_time
                 if i > 0:
-                    rate = i / elapsed
+                    rate = i / elapsed if elapsed > 0 else 0
                     remaining = (total_samples - i) / rate if rate > 0 else 0
                 else:
                     remaining = 0
@@ -338,24 +363,57 @@ class RFAnalyzer:
                 if fn:
                     tree_lookups_init[tid] = (fn, rules)
 
-            # Helper for Fast RF Prediction
+            # Helper for Fast RF Prediction (Soft Voting)
             def predict_fast_rf(sample: dict, lookups: dict, default_cls: Any) -> Any:
-                votes: List[Any] = []
+                tree_probas: list = []
+                has_distributions = True
+                matched_any = False
+
                 for _, (lookup_fn, rules) in lookups.items():
                     try:
                         idx = lookup_fn(sample)
                         if idx != -1:
                             r = rules[idx]
-                            try:
-                                val = int(str(r.class_).replace('Class', '').strip())
-                            except Exception:
-                                val = r.class_
-                            votes.append(val)
+                            matched_any = True
+                            if r.class_distribution is not None:
+                                dist = r.class_distribution
+                                total_c = sum(dist)
+                                if total_c > 0:
+                                    tree_probas.append([c / total_c for c in dist])
+                                else:
+                                    tree_probas.append(dist)
+                            else:
+                                has_distributions = False
                     except Exception:
                         pass
 
-                if votes:
-                    return Counter(votes).most_common(1)[0][0]
+                if matched_any and has_distributions and tree_probas:
+                    n_cls = len(tree_probas[0])
+                    avg = [0.0] * n_cls
+                    for proba in tree_probas:
+                        for j in range(n_cls):
+                            avg[j] += proba[j]
+                    n = len(tree_probas)
+                    avg = [p / n for p in avg]
+                    return avg.index(max(avg))
+
+                if matched_any:
+                    # Fallback: hard voting
+                    votes: List[Any] = []
+                    for _, (lookup_fn, rules) in lookups.items():
+                        try:
+                            idx = lookup_fn(sample)
+                            if idx != -1:
+                                r = rules[idx]
+                                try:
+                                    val = int(str(r.class_).replace('Class', '').strip())
+                                except Exception:
+                                    val = r.class_
+                                votes.append(val)
+                        except Exception:
+                            pass
+                    if votes:
+                        return Counter(votes).most_common(1)[0][0]
 
                 try:
                     return int(str(default_cls).replace('Class', '').strip())
@@ -390,7 +448,7 @@ class RFAnalyzer:
                     current_time = time.time()
                     elapsed = current_time - start_time
                     if i > 0:
-                        rate = i / elapsed
+                        rate = i / elapsed if elapsed > 0 else 0
                         remaining = (total_samples - i) / rate if rate > 0 else 0
                     else:
                         remaining = 0
