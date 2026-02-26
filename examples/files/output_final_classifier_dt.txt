@@ -1,61 +1,104 @@
+******************** INITIAL VS FINAL DECISION TREE CLASSIFICATION REPORT ********************
+
+
+******************************* SCIKIT-LEARN MODEL *******************************
+
+Correct: 20942, Errors: 3758, Total: 24700
+Accuracy: 0.84785
+Precision (macro): 0.51385
+Recall (macro): 0.51292
+F1 Score (macro): 0.51188
+Specificity (macro): 0.98199
+
+Confusion Matrix with Labels:
+    0   1    2     3     4     5      6    7   8   9
+0  13  12   32   103    43     0      0    0   0   0
+1  13   4   17    90    42     0      3    4   2   0
+2  15  20  567   508    54    17     20   18   8   0
+3  42  31  662  2141   167    67    119   83  18  10
+4  41  37   79   247  1137    11    248    8  10   1
+5   0   2   29    58     8  5550     11    0   3   0
+6   0   2   25   105   256    16  10654   15  24   3
+7   0   3   84   109    12     1      7  825   8   0
+8   0   0    8    18     3     1     29    5  49   0
+9   0   0    1     9     0     0      1    0   0   2
 
 ******************************* INITIAL MODEL *******************************
 
-Correct: 18, Errors: 12, Total: 30
-Accuracy: 0.60000
-Precision: 0.00000
-Recall: 0.00000
-F1 Score: 0.00000
-Specificity: 0.83333
+Correct: 20936, Errors: 3764, Total: 24700
+Accuracy: 0.84761
+Precision (macro): 0.51362
+Recall (macro): 0.51284
+F1 Score (macro): 0.51172
+Specificity (macro): 0.98197
 
 Confusion Matrix with Labels:
-Labels: [0, 1, 2]
-[[10  0  0]
- [ 0  0 10]
- [ 0  2  8]]
+    0   1    2     3     4     5      6    7   8   9
+0  13  12   32   103    43     0      0    0   0   0
+1  13   4   17    90    42     0      3    4   2   0
+2  15  20  567   508    54    17     20   18   8   0
+3  42  31  663  2140   167    67    119   83  18  10
+4  41  37   79   247  1137    11    248    8  10   1
+5   0   2   30    58     8  5549     11    0   3   0
+6   0   2   25   105   260    16  10650   15  24   3
+7   0   3   84   109    12     1      7  825   8   0
+8   0   0    8    18     3     1     29    5  49   0
+9   0   0    2     8     0     0      1    0   0   2
 
-Number of initial rules: 8
-
-Time elapsed in executing initial model classifications: 0.012 seconds
+Number of initial rules: 3430
 
 ******************************* FINAL MODEL *******************************
 
-Correct: 18, Errors: 12, Total: 30
-Accuracy: 0.60000
-Precision: 0.00000
-Recall: 0.00000
-F1 Score: 0.00000
-Specificity: 0.83333
+Correct: 20936, Errors: 3764, Total: 24700
+Accuracy: 0.84761
+Precision (macro): 0.51362
+Recall (macro): 0.51284
+F1 Score (macro): 0.51172
+Specificity (macro): 0.98197
 
 Confusion Matrix with Labels:
-Labels: [0, 1, 2]
-[[10  0  0]
- [ 0  0 10]
- [ 0  2  8]]
+    0   1    2     3     4     5      6    7   8   9
+0  13  12   32   103    43     0      0    0   0   0
+1  13   4   17    90    42     0      3    4   2   0
+2  15  20  567   508    54    17     20   18   8   0
+3  42  31  663  2140   167    67    119   83  18  10
+4  41  37   79   247  1137    11    248    8  10   1
+5   0   2   30    58     8  5549     11    0   3   0
+6   0   2   25   105   260    16  10650   15  24   3
+7   0   3   84   109    12     1      7  825   8   0
+8   0   0    8    18     3     1     29    5  49   0
+9   0   0    2     8     0     0      1    0   0   2
 
-Number of final rules: 8
-
-Time elapsed in executing final model classifications: 0.010 seconds
+Number of final rules: 3182
 
 ******************************* DIVERGENT CASES *******************************
+Total divergent cases: 0
 No divergent cases found.
 
 ******************************* INTERPRETABILITY METRICS *******************************
 
 Metrics (Initial):
-  Features Used: 2
-  Total Features: 4
-  Sparsity: 0.50
-  Total Rules: 8
-  Max Depth: 5
-  Mean Rule Depth: 3.62
-  Sparsity Interpretability Score: 6.02
+  total_rules: 3430
+  features_used: 36
+  total_features: 42
+  max_depth: 43
+  mean_rule_depth: 18.652186588921282
+  depth_balance: 0.4337717811377042
+  attribute_usage_norm: 0.3159308621407747
+  complexity_score: 0.13704189278717432
+  average_rules_per_tree: 1.0
+  average_max_depth_per_tree: 18.652186588921282
+  average_rule_depth_per_tree: 18.652186588921282
 
 Metrics (Final):
-  Features Used: 2 (+0.0%)
-  Total Features: 4 (+0.0%)
-  Sparsity: 0.50 (+0.0%)
-  Total Rules: 8 (+0.0%)
-  Max Depth: 5 (+0.0%)
-  Mean Rule Depth: 3.62 (+0.0%)
-  Sparsity Interpretability Score: 6.02 (+0.0%)
+  total_rules: 3182 (-7.2%)
+  features_used: 36 (+0.0%)
+  total_features: 42 (+0.0%)
+  max_depth: 43 (+0.0%)
+  mean_rule_depth: 18.631363922061595 (-0.1%)
+  depth_balance: 0.4332875330711999 (-0.1%)
+  attribute_usage_norm: 0.31953548232618 (+1.1%)
+  complexity_score: 0.13845074086582654 (+1.0%)
+  average_rules_per_tree: 1.0 (+0.0%)
+  average_max_depth_per_tree: 18.631363922061595 (-0.1%)
+  average_rule_depth_per_tree: 18.631363922061595 (-0.1%)
