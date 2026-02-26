@@ -347,5 +347,30 @@ class GBDTAnalyzer:
                     diff = f' ({pct:+.1f}%)'
                 f.write(f'  {k}: {v}{diff}\n')
 
+            # Print SCS metrics to stdout
+            col_m = 30
+            col_v = 14
+            print(f"\n{'=' * 80}")
+            print('STRUCTURAL COMPLEXITY METRICS (SCS)')
+            print(f"{'=' * 80}")
+            print(f"{'METRIC':<{col_m}} | {'INITIAL':>{col_v}} | {'FINAL':>{col_v}} | {'CHANGE':>{col_v}}")
+            print(f"{'-' * 80}")
+            for k in metrics_init:
+                v_init = metrics_init[k]
+                v_final = metrics_final.get(k, 0)
+                if isinstance(v_init, float):
+                    s_init = f'{v_init:.4f}'
+                    s_final = f'{v_final:.4f}'
+                else:
+                    s_init = str(v_init)
+                    s_final = str(v_final)
+                if isinstance(v_init, (int, float)) and v_init != 0:
+                    pct = ((v_final - v_init) / v_init) * 100
+                    s_pct = f'{pct:+.1f}%'
+                else:
+                    s_pct = 'N/A'
+                print(f'  {k:<{col_m}} | {s_init:>{col_v}} | {s_final:>{col_v}} | {s_pct:>{col_v}}')
+            print(f"{'=' * 80}")
+
         # Print redundancy summary at the end
         self.print_redundancy_summary()

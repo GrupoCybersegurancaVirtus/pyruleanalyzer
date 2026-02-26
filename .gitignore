@@ -181,3 +181,4 @@ cython_debug/
 AGENTS.md
 start_opencode.bat
 *.pkl
+nul

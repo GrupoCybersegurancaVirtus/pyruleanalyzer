@@ -6,13 +6,13 @@ import importlib
 import numpy as np
 import pandas as pd
 
-# Adiciona o diretorio pai ao path para encontrar o pacote pyruleanalyzer
+# Add parent directory to path to find pyruleanalyzer package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pyruleanalyzer.rule_classifier import RuleClassifier
 from pyruleanalyzer._accel import HAS_C_EXTENSION
 
-# --- CONFIGURACAO ---
-# Escolha o dataset descomentando abaixo
+# --- CONFIGURATION ---
+# Choose dataset by uncommenting below
 # train_path = "examples/data/covid_train.csv"
 # test_path = "examples/data/covid_test.csv"
 
@@ -28,50 +28,50 @@ test_path = "examples/data/A Machine Learning-Based Classification and Predictio
 # train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
 # test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
-# Configuracao Especifica para Gradient Boosting Decision Trees
+# Gradient Boosting Decision Trees specific configuration
 model_params = {
     'random_state': 42,
     'n_estimators': 100,
-    # 'max_depth': 3,           # Profundidade maxima (padrao = 3 para GBDT)
-    # 'learning_rate': 0.1,     # Taxa de aprendizado
+    # 'max_depth': 3,           # Max depth (default = 3 for GBDT)
+    # 'learning_rate': 0.1,     # Learning rate
 }
 
 # ==============================================================================
-# 1. PROCESSO DE TREINAMENTO E REFINAMENTO (GBDT)
+# 1. TRAINING AND REFINEMENT PROCESS (GBDT)
 # ==============================================================================
-# Cria o classificador definindo algorithm_type='Gradient Boosting Decision Trees'
+# Create classifier with algorithm_type='Gradient Boosting Decision Trees'
 classifier = RuleClassifier.new_classifier(
     train_path, test_path, model_params,
     algorithm_type='Gradient Boosting Decision Trees'
 )
 
-# Executa a analise de redundancia
+# Execute redundancy analysis
 classifier.execute_rule_analysis(
     test_path, remove_duplicates="hard", remove_below_n_classifications=1
 )
 
-# Gera relatorio detalhado comparando Antes x Depois
+# Generate detailed report comparing Before x After
 classifier.compare_initial_final_results(test_path)
 
 # ==============================================================================
-# 2. EXPORTACAO DO CLASSIFICADOR NATIVO
+# 2. NATIVE CLASSIFIER EXPORT
 # ==============================================================================
-# Recuperacao de dados para o teste de benchmark
+# Retrieve data for benchmark test
 X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
     train_path, test_path
 )
 
-# Converter para DataFrame e lista de dicionarios
+# Convert to DataFrame and list of dicts
 X_test_df = pd.DataFrame(X_test, columns=feature_names)
 sample_dicts = X_test_df.to_dict('records')
 
 export_file = "examples/files/gbdt_classifier.py"
 classifier.export_to_native_python(feature_names, filename=export_file)
 
-# Compilar arrays de arvore para predict_batch
+# Compile tree arrays for predict_batch
 classifier.compile_tree_arrays(feature_names=feature_names)
 
-# Importacao dinamica do classificador exportado
+# Dynamic import of exported classifier
 gbdt_classifier = None
 option_standalone = False
 try:
@@ -83,33 +83,34 @@ try:
         importlib.reload(gbdt_classifier)
         option_standalone = True
     else:
-        print(f"[ERRO] Arquivo {export_file} nao encontrado.")
+        print(f"[ERROR] File {export_file} not found.")
 except Exception as e:
-    print(f"[ERRO] Falha ao importar {export_file}: {e}")
+    print(f"[ERROR] Failed to import {export_file}: {e}")
 
 # ==============================================================================
-# 3. BENCHMARK E VALIDACAO DE PERFORMANCE
+# 3. BENCHMARK AND PERFORMANCE VALIDATION
 # ==============================================================================
 
-print("\n" + "=" * 90)
-print("RELATORIO DE COMPARACAO DE DESEMPENHO: SKLEARN (GBDT) vs PYRULEANALYZER")
-print("=" * 90)
-print(f"Extensao C disponivel: {HAS_C_EXTENSION}")
+print("\n" + "=" * 100)
+print("PERFORMANCE COMPARISON REPORT: SKLEARN (GBDT) vs PYRULEANALYZER")
+print("=" * 100)
+backend = "C" if HAS_C_EXTENSION else "NumPy"
+print(f"C extension available: {HAS_C_EXTENSION}")
 
-# A. Carregamento do Sklearn Original
+# A. Load original Sklearn model
 with open('examples/files/sklearn_model.pkl', 'rb') as f:
     sk_orig = pickle.load(f)
 
-# --- FUNCOES AUXILIARES ---
+# --- HELPER FUNCTIONS ---
 
 def safe_speed(n, t):
-    """Evita divisao por zero no calculo de velocidade."""
+    """Avoid division by zero in speed calculation."""
     if t <= 0:
         return "Inf"
     return f"{n / t:.0f}"
 
 
-# --- Contagem de regras/folhas ---
+# --- Leaf/rule count ---
 if hasattr(sk_orig, 'estimators_'):
     n_estimators, n_cols = sk_orig.estimators_.shape
     leaves_sklearn = sum(
@@ -125,20 +126,21 @@ else:
 rules_initial = len(classifier.initial_rules)
 rules_refined = len(classifier.final_rules) if classifier.final_rules else rules_initial
 
-# --- RELATORIO DE ESTRUTURA ---
-print(f"\n{'ESTRUTURA':<35} | {'FOLHAS/REGRAS':<15}")
-print("-" * 55)
-print(f"{'Sklearn Original (Total)':<35} | {leaves_sklearn:<15}")
-print(f"{'pyRuleAnalyzer Inicial':<35} | {rules_initial:<15}")
-print(f"{'pyRuleAnalyzer Refinado':<35} | {rules_refined:<15}")
+# --- STRUCTURE REPORT ---
+COL1 = 45
+print(f"\n{'STRUCTURE':<{COL1}} | {'LEAVES/RULES':<15}")
+print("-" * 65)
+print(f"{'Sklearn (original leaves, total)':<{COL1}} | {leaves_sklearn:<15}")
+print(f"{'pyRuleAnalyzer Rules (before optimization)':<{COL1}} | {rules_initial:<15}")
+print(f"{'pyRuleAnalyzer Rules (after optimization)':<{COL1}} | {rules_refined:<15}")
 
-print("\n" + "-" * 90)
+print("\n" + "-" * 100)
 print(
-    f"{'MOTOR DE INFERENCIA':<35} | {'ACURACIA':<15} | {'TEMPO (s)':<12} | {'SAMPLES/s':<12}"
+    f"{'INFERENCE ENGINE':<{COL1}} | {'ACCURACY':<15} | {'TIME (s)':<12} | {'SAMPLES/s':<12}"
 )
-print("-" * 90)
+print("-" * 100)
 
-# 1. Sklearn Original (Vetorizado em C)
+# 1. Sklearn (Cython)
 start = time.time()
 y_orig_raw = sk_orig.predict(X_test_df)
 t_orig = time.time() - start
@@ -146,21 +148,21 @@ y_orig = np.array([int(p) for p in y_orig_raw])
 y_test_int = np.array([int(y) for y in y_test])
 acc_orig = np.mean(y_orig == y_test_int)
 print(
-    f"{'1. Sklearn Original':<35} | {acc_orig:<15.5f} | {t_orig:<12.4f} | {safe_speed(len(y_test), t_orig)}"
+    f"{'1. Sklearn (Cython)':<{COL1}} | {acc_orig:<15.5f} | {t_orig:<12.4f} | {safe_speed(len(y_test), t_orig)}"
 )
 
-# 2. predict_batch (Vetorizado com extensao C)
+# 2. pyRuleAnalyzer Vectorized
+label_batch = f"2. pyRuleAnalyzer Vectorized ({backend})"
 start = time.time()
 y_batch = classifier.predict_batch(X_test, feature_names=feature_names)
 t_batch = time.time() - start
 acc_batch = np.mean(y_batch == y_test_int)
-backend = "C ext" if HAS_C_EXTENSION else "numpy"
 print(
-    f"{'2. predict_batch (' + backend + ')':<35} | {acc_batch:<15.5f} | {t_batch:<12.4f} | {safe_speed(len(y_test), t_batch)}"
+    f"{label_batch:<{COL1}} | {acc_batch:<15.5f} | {t_batch:<12.4f} | {safe_speed(len(y_test), t_batch)}"
 )
 
-# 3. pyRuleAnalyzer (Modelo Inicial - usando classify_gbdt)
-print("   Classificando com modelo inicial...")
+# 3. pyRuleAnalyzer Rules (Initial)
+print("   Classifying with initial model...")
 start = time.time()
 y_initial = []
 for sample in sample_dicts:
@@ -180,12 +182,12 @@ t_initial = time.time() - start
 y_initial = np.array(y_initial)
 acc_initial = np.mean(y_initial == y_test_int)
 print(
-    f"{'3. classify_gbdt (Inicial)':<35} | {acc_initial:<15.5f} | {t_initial:<12.4f} | {safe_speed(len(y_test), t_initial)}"
+    f"{'3. pyRuleAnalyzer Rules (Initial)':<{COL1}} | {acc_initial:<15.5f} | {t_initial:<12.4f} | {safe_speed(len(y_test), t_initial)}"
 )
 
-# 4. pyRuleAnalyzer (Modelo Refinado - usando native_fn ou classify_gbdt)
+# 4. pyRuleAnalyzer Rules (Refined)
 if classifier.final_rules:
-    print("   Classificando com modelo refinado...")
+    print("   Classifying with refined model...")
     start = time.time()
     y_refined = []
     use_native = classifier.native_fn is not None
@@ -217,10 +219,10 @@ if classifier.final_rules:
     y_refined = np.array(y_refined)
     acc_refined = np.mean(y_refined == y_test_int)
     print(
-        f"{'4. classify_gbdt (Refinado)':<35} | {acc_refined:<15.5f} | {t_refined:<12.4f} | {safe_speed(len(y_test), t_refined)}"
+        f"{'4. pyRuleAnalyzer Rules (Refined)':<{COL1}} | {acc_refined:<15.5f} | {t_refined:<12.4f} | {safe_speed(len(y_test), t_refined)}"
     )
 
-# 5. Python Standalone (Arquivo exportado)
+# 5. pyRuleAnalyzer Exported (.py)
 if option_standalone and gbdt_classifier is not None:
     start = time.time()
     y_standalone = []
@@ -236,44 +238,44 @@ if option_standalone and gbdt_classifier is not None:
     y_standalone = np.array(y_standalone)
     acc_standalone = np.mean(y_standalone == y_test_int)
     print(
-        f"{'5. Python Standalone (.py)':<35} | {acc_standalone:<15.5f} | {t_standalone:<12.4f} | {safe_speed(len(y_test), t_standalone)}"
+        f"{'5. pyRuleAnalyzer Exported (.py)':<{COL1}} | {acc_standalone:<15.5f} | {t_standalone:<12.4f} | {safe_speed(len(y_test), t_standalone)}"
     )
 
-print("=" * 90)
+print("=" * 100)
 
-# --- SPEEDUP RELATIVO ---
-print(f"\n{'SPEEDUP RELATIVO AO SKLEARN'}")
-print("-" * 55)
+# --- RELATIVE SPEEDUP ---
+print("\nSPEEDUP RELATIVE TO SKLEARN")
+print("-" * 60)
 if t_orig > 0:
-    print(f"  predict_batch ({backend}):     {t_orig/max(t_batch, 1e-9):.2f}x {'mais rapido' if t_batch < t_orig else 'mais lento'}")
-    print(f"  classify_gbdt (Inicial):    {t_orig/max(t_initial, 1e-9):.2f}x {'mais rapido' if t_initial < t_orig else 'mais lento'}")
+    print(f"  pyRuleAnalyzer Vectorized ({backend}):  {t_orig/max(t_batch, 1e-9):.2f}x {'faster' if t_batch < t_orig else 'slower'}")
+    print(f"  pyRuleAnalyzer Rules (Initial):    {t_orig/max(t_initial, 1e-9):.2f}x {'faster' if t_initial < t_orig else 'slower'}")
     if classifier.final_rules:
-        print(f"  classify_gbdt (Refinado):   {t_orig/max(t_refined, 1e-9):.2f}x {'mais rapido' if t_refined < t_orig else 'mais lento'}")
+        print(f"  pyRuleAnalyzer Rules (Refined):   {t_orig/max(t_refined, 1e-9):.2f}x {'faster' if t_refined < t_orig else 'slower'}")
     if option_standalone:
-        print(f"  Python Standalone:          {t_orig/max(t_standalone, 1e-9):.2f}x {'mais rapido' if t_standalone < t_orig else 'mais lento'}")
+        print(f"  pyRuleAnalyzer Exported (.py):     {t_orig/max(t_standalone, 1e-9):.2f}x {'faster' if t_standalone < t_orig else 'slower'}")
 
-# --- ANALISE DE DIVERGENCIAS ---
-print(f"\n{'ANALISE DE DIVERGENCIAS'}")
-print("-" * 55)
+# --- DIVERGENCE ANALYSIS ---
+print("\nDIVERGENCE ANALYSIS")
+print("-" * 60)
 
 divergent_initial = int(np.sum(y_orig != y_initial))
-print(f"Sklearn vs Inicial:    {divergent_initial}/{len(y_test)} ({divergent_initial / len(y_test) * 100:.2f}%)")
+print(f"Sklearn vs Rules (Initial):     {divergent_initial}/{len(y_test)} ({divergent_initial / len(y_test) * 100:.2f}%)")
 
 divergent_batch = int(np.sum(y_orig != y_batch))
-print(f"Sklearn vs Batch:      {divergent_batch}/{len(y_test)} ({divergent_batch / len(y_test) * 100:.2f}%)")
+print(f"Sklearn vs Vectorized:          {divergent_batch}/{len(y_test)} ({divergent_batch / len(y_test) * 100:.2f}%)")
 
 if classifier.final_rules:
     divergent_refined = int(np.sum(y_orig != y_refined))
     divergent_init_ref = int(np.sum(y_initial != y_refined))
-    print(f"Sklearn vs Refinado:   {divergent_refined}/{len(y_test)} ({divergent_refined / len(y_test) * 100:.2f}%)")
-    print(f"Inicial vs Refinado:   {divergent_init_ref}/{len(y_test)} ({divergent_init_ref / len(y_test) * 100:.2f}%)")
+    print(f"Sklearn vs Rules (Refined):     {divergent_refined}/{len(y_test)} ({divergent_refined / len(y_test) * 100:.2f}%)")
+    print(f"Rules Initial vs Refined:       {divergent_init_ref}/{len(y_test)} ({divergent_init_ref / len(y_test) * 100:.2f}%)")
 
 if option_standalone and gbdt_classifier is not None:
     divergent_standalone = int(np.sum(y_orig != y_standalone))
-    print(f"Sklearn vs Standalone: {divergent_standalone}/{len(y_test)} ({divergent_standalone / len(y_test) * 100:.2f}%)")
+    print(f"Sklearn vs Exported (.py):      {divergent_standalone}/{len(y_test)} ({divergent_standalone / len(y_test) * 100:.2f}%)")
 
-# --- COMPARATIVO DE TAMANHO (DISCO) ---
-print(f"\n{'COMPARATIVO DE TAMANHO (DISCO)'}")
+# --- FILE SIZE COMPARISON (DISK) ---
+print("\nFILE SIZE COMPARISON (DISK)")
 
 export_bin = "examples/files/gbdt_model.bin"
 classifier.export_to_binary(export_bin)
@@ -282,11 +284,11 @@ export_h = "examples/files/gbdt_model.h"
 classifier.export_to_c_header(export_h)
 
 files = {
-    "Sklearn Original (.pkl)": "examples/files/sklearn_model.pkl",
-    "predict_batch (.bin)": export_bin,
-    "Python Standalone (.py)": export_file,
-    "C Header (.h)": export_h,
-    "pyRuleAnalyzer (.pkl)": "examples/files/initial_model.pkl",
+    "Sklearn Original (.pkl)":              "examples/files/sklearn_model.pkl",
+    "Binary (.bin) [Vectorized]":           export_bin,
+    "Exported (.py) [Exported]":            export_file,
+    "C Header (.h) [Embedded]":             export_h,
+    "pyRuleAnalyzer Full (.pkl)":           "examples/files/initial_model.pkl",
 }
 
 orig_size = (
@@ -295,8 +297,8 @@ orig_size = (
     else 0
 )
 
-print(f"{'ARQUIVO':<35} | {'TAMANHO (KB)':>12} | {'% do Original':>14}")
-print("-" * 70)
+print(f"{'FILE':<{COL1}} | {'SIZE (KB)':>12} | {'% of Original':>14}")
+print("-" * 78)
 
 for label, path in files.items():
     if os.path.exists(path):
@@ -308,6 +310,38 @@ for label, path in files.items():
         else:
             pct = "N/A"
 
-        print(f"{label:<35} | {size_kb:>12.2f} KB | {pct:>14}")
+        print(f"{label:<{COL1}} | {size_kb:>12.2f} KB | {pct:>14}")
     else:
-        print(f"{label:<35} | {'NOT FOUND':>12} | {'N/A':>14}")
+        print(f"{label:<{COL1}} | {'NOT FOUND':>12} | {'N/A':>14}")
+
+# --- STRUCTURAL COMPLEXITY METRICS (SCS) ---
+print(f"\n{'=' * 100}")
+print("STRUCTURAL COMPLEXITY METRICS (SCS)")
+print(f"{'=' * 100}")
+
+n_features = len(feature_names)
+metrics_init = RuleClassifier.calculate_structural_complexity(classifier.initial_rules, n_features)
+metrics_final = RuleClassifier.calculate_structural_complexity(classifier.final_rules, n_features)
+
+COL_M = 38
+COL_V = 14
+print(f"{'METRIC':<{COL_M}} | {'INITIAL':>{COL_V}} | {'FINAL':>{COL_V}} | {'CHANGE':>{COL_V}}")
+print(f"{'-' * 88}")
+
+for k in metrics_init:
+    v_init = metrics_init[k]
+    v_final = metrics_final.get(k, 0)
+    if isinstance(v_init, float):
+        s_init = f"{v_init:.4f}"
+        s_final = f"{v_final:.4f}"
+    else:
+        s_init = str(v_init)
+        s_final = str(v_final)
+    if isinstance(v_init, (int, float)) and v_init != 0:
+        pct = ((v_final - v_init) / v_init) * 100
+        s_pct = f"{pct:+.1f}%"
+    else:
+        s_pct = "N/A"
+    print(f"  {k:<{COL_M}} | {s_init:>{COL_V}} | {s_final:>{COL_V}} | {s_pct:>{COL_V}}")
+
+print(f"{'=' * 100}")

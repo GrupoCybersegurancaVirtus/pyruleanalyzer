@@ -1,6 +1,9 @@
 import os
 import re
+import sys
+import time
 import pickle
+import struct
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
@@ -2395,6 +2398,13 @@ class RuleClassifier:
         a single rule), the deeper removals and promotions happen first,
         potentially creating the sibling that the shallower removal needs.
 
+        **Performance**: Uses a hash-based sibling index for O(1) lookups
+        instead of O(n) linear scans. The index is keyed by
+        (prefix, variable, complementary_operator, threshold) so that
+        looking up a rule's sibling is a direct dictionary access. When a
+        sibling is promoted (its conditions change), the index is updated
+        incrementally to reflect the new state.
+
         Example:
             Given tree:
                           [x <= 5]
@@ -2420,6 +2430,23 @@ class RuleClassifier:
         Returns:
             List[Rule]: The adjusted rule set after promotions.
         """
+        complement = {'<=': '>', '>': '<=', '<': '>=', '>=': '<'}
+
+        def _make_key(r):
+            """Build index key from a rule: (prefix, var, op, threshold_rounded)."""
+            if not r.parsed_conditions:
+                return None
+            prefix = tuple(r.parsed_conditions[:-1])
+            var, op, val = r.parsed_conditions[-1]
+            return (prefix, var, op, round(val, 9))
+
+        # --- Build sibling index: key -> list of rules with that key ---
+        sibling_index: dict = {}
+        for r in all_rules:
+            key = _make_key(r)
+            if key is not None:
+                sibling_index.setdefault(key, []).append(r)
+
         # Work on a mutable copy
         working_rules = list(all_rules)
         promoted_count = 0
@@ -2432,19 +2459,63 @@ class RuleClassifier:
         )
 
         # Track which rules have been removed by identity
-        removed_ids = set()
+        removed_ids: set = set()
 
-        for rule in sorted_to_remove:
+        total = len(sorted_to_remove)
+        bar_len = 40
+        start_time = time.time()
+
+        for idx, rule in enumerate(sorted_to_remove):
+            # -- Progress bar --
+            if total > 0 and (idx % max(1, total // 200) == 0 or idx == total - 1):
+                percent = (idx + 1) / total
+                elapsed = time.time() - start_time
+                if percent > 0 and elapsed > 0.5:
+                    eta = elapsed / percent * (1 - percent)
+                    mins, secs = divmod(int(eta), 60)
+                    rem_str = f'{mins:02d}:{secs:02d}'
+                else:
+                    rem_str = '--:--'
+                filled = int(bar_len * percent)
+                bar = '=' * filled + '-' * (bar_len - filled)
+                sys.stdout.write(f'\r  Promoting siblings [{bar}] {percent:.1%} | ETA: {rem_str}')
+                sys.stdout.flush()
+
             if id(rule) in removed_ids:
                 continue
 
-            # Find the sibling of the rule being removed
-            sibling = self._find_sibling(rule, working_rules)
+            # --- O(1) sibling lookup via index ---
+            sibling = None
+            if rule.parsed_conditions:
+                prefix = tuple(rule.parsed_conditions[:-1])
+                last_var, last_op, last_val = rule.parsed_conditions[-1]
+                expected_op = complement.get(last_op)
+                if expected_op is not None:
+                    # The sibling has the complementary operator
+                    sib_key = (prefix, last_var, expected_op, round(last_val, 9))
+                    candidates = sibling_index.get(sib_key, [])
+                    for c in candidates:
+                        if c is not rule and id(c) not in removed_ids:
+                            sibling = c
+                            break
 
-            if sibling is not None and id(sibling) not in removed_ids:
+            if sibling is not None:
+                # Remove sibling's old key from the index before mutation
+                old_sib_key = _make_key(sibling)
+                if old_sib_key is not None and old_sib_key in sibling_index:
+                    lst = sibling_index[old_sib_key]
+                    sibling_index[old_sib_key] = [r for r in lst if r is not sibling]
+                    if not sibling_index[old_sib_key]:
+                        del sibling_index[old_sib_key]
+
                 # Promote the sibling: remove its last condition
                 sibling.conditions = sibling.conditions[:-1]
                 sibling.parsed_conditions = sibling.parsed_conditions[:-1]
+
+                # Re-insert sibling with its new key
+                new_sib_key = _make_key(sibling)
+                if new_sib_key is not None:
+                    sibling_index.setdefault(new_sib_key, []).append(sibling)
 
                 # Combine class_distribution: the promoted sibling now covers
                 # the region of the removed rule as well, so add their counts
@@ -2466,9 +2537,22 @@ class RuleClassifier:
             # Samples that would have matched it will fall through to
             # default_class (existing fallback behavior).
 
-            # Remove the rule from working set
+            # Remove the rule's key from the index
+            rule_key = _make_key(rule)
+            if rule_key is not None and rule_key in sibling_index:
+                lst = sibling_index[rule_key]
+                sibling_index[rule_key] = [r for r in lst if r is not rule]
+                if not sibling_index[rule_key]:
+                    del sibling_index[rule_key]
+
+            # Mark removed (deferred filtering at the end)
             removed_ids.add(id(rule))
-            working_rules = [r for r in working_rules if id(r) != id(rule)]
+
+        if total > 0:
+            print()  # Newline after progress bar
+
+        # Single-pass filtering instead of per-iteration list rebuild
+        working_rules = [r for r in working_rules if id(r) not in removed_ids]
 
         if promoted_count > 0:
             print(f"Promoted {promoted_count} sibling rule(s) after specific rule removal.")
