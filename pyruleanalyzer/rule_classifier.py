@@ -1,9 +1,10 @@
 import os
+import re
 import pickle
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder
@@ -134,6 +135,14 @@ class RuleClassifier:
         if algorithm_type != 'Gradient Boosting Decision Trees':
             self.update_native_model(self.initial_rules)
 
+        # --- ARRAY-BASED VECTORIZED PREDICTION ---
+        # Initialize array attributes (compiled lazily or by explicit call)
+        self._tree_arrays: list = []
+        self._tree_class_groups: Optional[list] = None
+        self._tree_is_init: Optional[list] = None
+        self._array_feature_names: list = []
+        self._arrays_compiled: bool = False
+
     # Methods to support pickling and unpickling of the RuleClassifier
     def __getstate__(self):
         """Returns the state of the RuleClassifier for pickling.
@@ -162,6 +171,14 @@ class RuleClassifier:
         """
         self.__dict__.update(state)
         self.native_fn = None
+        
+        # Ensure array attributes exist (backward compat with old pickles)
+        if not hasattr(self, '_arrays_compiled'):
+            self._tree_arrays = []
+            self._tree_class_groups = None
+            self._tree_is_init = None
+            self._array_feature_names = []
+            self._arrays_compiled = False
         
         # Auto-recompile the native model upon loading
         rules_to_compile = self.final_rules if self.final_rules else self.initial_rules
@@ -650,9 +667,22 @@ class RuleClassifier:
                 - List of votes (Random Forest only).
                 - Class probabilities (Random Forest only).
         """
-        # --- FAST PATH: Native Execution ---
-        # If we are using initial rules and the native function exists, use it.
-        # This bypasses the slow iteration over Rule objects.
+        # --- FAST PATH 1: Array-based single-sample prediction ---
+        # Works for BOTH initial and final rules (arrays are compiled for whichever
+        # rule set is current). This fixes the final=True bypass bug.
+        if self._arrays_compiled:
+            try:
+                row = np.array(
+                    [[data.get(f, 0.0) for f in self._array_feature_names]],
+                    dtype=np.float64,
+                )
+                pred = self.predict_batch(row)[0]
+                clean_class = int(pred)
+                return clean_class, None, None
+            except Exception:
+                pass  # Fallback to slower paths
+
+        # --- FAST PATH 2: Native function (exec-compiled, initial rules only) ---
         if not final and self.native_fn is not None:
             try:
                 # native_fn returns (prediction, votes, proba)
@@ -968,6 +998,1010 @@ class RuleClassifier:
                 predicted_class = best_class
 
         return predicted_class, matched_rules, None
+
+    # =========================================================================
+    # ARRAY-BASED VECTORIZED PREDICTION (High-Performance Path)
+    # =========================================================================
+    #
+    # The methods below convert rules into flat numpy arrays (mirroring sklearn's
+    # internal tree representation) and use vectorized numpy operations for
+    # batch prediction.  This eliminates:
+    #   - Linear scans over Rule objects
+    #   - Per-sample Python dict lookups
+    #   - Per-call tree grouping with string splitting
+    #   - Pure-Python voting loops
+    #
+    # Array layout per tree (parallel arrays, one element per node):
+    #   feature_idx[i]    int32   feature column index (-2 = leaf)
+    #   threshold[i]      float64 split threshold
+    #   children_left[i]  int32   left child node index (-1 = none)
+    #   children_right[i] int32   right child node index (-1 = none)
+    #   value[i]          varies  leaf payload:
+    #       DT:   int32   class label
+    #       RF:   float64 array of shape (n_classes,) — raw sample counts
+    #       GBDT: float64 contribution (learning_rate * leaf_value)
+    # =========================================================================
+
+    @staticmethod
+    def _build_single_tree_arrays(
+        rules: list,
+        feature_name_to_idx: Dict[str, int],
+        algorithm_type: str,
+        n_classes: int = 0,
+    ) -> dict:
+        """
+        Convert a list of rules (all from one tree) into flat numpy arrays.
+
+        Args:
+            rules (List[Rule]): Rules for a single tree.
+            feature_name_to_idx (Dict[str, int]): Mapping feature_name -> column index.
+            algorithm_type (str): 'Decision Tree', 'Random Forest', or
+                'Gradient Boosting Decision Trees'.
+            n_classes (int): Number of classes (needed for RF leaf distributions).
+
+        Returns:
+            Dict with keys: 'feature_idx', 'threshold', 'children_left',
+            'children_right', 'value'.  Each is a numpy array indexed by node id.
+        """
+        # 1. Reconstruct tree structure
+        tree_dict: Dict[int, dict] = {
+            0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
+        }
+        next_id = 1
+
+        for rule in rules:
+            curr = 0
+            for var, op, val in rule.parsed_conditions:
+                if tree_dict[curr]['f'] == -2:
+                    tree_dict[curr].update({
+                        'f': var, 't': val,
+                        'l': next_id, 'r': next_id + 1,
+                    })
+                    tree_dict[next_id] = {
+                        'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None,
+                    }
+                    tree_dict[next_id + 1] = {
+                        'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None,
+                    }
+                    next_id += 2
+                if op in ('<=', '<'):
+                    curr = tree_dict[curr]['l']
+                else:
+                    curr = tree_dict[curr]['r']
+
+            # Set leaf value based on algorithm type
+            if algorithm_type == 'Gradient Boosting Decision Trees':
+                tree_dict[curr]['v'] = float(rule.contribution) if rule.contribution is not None else 0.0
+            elif algorithm_type == 'Random Forest':
+                if rule.class_distribution is not None:
+                    tree_dict[curr]['v'] = list(rule.class_distribution)
+                else:
+                    # Fallback: one-hot encode the class label
+                    try:
+                        cls_idx = int(str(rule.class_).replace('Class', '').strip())
+                    except (ValueError, AttributeError):
+                        cls_idx = 0
+                    one_hot = [0.0] * max(n_classes, cls_idx + 1)
+                    one_hot[cls_idx] = 1.0
+                    tree_dict[curr]['v'] = one_hot
+            else:
+                # Decision Tree — store class label as int
+                # Use class_distribution (argmax) when available, otherwise
+                # extract trailing digits from the class label string.
+                if hasattr(rule, 'class_distribution') and rule.class_distribution is not None:
+                    dist = rule.class_distribution
+                    tree_dict[curr]['v'] = int(np.argmax(dist))
+                else:
+                    cls_str = str(rule.class_)
+                    m = re.search(r'(\d+)$', cls_str)
+                    if m:
+                        tree_dict[curr]['v'] = int(m.group(1))
+                    else:
+                        tree_dict[curr]['v'] = 0
+
+        # 2. Convert to flat numpy arrays
+        n_nodes = len(tree_dict)
+        feature_idx = np.full(n_nodes, -2, dtype=np.int32)
+        threshold = np.zeros(n_nodes, dtype=np.float64)
+        children_left = np.full(n_nodes, -1, dtype=np.int32)
+        children_right = np.full(n_nodes, -1, dtype=np.int32)
+
+        if algorithm_type == 'Random Forest':
+            value = np.zeros((n_nodes, n_classes), dtype=np.float64)
+        elif algorithm_type == 'Gradient Boosting Decision Trees':
+            value = np.zeros(n_nodes, dtype=np.float64)
+        else:
+            value = np.full(n_nodes, -1, dtype=np.int32)
+
+        for node_id, node in tree_dict.items():
+            feat = node['f']
+            if feat == -2:
+                # Leaf node — self-referencing children so traversal
+                # samples that reached a leaf simply stay in place.
+                # We also set feature_idx to 0 (any valid column) so that
+                # the gather X[samples, feature_idx[node_ids]] always reads
+                # a valid column.  The threshold is set to -inf so the
+                # comparison (feat_val <= threshold) is always False, making
+                # the traversal pick children_right which points back here.
+                feature_idx[node_id] = 0  # valid column (not -2)
+                threshold[node_id] = -np.inf
+                children_left[node_id] = node_id   # self-loop
+                children_right[node_id] = node_id   # self-loop
+                if algorithm_type == 'Random Forest':
+                    v = node['v']
+                    if v is not None:
+                        for ci in range(min(len(v), n_classes)):
+                            value[node_id, ci] = v[ci]
+                elif algorithm_type == 'Gradient Boosting Decision Trees':
+                    value[node_id] = float(node['v']) if node['v'] is not None else 0.0
+                else:
+                    value[node_id] = int(node['v']) if node['v'] is not None else -1
+            else:
+                feature_idx[node_id] = feature_name_to_idx.get(feat, -2)
+                threshold[node_id] = float(node['t'])
+                children_left[node_id] = node['l']
+                children_right[node_id] = node['r']
+
+        # Compute tree depth by BFS from root
+        max_depth = 0
+        stack = [(0, 0)]  # (node_id, depth)
+        while stack:
+            nid, d = stack.pop()
+            if nid < 0 or nid >= n_nodes:
+                continue
+            node = tree_dict.get(nid)
+            if node is None:
+                continue
+            if node['f'] == -2:
+                # Leaf
+                if d > max_depth:
+                    max_depth = d
+            else:
+                stack.append((node['l'], d + 1))
+                stack.append((node['r'], d + 1))
+
+        return {
+            'feature_idx': feature_idx,
+            'threshold': threshold,
+            'children_left': children_left,
+            'children_right': children_right,
+            'value': value,
+            'max_depth': max_depth,
+        }
+
+    def compile_tree_arrays(self, rules: Optional[list] = None, feature_names: Optional[list] = None) -> None:
+        """
+        Compile rules into numpy tree arrays for vectorized prediction.
+
+        After calling this method, `predict_batch(X)` becomes available.
+        This is called automatically by `update_native_model` but can also be
+        called explicitly after rule removal to refresh the arrays.
+
+        Args:
+            rules (List[Rule], optional): Rules to compile. Defaults to
+                final_rules if available, else initial_rules.
+            feature_names (List[str], optional): Ordered feature names matching
+                the columns of X that will be passed to predict_batch.
+                If None, they are inferred from the rules.
+        """
+        if rules is None:
+            rules = self.final_rules if self.final_rules else self.initial_rules
+
+        # --- Infer feature names from rules if not provided ---
+        if feature_names is None:
+            feat_set: set = set()
+            for rule in rules:
+                for var, _, _ in rule.parsed_conditions:
+                    feat_set.add(var)
+            feature_names = sorted(feat_set)
+
+        self._array_feature_names = list(feature_names)
+        feature_name_to_idx = {name: i for i, name in enumerate(feature_names)}
+
+        n_classes = self.num_classes
+
+        # --- Group rules by tree ---
+        if self.algorithm_type == 'Decision Tree':
+            # Single tree — all rules belong to the same tree
+            tree_arrays = [
+                self._build_single_tree_arrays(
+                    rules, feature_name_to_idx, self.algorithm_type, n_classes
+                )
+            ]
+            self._tree_arrays = tree_arrays
+            self._tree_class_groups = None
+            self._tree_is_init = None
+
+        elif self.algorithm_type == 'Random Forest':
+            tree_rules_map: Dict[str, list] = defaultdict(list)
+            for rule in rules:
+                tid = rule.name.split('_')[0] if '_' in rule.name else 'Tree0'
+                tree_rules_map[tid].append(rule)
+
+            tree_arrays = []
+            for tid in sorted(tree_rules_map.keys()):
+                arr = self._build_single_tree_arrays(
+                    tree_rules_map[tid], feature_name_to_idx,
+                    self.algorithm_type, n_classes,
+                )
+                tree_arrays.append(arr)
+            self._tree_arrays = tree_arrays
+            self._tree_class_groups = None
+            self._tree_is_init = None
+
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            tree_rules_map = defaultdict(list)
+            for rule in rules:
+                tid = rule.name.split('_')[0] if '_' in rule.name else rule.name
+                tree_rules_map[tid].append(rule)
+
+            tree_arrays = []
+            class_groups = []
+            is_init = []
+
+            for tid in sorted(tree_rules_map.keys()):
+                trules = tree_rules_map[tid]
+                if not trules:
+                    continue
+                # Check if this is an init rule (single rule, no conditions)
+                if (len(trules) == 1 and not trules[0].parsed_conditions
+                        and trules[0].contribution is not None):
+                    is_init.append(True)
+                    class_groups.append(trules[0].class_group)
+                    # Store init score directly — no tree structure needed
+                    tree_arrays.append({
+                        'init_score': float(trules[0].contribution),
+                    })
+                else:
+                    is_init.append(False)
+                    class_groups.append(trules[0].class_group)
+                    arr = self._build_single_tree_arrays(
+                        trules, feature_name_to_idx,
+                        self.algorithm_type, n_classes,
+                    )
+                    tree_arrays.append(arr)
+
+            self._tree_arrays = tree_arrays
+            self._tree_class_groups = class_groups
+            self._tree_is_init = is_init
+
+        self._arrays_compiled = True
+
+    @staticmethod
+    def _traverse_tree_batch(
+        X: np.ndarray,
+        feature_idx: np.ndarray,
+        threshold: np.ndarray,
+        children_left: np.ndarray,
+        children_right: np.ndarray,
+        max_depth: int = 50,
+    ) -> np.ndarray:
+        """
+        Traverse a single tree for all samples simultaneously using numpy indexing.
+
+        This is the core vectorized operation:  O(depth) steps, each step processes
+        ALL N samples in parallel via numpy fancy indexing -- no masking, no branching.
+
+        Leaf nodes are set up as self-loops (children point to themselves) with
+        threshold = -inf, so samples that have already reached a leaf simply stay
+        in place each iteration.
+
+        Args:
+            X (np.ndarray): Input data, shape (n_samples, n_features).
+            feature_idx (np.ndarray): Per-node feature index, shape (n_nodes,).
+                Leaf nodes have a valid column index (not -2) since we read
+                from X unconditionally.
+            threshold (np.ndarray): Per-node threshold, shape (n_nodes,).
+                Leaf nodes have -inf so (val <= -inf) is always False.
+            children_left (np.ndarray): Per-node left child, shape (n_nodes,).
+                Leaf nodes point to themselves.
+            children_right (np.ndarray): Per-node right child, shape (n_nodes,).
+                Leaf nodes point to themselves.
+            max_depth (int): Maximum depth of the tree. The traversal loop runs
+                exactly max_depth iterations.
+
+        Returns:
+            np.ndarray: Array of leaf node indices, shape (n_samples,).
+        """
+        n_samples = X.shape[0]
+        node_ids = np.zeros(n_samples, dtype=np.int32)  # Start at root (node 0)
+        sample_idx = np.arange(n_samples)  # Precompute once
+
+        for _ in range(max_depth):
+            # Gather the split feature column and threshold for every sample
+            feat = feature_idx[node_ids]          # shape (n_samples,)
+
+            # Gather the feature value from X using fancy indexing
+            # For leaf nodes: feat is a valid column (0), thresh is -inf,
+            # so go_left is False, and children_right[leaf] = leaf (no-op).
+            go_left = X[sample_idx, feat] <= threshold[node_ids]
+
+            node_ids = np.where(go_left, children_left[node_ids],
+                                children_right[node_ids])
+
+        return node_ids
+
+    def predict_batch(
+        self,
+        X: np.ndarray,
+        feature_names: Optional[list] = None,
+        use_final: bool = True,
+    ) -> np.ndarray:
+        """
+        Vectorized batch prediction over a numpy array.
+
+        This is the high-performance prediction method.  It uses the pre-compiled
+        tree arrays (from compile_tree_arrays) and numpy vectorized traversal.
+
+        Args:
+            X (np.ndarray): Input data, shape (n_samples, n_features).
+                Columns must be ordered to match the feature_names used during
+                compile_tree_arrays (or the feature_names argument here).
+            feature_names (list, optional): Feature names corresponding to columns
+                of X.  If provided and different from compiled order, X columns
+                are reordered accordingly.
+            use_final (bool): If True, uses arrays compiled from final_rules.
+                If False, uses arrays compiled from initial_rules.
+
+        Returns:
+            np.ndarray: Predicted class labels, shape (n_samples,), dtype int.
+        """
+        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
+            raise RuntimeError(
+                'Tree arrays not compiled. Call compile_tree_arrays() first.'
+            )
+
+        # Reorder columns if feature_names differ from compiled order
+        if feature_names is not None and feature_names != self._array_feature_names:
+            col_order = [feature_names.index(f) for f in self._array_feature_names]
+            X = X[:, col_order]
+
+        n_samples = X.shape[0]
+
+        # --- Decision Tree ---
+        if self.algorithm_type == 'Decision Tree':
+            tree = self._tree_arrays[0]
+            leaf_ids = self._traverse_tree_batch(
+                X, tree['feature_idx'], tree['threshold'],
+                tree['children_left'], tree['children_right'],
+                tree['max_depth'],
+            )
+            predictions = tree['value'][leaf_ids]
+            return predictions
+
+        # --- Random Forest (Soft Voting) ---
+        elif self.algorithm_type == 'Random Forest':
+            n_classes = self.num_classes
+            # Accumulate probability contributions from each tree
+            prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
+            n_trees = len(self._tree_arrays)
+
+            for tree in self._tree_arrays:
+                leaf_ids = self._traverse_tree_batch(
+                    X, tree['feature_idx'], tree['threshold'],
+                    tree['children_left'], tree['children_right'],
+                    tree['max_depth'],
+                )
+                # Get raw counts at leaves
+                raw_counts = tree['value'][leaf_ids]  # shape (n_samples, n_classes)
+                # Normalize to probabilities per sample
+                totals = raw_counts.sum(axis=1, keepdims=True)
+                # Avoid division by zero
+                totals = np.where(totals == 0, 1.0, totals)
+                probas = raw_counts / totals
+                prob_sum += probas
+
+            # Average and argmax
+            avg_proba = prob_sum / n_trees
+            predictions = np.argmax(avg_proba, axis=1).astype(np.int32)
+            return predictions
+
+        # --- GBDT (Additive Scoring) ---
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            classes = self._gbdt_classes or []
+            is_binary = self._gbdt_is_binary
+
+            if is_binary and len(classes) >= 2:
+                # Binary: accumulate score for positive class
+                assert self._tree_class_groups is not None
+                assert self._tree_is_init is not None
+                pos_class = classes[1]
+                scores = np.zeros(n_samples, dtype=np.float64)
+
+                for i, tree in enumerate(self._tree_arrays):
+                    if self._tree_is_init[i]:
+                        # Init score — add constant
+                        if self._tree_class_groups[i] == pos_class:
+                            scores += tree['init_score']
+                        continue
+                    if self._tree_class_groups[i] != pos_class:
+                        continue
+                    leaf_ids = self._traverse_tree_batch(
+                        X, tree['feature_idx'], tree['threshold'],
+                        tree['children_left'], tree['children_right'],
+                        tree['max_depth'],
+                    )
+                    scores += tree['value'][leaf_ids]
+
+                # Sigmoid
+                prob = 1.0 / (1.0 + np.exp(-scores))
+                predictions = np.where(
+                    prob >= 0.5, int(classes[1]), int(classes[0])
+                ).astype(np.int32)
+                return predictions
+
+            else:
+                # Multiclass: accumulate scores per class
+                assert self._tree_class_groups is not None
+                assert self._tree_is_init is not None
+                class_to_col = {cl: idx for idx, cl in enumerate(classes)}
+                n_cls = len(classes)
+                scores = np.zeros((n_samples, n_cls), dtype=np.float64)
+
+                for i, tree in enumerate(self._tree_arrays):
+                    cg = self._tree_class_groups[i]
+                    col = class_to_col.get(cg)
+                    if col is None:
+                        continue
+                    if self._tree_is_init[i]:
+                        scores[:, col] += tree['init_score']
+                        continue
+                    leaf_ids = self._traverse_tree_batch(
+                        X, tree['feature_idx'], tree['threshold'],
+                        tree['children_left'], tree['children_right'],
+                        tree['max_depth'],
+                    )
+                    scores[:, col] += tree['value'][leaf_ids]
+
+                # Argmax → class label
+                best_col = np.argmax(scores, axis=1)
+                class_arr = np.array([int(cl) for cl in classes], dtype=np.int32)
+                predictions = class_arr[best_col]
+                return predictions
+
+        raise ValueError(f'Unsupported algorithm_type: {self.algorithm_type}')
+
+    def predict_batch_proba(
+        self,
+        X: np.ndarray,
+        feature_names: Optional[list] = None,
+    ) -> np.ndarray:
+        """
+        Vectorized batch probability prediction.
+
+        Args:
+            X (np.ndarray): Input data, shape (n_samples, n_features).
+            feature_names (list, optional): Feature names for column reordering.
+
+        Returns:
+            np.ndarray: Predicted probabilities, shape (n_samples, n_classes).
+                For DT, this is a one-hot array.
+                For RF, this is the averaged probability across trees.
+                For GBDT binary, shape (n_samples, 2) with sigmoid probabilities.
+                For GBDT multiclass, shape (n_samples, n_classes) with softmax probabilities.
+        """
+        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
+            raise RuntimeError(
+                'Tree arrays not compiled. Call compile_tree_arrays() first.'
+            )
+
+        if feature_names is not None and feature_names != self._array_feature_names:
+            col_order = [feature_names.index(f) for f in self._array_feature_names]
+            X = X[:, col_order]
+
+        n_samples = X.shape[0]
+
+        # --- Decision Tree ---
+        if self.algorithm_type == 'Decision Tree':
+            tree = self._tree_arrays[0]
+            leaf_ids = self._traverse_tree_batch(
+                X, tree['feature_idx'], tree['threshold'],
+                tree['children_left'], tree['children_right'],
+                tree['max_depth'],
+            )
+            preds = tree['value'][leaf_ids]
+            # One-hot encode
+            n_classes = self.num_classes
+            proba = np.zeros((n_samples, n_classes), dtype=np.float64)
+            for i in range(n_samples):
+                proba[i, int(preds[i])] = 1.0
+            return proba
+
+        # --- Random Forest ---
+        elif self.algorithm_type == 'Random Forest':
+            n_classes = self.num_classes
+            prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
+            n_trees = len(self._tree_arrays)
+            for tree in self._tree_arrays:
+                leaf_ids = self._traverse_tree_batch(
+                    X, tree['feature_idx'], tree['threshold'],
+                    tree['children_left'], tree['children_right'],
+                    tree['max_depth'],
+                )
+                raw_counts = tree['value'][leaf_ids]
+                totals = raw_counts.sum(axis=1, keepdims=True)
+                totals = np.where(totals == 0, 1.0, totals)
+                probas = raw_counts / totals
+                prob_sum += probas
+            return prob_sum / n_trees
+
+        # --- GBDT ---
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            classes = self._gbdt_classes or []
+            is_binary = self._gbdt_is_binary
+            assert self._tree_class_groups is not None
+            assert self._tree_is_init is not None
+            class_to_col = {cl: idx for idx, cl in enumerate(classes)}
+            n_cls = len(classes)
+            scores = np.zeros((n_samples, n_cls), dtype=np.float64)
+
+            for i, tree in enumerate(self._tree_arrays):
+                cg = self._tree_class_groups[i]
+                col = class_to_col.get(cg)
+                if col is None:
+                    continue
+                if self._tree_is_init[i]:
+                    scores[:, col] += tree['init_score']
+                    continue
+                leaf_ids = self._traverse_tree_batch(
+                    X, tree['feature_idx'], tree['threshold'],
+                    tree['children_left'], tree['children_right'],
+                    tree['max_depth'],
+                )
+                scores[:, col] += tree['value'][leaf_ids]
+
+            if is_binary and n_cls == 2:
+                # Sigmoid on positive class score
+                prob_pos = 1.0 / (1.0 + np.exp(-scores[:, 1]))
+                proba = np.column_stack([1.0 - prob_pos, prob_pos])
+                return proba
+            else:
+                # Softmax
+                exp_scores = np.exp(scores - scores.max(axis=1, keepdims=True))
+                proba = exp_scores / exp_scores.sum(axis=1, keepdims=True)
+                return proba
+
+        raise ValueError(f'Unsupported algorithm_type: {self.algorithm_type}')
+
+    # =========================================================================
+    # BINARY / C HEADER EXPORT
+    # =========================================================================
+
+    def export_to_binary(self, filepath: str = 'model.bin') -> None:
+        """
+        Export the compiled tree arrays to a compact binary file.
+
+        File format (all little-endian):
+            Header:
+                4 bytes  magic: b'PYRA'
+                1 byte   version: 1
+                1 byte   algorithm_type: 0=DT, 1=RF, 2=GBDT
+                2 bytes  n_features (uint16)
+                2 bytes  n_classes (uint16)
+                2 bytes  n_trees (uint16)
+                4 bytes  default_class (int32)
+            For GBDT additionally:
+                1 byte   is_binary (bool)
+                2 bytes  n_gbdt_classes (uint16)
+                For each gbdt_class:
+                    4 bytes  class_label (int32)
+                For each gbdt_class:
+                    8 bytes  init_score (float64)
+            Feature names:
+                For each feature:
+                    2 bytes  name_len (uint16)
+                    N bytes  name (utf-8)
+            For each tree:
+                4 bytes  n_nodes (int32)
+                For GBDT:
+                    1 byte   is_init (bool)
+                    4 bytes  class_group (int32, only if not init)
+                    If is_init:
+                        8 bytes  init_score (float64)
+                        continue to next tree
+                feature_idx:   n_nodes * 4 bytes (int32)
+                threshold:     n_nodes * 8 bytes (float64)
+                children_left: n_nodes * 4 bytes (int32)
+                children_right:n_nodes * 4 bytes (int32)
+                value:
+                    DT:   n_nodes * 4 bytes (int32)
+                    RF:   n_nodes * n_classes * 8 bytes (float64)
+                    GBDT: n_nodes * 8 bytes (float64)
+
+        Args:
+            filepath (str): Output file path.
+        """
+        import struct
+
+        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
+            raise RuntimeError(
+                'Tree arrays not compiled. Call compile_tree_arrays() first.'
+            )
+
+        algo_map = {'Decision Tree': 0, 'Random Forest': 1,
+                     'Gradient Boosting Decision Trees': 2}
+        algo_byte = algo_map[self.algorithm_type]
+
+        try:
+            default_cls = int(str(self.default_class).replace('Class', '').strip())
+        except (ValueError, AttributeError):
+            default_cls = 0
+
+        # Count real trees (skip GBDT init entries for tree count)
+        n_trees = len(self._tree_arrays)
+
+        with open(filepath, 'wb') as f:
+            # --- Header ---
+            f.write(b'PYRA')                                      # magic
+            f.write(struct.pack('<B', 1))                          # version
+            f.write(struct.pack('<B', algo_byte))                  # algorithm_type
+            f.write(struct.pack('<H', len(self._array_feature_names)))  # n_features
+            f.write(struct.pack('<H', self.num_classes))           # n_classes
+            f.write(struct.pack('<H', n_trees))                    # n_trees
+            f.write(struct.pack('<i', default_cls))                # default_class
+
+            # --- GBDT metadata ---
+            if self.algorithm_type == 'Gradient Boosting Decision Trees':
+                classes = self._gbdt_classes or []
+                f.write(struct.pack('<B', 1 if self._gbdt_is_binary else 0))
+                f.write(struct.pack('<H', len(classes)))
+                for cl in classes:
+                    f.write(struct.pack('<i', int(cl)))
+                init_scores = self._gbdt_init_scores or {}
+                for cl in classes:
+                    f.write(struct.pack('<d', init_scores.get(cl, 0.0)))
+
+            # --- Feature names ---
+            for name in self._array_feature_names:
+                encoded = name.encode('utf-8')
+                f.write(struct.pack('<H', len(encoded)))
+                f.write(encoded)
+
+            # --- Trees ---
+            tree_class_groups = self._tree_class_groups
+            for i, tree in enumerate(self._tree_arrays):
+                if 'init_score' in tree:
+                    # GBDT init entry
+                    f.write(struct.pack('<i', 0))       # n_nodes = 0 (sentinel)
+                    f.write(struct.pack('<B', 1))        # is_init = True
+                    f.write(struct.pack('<d', tree['init_score']))
+                    assert tree_class_groups is not None
+                    f.write(struct.pack('<i', int(tree_class_groups[i])))
+                    continue
+
+                n_nodes = len(tree['feature_idx'])
+                f.write(struct.pack('<i', n_nodes))
+
+                if self.algorithm_type == 'Gradient Boosting Decision Trees':
+                    f.write(struct.pack('<B', 0))        # is_init = False
+                    assert tree_class_groups is not None
+                    f.write(struct.pack('<i', int(tree_class_groups[i])))
+
+                f.write(tree['feature_idx'].tobytes())
+                f.write(tree['threshold'].tobytes())
+                f.write(tree['children_left'].tobytes())
+                f.write(tree['children_right'].tobytes())
+                f.write(tree['value'].tobytes())
+                f.write(struct.pack('<i', tree.get('max_depth', 50)))
+
+        print(f'[EXPORT] Binary model saved to {filepath} '
+              f'({os.path.getsize(filepath)} bytes)')
+
+    @classmethod
+    def load_binary(cls, filepath: str) -> 'RuleClassifier':
+        """
+        Load a RuleClassifier from a binary file created by export_to_binary().
+
+        The returned object supports predict_batch() but NOT rule-level
+        operations (no Rule objects are reconstructed).
+
+        Args:
+            filepath (str): Path to the .bin file.
+
+        Returns:
+            RuleClassifier: A classifier ready for predict_batch().
+        """
+        import struct
+
+        algo_names = {0: 'Decision Tree', 1: 'Random Forest',
+                      2: 'Gradient Boosting Decision Trees'}
+
+        with open(filepath, 'rb') as f:
+            magic = f.read(4)
+            if magic != b'PYRA':
+                raise ValueError(f'Invalid binary model file (magic={magic!r})')
+            version = struct.unpack('<B', f.read(1))[0]
+            if version != 1:
+                raise ValueError(f'Unsupported binary model version: {version}')
+            algo_byte = struct.unpack('<B', f.read(1))[0]
+            n_features = struct.unpack('<H', f.read(2))[0]
+            n_classes = struct.unpack('<H', f.read(2))[0]
+            n_trees = struct.unpack('<H', f.read(2))[0]
+            default_cls = struct.unpack('<i', f.read(4))[0]
+
+            algorithm_type = algo_names[algo_byte]
+
+            # GBDT metadata
+            gbdt_is_binary = False
+            gbdt_classes = []
+            gbdt_init_scores = {}
+            if algorithm_type == 'Gradient Boosting Decision Trees':
+                gbdt_is_binary = bool(struct.unpack('<B', f.read(1))[0])
+                n_gbdt_classes = struct.unpack('<H', f.read(2))[0]
+                for _ in range(n_gbdt_classes):
+                    gbdt_classes.append(struct.unpack('<i', f.read(4))[0])
+                for cl in gbdt_classes:
+                    gbdt_init_scores[cl] = struct.unpack('<d', f.read(8))[0]
+
+            # Feature names
+            feature_names = []
+            for _ in range(n_features):
+                name_len = struct.unpack('<H', f.read(2))[0]
+                feature_names.append(f.read(name_len).decode('utf-8'))
+
+            # Trees
+            tree_arrays = []
+            tree_class_groups = []
+            tree_is_init = []
+
+            for _ in range(n_trees):
+                n_nodes = struct.unpack('<i', f.read(4))[0]
+
+                if algorithm_type == 'Gradient Boosting Decision Trees':
+                    is_init = bool(struct.unpack('<B', f.read(1))[0])
+                    if is_init:
+                        init_score = struct.unpack('<d', f.read(8))[0]
+                        cg = struct.unpack('<i', f.read(4))[0]
+                        tree_arrays.append({'init_score': init_score})
+                        tree_class_groups.append(cg)
+                        tree_is_init.append(True)
+                        continue
+                    else:
+                        cg = struct.unpack('<i', f.read(4))[0]
+                        tree_class_groups.append(cg)
+                        tree_is_init.append(False)
+
+                feature_idx = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
+                threshold_arr = np.frombuffer(f.read(n_nodes * 8), dtype=np.float64).copy()
+                children_left = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
+                children_right = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
+
+                if algorithm_type == 'Decision Tree':
+                    value_arr = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
+                elif algorithm_type == 'Random Forest':
+                    value_arr = np.frombuffer(
+                        f.read(n_nodes * n_classes * 8), dtype=np.float64
+                    ).reshape(n_nodes, n_classes).copy()
+                else:  # GBDT
+                    value_arr = np.frombuffer(f.read(n_nodes * 8), dtype=np.float64).copy()
+
+                tree_arrays.append({
+                    'feature_idx': feature_idx,
+                    'threshold': threshold_arr,
+                    'children_left': children_left,
+                    'children_right': children_right,
+                    'value': value_arr,
+                    'max_depth': struct.unpack('<i', f.read(4))[0],
+                })
+
+        # Build a minimal RuleClassifier instance
+        # We use __new__ to bypass __init__ (no Rule objects needed)
+        obj = cls.__new__(cls)
+        obj.algorithm_type = algorithm_type
+        obj.num_classes = n_classes
+        obj.class_labels = list(range(n_classes))
+        obj.default_class = default_cls
+        obj.initial_rules = []
+        obj.final_rules = []
+        obj.duplicated_rules = []
+        obj.specific_rules = []
+        obj.native_fn = None
+        obj._gbdt_init_scores = gbdt_init_scores if gbdt_init_scores else None
+        obj._gbdt_is_binary = gbdt_is_binary
+        obj._gbdt_classes = gbdt_classes if gbdt_classes else None
+        obj._array_feature_names = feature_names
+        obj._tree_arrays = tree_arrays
+        obj._tree_class_groups = tree_class_groups if tree_class_groups else None
+        obj._tree_is_init = tree_is_init if tree_is_init else None
+        obj._arrays_compiled = True
+
+        return obj
+
+    def export_to_c_header(
+        self,
+        filepath: str = 'model.h',
+        guard_name: str = 'PYRULEANALYZER_MODEL_H',
+    ) -> None:
+        """
+        Export the compiled tree arrays as a standalone C header file.
+
+        The generated header contains const arrays suitable for Arduino /
+        embedded targets. It includes a ``predict(const float *features)``
+        function that traverses the trees and returns the predicted class.
+
+        Args:
+            filepath (str): Output file path.
+            guard_name (str): Include-guard macro name.
+        """
+        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
+            raise RuntimeError(
+                'Tree arrays not compiled. Call compile_tree_arrays() first.'
+            )
+
+        try:
+            default_cls = int(str(self.default_class).replace('Class', '').strip())
+        except (ValueError, AttributeError):
+            default_cls = 0
+
+        lines: List[str] = []
+        a = lines.append
+
+        a(f'#ifndef {guard_name}')
+        a(f'#define {guard_name}')
+        a('')
+        a('/* Auto-generated by pyruleanalyzer — do not edit */')
+        a('')
+        a('#include <stdint.h>')
+        a('')
+        a(f'#define N_FEATURES {len(self._array_feature_names)}')
+        a(f'#define N_CLASSES  {self.num_classes}')
+        a(f'#define N_TREES    {len(self._tree_arrays)}')
+        a(f'#define DEFAULT_CLASS {default_cls}')
+        a('')
+
+        # Feature name comments
+        a('/* Feature order:')
+        for i, name in enumerate(self._array_feature_names):
+            a(f'   [{i}] {name}')
+        a('*/')
+        a('')
+
+        # Emit per-tree arrays
+        for t_idx, tree in enumerate(self._tree_arrays):
+            if 'init_score' in tree:
+                continue  # GBDT init handled separately
+
+            n_nodes = len(tree['feature_idx'])
+            tree_depth = tree.get('max_depth', 50)
+            a(f'/* Tree {t_idx}: {n_nodes} nodes, depth {tree_depth} */')
+            a(f'#define TREE{t_idx}_DEPTH {tree_depth}')
+
+            # feature_idx
+            vals = ', '.join(str(v) for v in tree['feature_idx'])
+            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}] = {{{vals}}};')
+
+            # threshold
+            vals = ', '.join(f'{v:.17g}' for v in tree['threshold'])
+            a(f'static const double tree{t_idx}_threshold[{n_nodes}] = {{{vals}}};')
+
+            # children_left
+            vals = ', '.join(str(v) for v in tree['children_left'])
+            a(f'static const int32_t tree{t_idx}_left[{n_nodes}] = {{{vals}}};')
+
+            # children_right
+            vals = ', '.join(str(v) for v in tree['children_right'])
+            a(f'static const int32_t tree{t_idx}_right[{n_nodes}] = {{{vals}}};')
+
+            # value
+            if self.algorithm_type == 'Decision Tree':
+                vals = ', '.join(str(v) for v in tree['value'])
+                a(f'static const int32_t tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+            elif self.algorithm_type == 'Random Forest':
+                flat = tree['value'].flatten()
+                vals = ', '.join(f'{v:.17g}' for v in flat)
+                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}] = {{{vals}}};')
+            elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+                vals = ', '.join(f'{v:.17g}' for v in tree['value'])
+                a(f'static const double tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+
+            a('')
+
+        # Predict function
+        a('static inline int32_t traverse_tree(')
+        a('    const double *features,')
+        a('    const int32_t *feat_idx,')
+        a('    const double *thresh,')
+        a('    const int32_t *left,')
+        a('    const int32_t *right,')
+        a('    int max_depth')
+        a(') {')
+        a('    int32_t node = 0;')
+        a('    int d;')
+        a('    for (d = 0; d < max_depth; d++) {')
+        a('        if (left[node] == node) break;  /* leaf: self-loop */')
+        a('        if (features[feat_idx[node]] <= thresh[node])')
+        a('            node = left[node];')
+        a('        else')
+        a('            node = right[node];')
+        a('    }')
+        a('    return node;')
+        a('}')
+        a('')
+
+        # Main predict function depends on algorithm type
+        if self.algorithm_type == 'Decision Tree':
+            a('static inline int32_t predict(const double *features) {')
+            a('    int32_t leaf = traverse_tree(features, tree0_feature, tree0_threshold, tree0_left, tree0_right, TREE0_DEPTH);')
+            a('    return tree0_value[leaf];')
+            a('}')
+        elif self.algorithm_type == 'Random Forest':
+            a('static inline int32_t predict(const double *features) {')
+            a(f'    double prob_sum[N_CLASSES] = {{0}};')
+            for t_idx in range(len(self._tree_arrays)):
+                a(f'    {{')
+                a(f'        int32_t leaf = traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH);')
+                a(f'        double total = 0.0;')
+                a(f'        int k;')
+                a(f'        for (k = 0; k < N_CLASSES; k++) total += tree{t_idx}_value[leaf * N_CLASSES + k];')
+                a(f'        if (total > 0.0) {{')
+                a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += tree{t_idx}_value[leaf * N_CLASSES + k] / total;')
+                a(f'        }}')
+                a(f'    }}')
+            a(f'    int32_t best = 0;')
+            a(f'    int k;')
+            a(f'    for (k = 1; k < N_CLASSES; k++) {{')
+            a(f'        if (prob_sum[k] > prob_sum[best]) best = k;')
+            a(f'    }}')
+            a(f'    return best;')
+            a('}')
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            classes = self._gbdt_classes or []
+            init_scores = self._gbdt_init_scores or {}
+            tree_class_groups_c = self._tree_class_groups
+            assert tree_class_groups_c is not None
+
+            if self._gbdt_is_binary and len(classes) >= 2:
+                a('#include <math.h>')
+                a('')
+                a('static inline int32_t predict(const double *features) {')
+                pos_class = classes[1]
+                init_s = init_scores.get(pos_class, 0.0)
+                a(f'    double score = {init_s:.17g};')
+                for t_idx, tree in enumerate(self._tree_arrays):
+                    if 'init_score' in tree:
+                        continue
+                    if tree_class_groups_c[t_idx] != pos_class:
+                        continue
+                    a(f'    score += tree{t_idx}_value[traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
+                a(f'    double prob = 1.0 / (1.0 + exp(-score));')
+                a(f'    return (prob >= 0.5) ? {int(classes[1])} : {int(classes[0])};')
+                a('}')
+            else:
+                a('#include <math.h>')
+                a('')
+                a('static inline int32_t predict(const double *features) {')
+                a(f'    double scores[{len(classes)}] = {{')
+                inits = ', '.join(f'{init_scores.get(cl, 0.0):.17g}' for cl in classes)
+                a(f'        {inits}')
+                a(f'    }};')
+                for t_idx, tree in enumerate(self._tree_arrays):
+                    if 'init_score' in tree:
+                        continue
+                    cg = tree_class_groups_c[t_idx]
+                    col = list(classes).index(cg) if cg in classes else 0
+                    a(f'    scores[{col}] += tree{t_idx}_value[traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
+                a(f'    int32_t best = 0;')
+                a(f'    int k;')
+                a(f'    for (k = 1; k < {len(classes)}; k++) {{')
+                a(f'        if (scores[k] > scores[best]) best = k;')
+                a(f'    }}')
+                # Map col index back to class label
+                a(f'    static const int32_t class_map[{len(classes)}] = {{')
+                cls_vals = ', '.join(str(int(cl)) for cl in classes)
+                a(f'        {cls_vals}')
+                a(f'    }};')
+                a(f'    return class_map[best];')
+                a('}')
+
+        a('')
+        a(f'#endif /* {guard_name} */')
+        a('')
+
+        with open(filepath, 'w') as f:
+            f.write('\n'.join(lines))
+
+        print(f'[EXPORT] C header saved to {filepath} '
+              f'({os.path.getsize(filepath)} bytes)')
 
     # Method to find similar rules between trees
     def find_duplicated_rules_between_trees(self):

@@ -254,7 +254,8 @@ class GBDTAnalyzer:
         df = df_test.copy()
         y_true = df[target_column_name].astype(int).values
         feature_cols = [c for c in df.columns if c != target_column_name]
-        sample_dicts = [dict(zip(feature_cols, row)) for row in df[feature_cols].values]
+        X_test_np = df[feature_cols].values.astype(np.float64)
+        feature_names_list = list(feature_cols)
         total_samples = len(y_true)
 
         with open('examples/files/output_final_classifier_gbdt.txt', 'w') as f:
@@ -266,7 +267,7 @@ class GBDTAnalyzer:
             try:
                 with open('examples/files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(df[feature_cols].values)
+                y_pred_sk = sk_model.predict(X_test_np)
                 correct_sk = np.sum(y_pred_sk == y_true)
                 RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
             except Exception as e:
@@ -274,72 +275,25 @@ class GBDTAnalyzer:
                 print(msg)
                 f.write(msg + '\n')
 
-            # 2. Compare Initial vs Final Rules
+            # 2. Compare Rules — Vectorized batch prediction
             print('\nComparing Initial vs Final Rules...')
             start_time = time.time()
 
-            y_pred_initial: List[Any] = []
-            y_pred_final: List[Any] = []
+            # Compile arrays for initial rules, predict, then for final rules
+            clf.compile_tree_arrays(rules=clf.initial_rules, feature_names=feature_names_list)
+            y_pred_initial_arr = clf.predict_batch(X_test_np, feature_names=feature_names_list)
 
-            for i, sample in enumerate(sample_dicts):
-                # A) Initial Prediction
-                pred_init, _, _ = RuleClassifier.classify_gbdt(
-                    sample, clf.initial_rules,
-                    clf._gbdt_init_scores, clf._gbdt_is_binary, clf._gbdt_classes,
-                )
-                try:
-                    pred_init = int(str(pred_init).replace('Class', '').strip())
-                except (ValueError, AttributeError):
-                    pass
-                y_pred_initial.append(pred_init)
+            clf.compile_tree_arrays(rules=clf.final_rules, feature_names=feature_names_list)
+            y_pred_final_arr = clf.predict_batch(X_test_np, feature_names=feature_names_list)
 
-                # B) Final Prediction (use native_fn if available)
-                if clf.native_fn is not None:
-                    try:
-                        pred_final, _, _ = clf.native_fn.classify(sample)  # type: ignore
-                    except Exception:
-                        pred_final, _, _ = RuleClassifier.classify_gbdt(
-                            sample, clf.final_rules,
-                            clf._gbdt_init_scores, clf._gbdt_is_binary, clf._gbdt_classes,
-                        )
-                else:
-                    pred_final, _, _ = RuleClassifier.classify_gbdt(
-                        sample, clf.final_rules,
-                        clf._gbdt_init_scores, clf._gbdt_is_binary, clf._gbdt_classes,
-                    )
-                try:
-                    pred_final = int(str(pred_final).replace('Class', '').strip())
-                except (ValueError, AttributeError):
-                    pass
-                y_pred_final.append(pred_final)
-
-                # Progress bar
-                if i % 100 == 0 or i == total_samples - 1:
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    if i > 0:
-                        rate = i / elapsed if elapsed > 0 else 0
-                        remaining = (total_samples - i) / rate if rate > 0 else 0
-                    else:
-                        remaining = 0
-
-                    rem_str = time.strftime('%H:%M:%S', time.gmtime(remaining))
-                    percent = (i + 1) / total_samples
-                    bar_len = 30
-                    filled_len = int(bar_len * percent)
-                    bar = '=' * filled_len + '-' * (bar_len - filled_len)
-
-                    sys.stdout.write(f'\r[{bar}] {percent:.1%} | ETA: {rem_str}')
-                    sys.stdout.flush()
-
-            print()  # Newline
+            elapsed = time.time() - start_time
+            print(f'  Batch prediction complete in {elapsed:.3f}s')
 
             # 3. Output Metrics
             print('Evaluation Complete. Generating Report...')
 
             # Initial Metrics
             f.write('\n******************************* INITIAL MODEL *******************************\n')
-            y_pred_initial_arr = np.array(y_pred_initial)
             correct_initial = np.sum(y_pred_initial_arr == y_true)
 
             print('\n--- Initial Rules Metrics ---')
@@ -349,7 +303,6 @@ class GBDTAnalyzer:
 
             # Final Metrics
             f.write('\n******************************* FINAL MODEL *******************************\n')
-            y_pred_final_arr = np.array(y_pred_final)
             correct_final = np.sum(y_pred_final_arr == y_true)
 
             print('\n--- Final Rules Metrics ---')
@@ -367,18 +320,18 @@ class GBDTAnalyzer:
             if divergent_count == 0:
                 f.write('No divergent cases found.\n')
             else:
-                for i in range(total_samples):
-                    if y_pred_initial_arr[i] != y_pred_final_arr[i]:
-                        f.write(
-                            f'Index: {i}, Initial: {y_pred_initial_arr[i]}, '
-                            f'Final: {y_pred_final_arr[i]}, Actual: {y_true[i]}\n'
-                        )
+                divergent_indices = np.where(y_pred_initial_arr != y_pred_final_arr)[0]
+                for idx in divergent_indices:
+                    f.write(
+                        f'Index: {idx}, Initial: {y_pred_initial_arr[idx]}, '
+                        f'Final: {y_pred_final_arr[idx]}, Actual: {y_true[idx]}\n'
+                    )
 
             # 5. Interpretability Metrics
             print('Calculating Interpretability Metrics...')
             f.write('\n******************************* INTERPRETABILITY METRICS *******************************\n')
 
-            n_features = len([c for c in df.columns if c != target_column_name])
+            n_features = len(feature_cols)
             metrics_init = RuleClassifier.calculate_structural_complexity(clf.initial_rules, n_features)
             metrics_final = RuleClassifier.calculate_structural_complexity(clf.final_rules, n_features)
 

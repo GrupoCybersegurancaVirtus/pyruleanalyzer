@@ -243,7 +243,8 @@ class DTAnalyzer:
         df = df_test.copy()
         y_true = df[target_column_name].astype(int).values
         feature_cols = [c for c in df.columns if c != target_column_name]
-        sample_dicts = [dict(zip(feature_cols, row)) for row in df[feature_cols].values]
+        X_test_np = df[feature_cols].values.astype(np.float64)
+        feature_names_list = list(feature_cols)
         total_samples = len(y_true)
 
         with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
@@ -255,7 +256,7 @@ class DTAnalyzer:
             try:
                 with open('examples/files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(df[feature_cols].values)
+                y_pred_sk = sk_model.predict(X_test_np)
                 correct_sk = np.sum(y_pred_sk == y_true)
                 RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
             except Exception as e:
@@ -263,78 +264,25 @@ class DTAnalyzer:
                 print(msg)
                 f.write(msg + "\n")
 
-            # 2. Compare Rules (Merged Loop)
+            # 2. Compare Rules — Vectorized batch prediction
             print("\nComparing Initial vs Final Rules...")
             start_time = time.time()
 
-            y_pred_initial: List[Any] = []
-            y_pred_final: List[Any] = []
+            # Compile arrays for initial rules, predict, then for final rules
+            clf.compile_tree_arrays(rules=clf.initial_rules, feature_names=feature_names_list)
+            y_pred_initial_arr = clf.predict_batch(X_test_np, feature_names=feature_names_list)
 
-            use_native = (clf.native_fn is not None)
+            clf.compile_tree_arrays(rules=clf.final_rules, feature_names=feature_names_list)
+            y_pred_final_arr = clf.predict_batch(X_test_np, feature_names=feature_names_list)
 
-            for i, sample in enumerate(sample_dicts):
-                # A) Initial Prediction
-                matched = RuleClassifier.classify_dt(sample, clf.initial_rules)
-                if matched:
-                    try:
-                        pred_init = int(str(matched.class_).replace('Class', '').strip())
-                    except Exception:
-                        pred_init = matched.class_
-                else:
-                    try:
-                        pred_init = int(str(clf.default_class).replace('Class', '').strip())
-                    except Exception:
-                        pred_init = clf.default_class
-                y_pred_initial.append(pred_init)
-
-                # B) Final Prediction
-                if use_native and clf.native_fn is not None:
-                    try:
-                        pred_final, _, _ = clf.native_fn.classify(sample)  # type: ignore
-                    except Exception:
-                        matched = RuleClassifier.classify_dt(sample, clf.final_rules)
-                        if matched:
-                            pred_final = int(str(matched.class_).replace('Class', '').strip())
-                        else:
-                            pred_final = int(str(clf.default_class).replace('Class', '').strip())
-                else:
-                    matched = RuleClassifier.classify_dt(sample, clf.final_rules)
-                    if matched:
-                        try:
-                            pred_final = int(str(matched.class_).replace('Class', '').strip())
-                        except Exception:
-                            pred_final = matched.class_
-                    else:
-                        pred_final = int(str(clf.default_class).replace('Class', '').strip())
-                y_pred_final.append(pred_final)
-
-                # Progress bar
-                if i % 100 == 0 or i == total_samples - 1:
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    if i > 0:
-                        rate = i / elapsed if elapsed > 0 else 0
-                        remaining = (total_samples - i) / rate if rate > 0 else 0
-                    else:
-                        remaining = 0
-
-                    rem_str = time.strftime("%H:%M:%S", time.gmtime(remaining))
-                    percent = (i + 1) / total_samples
-                    bar_len = 30
-                    filled_len = int(bar_len * percent)
-                    bar = '=' * filled_len + '-' * (bar_len - filled_len)
-
-                    sys.stdout.write(f"\r[{bar}] {percent:.1%} | ETA: {rem_str}")
-                    sys.stdout.flush()
-
-            print()  # Newline
+            elapsed = time.time() - start_time
+            print(f"  Batch prediction complete in {elapsed:.3f}s")
 
             # 3. Output Metrics
             print("Evaluation Complete. Generating Report...")
 
             # Initial Metrics
             f.write("\n******************************* INITIAL MODEL *******************************\n")
-            y_pred_initial_arr = np.array(y_pred_initial)
             correct_initial = np.sum(y_pred_initial_arr == y_true)
 
             print("\n--- Initial Rules Metrics ---")
@@ -344,7 +292,6 @@ class DTAnalyzer:
 
             # Final Metrics
             f.write("\n******************************* FINAL MODEL *******************************\n")
-            y_pred_final_arr = np.array(y_pred_final)
             correct_final = np.sum(y_pred_final_arr == y_true)
 
             print("\n--- Final Rules Metrics ---")
@@ -355,11 +302,12 @@ class DTAnalyzer:
             # 4. Divergent Cases
             f.write("\n******************************* DIVERGENT CASES *******************************\n")
 
-            divergent_count = 0
-            for i in range(total_samples):
-                if y_pred_initial_arr[i] != y_pred_final_arr[i]:
-                    divergent_count += 1
-                    f.write(f"Index: {i}, Initial: {y_pred_initial_arr[i]}, Final: {y_pred_final_arr[i]}, Actual: {y_true[i]}\n")
+            divergent_mask = y_pred_initial_arr != y_pred_final_arr
+            divergent_count = int(np.sum(divergent_mask))
+            divergent_indices = np.where(divergent_mask)[0]
+
+            for idx in divergent_indices:
+                f.write(f"Index: {idx}, Initial: {y_pred_initial_arr[idx]}, Final: {y_pred_final_arr[idx]}, Actual: {y_true[idx]}\n")
 
             print(f"\nTotal divergent cases: {divergent_count}")
             f.write(f"Total divergent cases: {divergent_count}\n")
