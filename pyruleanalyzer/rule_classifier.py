@@ -9,6 +9,11 @@ from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
+from pyruleanalyzer._accel import (
+    traverse_tree_batch as _accel_traverse,
+    traverse_tree_batch_multi as _accel_traverse_multi,
+    HAS_C_EXTENSION as _HAS_C_EXT,
+)
 
 # Class to represent a rule
 class Rule:
@@ -1361,7 +1366,7 @@ class RuleClassifier:
         # --- Decision Tree ---
         if self.algorithm_type == 'Decision Tree':
             tree = self._tree_arrays[0]
-            leaf_ids = self._traverse_tree_batch(
+            leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
                 tree['max_depth'],
@@ -1372,21 +1377,25 @@ class RuleClassifier:
         # --- Random Forest (Soft Voting) ---
         elif self.algorithm_type == 'Random Forest':
             n_classes = self.num_classes
-            # Accumulate probability contributions from each tree
-            prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
             n_trees = len(self._tree_arrays)
 
-            for tree in self._tree_arrays:
-                leaf_ids = self._traverse_tree_batch(
-                    X, tree['feature_idx'], tree['threshold'],
-                    tree['children_left'], tree['children_right'],
-                    tree['max_depth'],
-                )
+            # Build list of tree tuples for multi-tree C traversal
+            tree_tuples = [
+                (t['feature_idx'], t['threshold'],
+                 t['children_left'], t['children_right'], t['max_depth'])
+                for t in self._tree_arrays
+            ]
+            # all_leaf_ids: shape (n_trees, n_samples), int32
+            all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
+
+            # Accumulate probability contributions from each tree
+            prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
+            for t_idx in range(n_trees):
+                leaf_ids = all_leaf_ids[t_idx]
                 # Get raw counts at leaves
-                raw_counts = tree['value'][leaf_ids]  # shape (n_samples, n_classes)
+                raw_counts = self._tree_arrays[t_idx]['value'][leaf_ids]
                 # Normalize to probabilities per sample
                 totals = raw_counts.sum(axis=1, keepdims=True)
-                # Avoid division by zero
                 totals = np.where(totals == 0, 1.0, totals)
                 probas = raw_counts / totals
                 prob_sum += probas
@@ -1400,28 +1409,44 @@ class RuleClassifier:
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             classes = self._gbdt_classes or []
             is_binary = self._gbdt_is_binary
+            assert self._tree_class_groups is not None
+            assert self._tree_is_init is not None
+
+            # Separate init trees from real trees and batch-traverse real trees
+            real_tree_indices = []
+            tree_tuples = []
+            for i, tree in enumerate(self._tree_arrays):
+                if not self._tree_is_init[i]:
+                    real_tree_indices.append(i)
+                    tree_tuples.append((
+                        tree['feature_idx'], tree['threshold'],
+                        tree['children_left'], tree['children_right'],
+                        tree['max_depth'],
+                    ))
+
+            # Batch traverse all real trees at once
+            if tree_tuples:
+                all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
+            else:
+                all_leaf_ids = np.empty((0, n_samples), dtype=np.int32)
 
             if is_binary and len(classes) >= 2:
                 # Binary: accumulate score for positive class
-                assert self._tree_class_groups is not None
-                assert self._tree_is_init is not None
                 pos_class = classes[1]
                 scores = np.zeros(n_samples, dtype=np.float64)
 
+                # Add init scores
                 for i, tree in enumerate(self._tree_arrays):
                     if self._tree_is_init[i]:
-                        # Init score — add constant
                         if self._tree_class_groups[i] == pos_class:
                             scores += tree['init_score']
+
+                # Add real tree contributions
+                for batch_idx, orig_idx in enumerate(real_tree_indices):
+                    if self._tree_class_groups[orig_idx] != pos_class:
                         continue
-                    if self._tree_class_groups[i] != pos_class:
-                        continue
-                    leaf_ids = self._traverse_tree_batch(
-                        X, tree['feature_idx'], tree['threshold'],
-                        tree['children_left'], tree['children_right'],
-                        tree['max_depth'],
-                    )
-                    scores += tree['value'][leaf_ids]
+                    leaf_ids = all_leaf_ids[batch_idx]
+                    scores += self._tree_arrays[orig_idx]['value'][leaf_ids]
 
                 # Sigmoid
                 prob = 1.0 / (1.0 + np.exp(-scores))
@@ -1432,28 +1457,28 @@ class RuleClassifier:
 
             else:
                 # Multiclass: accumulate scores per class
-                assert self._tree_class_groups is not None
-                assert self._tree_is_init is not None
                 class_to_col = {cl: idx for idx, cl in enumerate(classes)}
                 n_cls = len(classes)
                 scores = np.zeros((n_samples, n_cls), dtype=np.float64)
 
+                # Add init scores
                 for i, tree in enumerate(self._tree_arrays):
-                    cg = self._tree_class_groups[i]
+                    if self._tree_is_init[i]:
+                        cg = self._tree_class_groups[i]
+                        col = class_to_col.get(cg)
+                        if col is not None:
+                            scores[:, col] += tree['init_score']
+
+                # Add real tree contributions
+                for batch_idx, orig_idx in enumerate(real_tree_indices):
+                    cg = self._tree_class_groups[orig_idx]
                     col = class_to_col.get(cg)
                     if col is None:
                         continue
-                    if self._tree_is_init[i]:
-                        scores[:, col] += tree['init_score']
-                        continue
-                    leaf_ids = self._traverse_tree_batch(
-                        X, tree['feature_idx'], tree['threshold'],
-                        tree['children_left'], tree['children_right'],
-                        tree['max_depth'],
-                    )
-                    scores[:, col] += tree['value'][leaf_ids]
+                    leaf_ids = all_leaf_ids[batch_idx]
+                    scores[:, col] += self._tree_arrays[orig_idx]['value'][leaf_ids]
 
-                # Argmax → class label
+                # Argmax -> class label
                 best_col = np.argmax(scores, axis=1)
                 class_arr = np.array([int(cl) for cl in classes], dtype=np.int32)
                 predictions = class_arr[best_col]
@@ -1494,7 +1519,7 @@ class RuleClassifier:
         # --- Decision Tree ---
         if self.algorithm_type == 'Decision Tree':
             tree = self._tree_arrays[0]
-            leaf_ids = self._traverse_tree_batch(
+            leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
                 tree['max_depth'],
@@ -1512,13 +1537,18 @@ class RuleClassifier:
             n_classes = self.num_classes
             prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
             n_trees = len(self._tree_arrays)
-            for tree in self._tree_arrays:
-                leaf_ids = self._traverse_tree_batch(
-                    X, tree['feature_idx'], tree['threshold'],
-                    tree['children_left'], tree['children_right'],
-                    tree['max_depth'],
-                )
-                raw_counts = tree['value'][leaf_ids]
+
+            # Batch traverse all trees at once
+            tree_tuples = [
+                (t['feature_idx'], t['threshold'],
+                 t['children_left'], t['children_right'], t['max_depth'])
+                for t in self._tree_arrays
+            ]
+            all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
+
+            for t_idx in range(n_trees):
+                leaf_ids = all_leaf_ids[t_idx]
+                raw_counts = self._tree_arrays[t_idx]['value'][leaf_ids]
                 totals = raw_counts.sum(axis=1, keepdims=True)
                 totals = np.where(totals == 0, 1.0, totals)
                 probas = raw_counts / totals
@@ -1535,20 +1565,32 @@ class RuleClassifier:
             n_cls = len(classes)
             scores = np.zeros((n_samples, n_cls), dtype=np.float64)
 
+            # Separate init vs real trees, batch traverse real ones
+            real_tree_indices = []
+            tree_tuples_gbdt = []
             for i, tree in enumerate(self._tree_arrays):
-                cg = self._tree_class_groups[i]
-                col = class_to_col.get(cg)
-                if col is None:
-                    continue
                 if self._tree_is_init[i]:
-                    scores[:, col] += tree['init_score']
-                    continue
-                leaf_ids = self._traverse_tree_batch(
-                    X, tree['feature_idx'], tree['threshold'],
-                    tree['children_left'], tree['children_right'],
-                    tree['max_depth'],
-                )
-                scores[:, col] += tree['value'][leaf_ids]
+                    cg = self._tree_class_groups[i]
+                    col = class_to_col.get(cg)
+                    if col is not None:
+                        scores[:, col] += tree['init_score']
+                else:
+                    real_tree_indices.append(i)
+                    tree_tuples_gbdt.append((
+                        tree['feature_idx'], tree['threshold'],
+                        tree['children_left'], tree['children_right'],
+                        tree['max_depth'],
+                    ))
+
+            if tree_tuples_gbdt:
+                all_leaf_ids = _accel_traverse_multi(X, tree_tuples_gbdt)
+                for batch_idx, orig_idx in enumerate(real_tree_indices):
+                    cg = self._tree_class_groups[orig_idx]
+                    col = class_to_col.get(cg)
+                    if col is None:
+                        continue
+                    leaf_ids = all_leaf_ids[batch_idx]
+                    scores[:, col] += self._tree_arrays[orig_idx]['value'][leaf_ids]
 
             if is_binary and n_cls == 2:
                 # Sigmoid on positive class score
