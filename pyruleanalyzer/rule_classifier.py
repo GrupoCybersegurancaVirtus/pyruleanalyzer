@@ -29,12 +29,14 @@ class Rule:
     __slots__ = [
         'name', 'class_', 'conditions', 'usage_count', 'error_count',
         'parsed_conditions',
+        # RF soft-voting: per-class probability distribution at this leaf
+        'class_distribution',
         # GBDT-specific fields (None for DT/RF rules)
         'leaf_value', 'learning_rate', 'contribution', 'class_group',
     ]
 
     def __init__(self, name, class_, conditions, leaf_value=None,
-                 learning_rate=None, class_group=None):
+                 learning_rate=None, class_group=None, class_distribution=None):
         """
         Initializes a new Rule instance representing a decision path.
 
@@ -45,6 +47,8 @@ class Rule:
             leaf_value (float, optional): Raw residual value at the leaf (GBDT only).
             learning_rate (float, optional): Learning rate for this tree (GBDT only).
             class_group (str, optional): The class group this tree contributes to (GBDT only).
+            class_distribution (List[float], optional): Per-class probability distribution
+                at the leaf node (RF soft-voting). Index i corresponds to class i.
         """
         self.name = name
         self.class_ = class_
@@ -52,6 +56,8 @@ class Rule:
         self.usage_count = 0
         self.error_count = 0
         self.parsed_conditions = []  # Populated by parse_conditions_static
+        # RF soft-voting distribution
+        self.class_distribution = class_distribution
         # GBDT-specific
         self.leaf_value = leaf_value
         self.learning_rate = learning_rate
@@ -448,7 +454,7 @@ class RuleClassifier:
                 self.native_fn = None
             return
 
-        # --- Random Forest Compilation ---
+        # --- Random Forest Compilation (Soft Voting) ---
         if self.algorithm_type == 'Random Forest':
             tree_rules_map = defaultdict(list)
             for rule in rules_to_compile:
@@ -458,6 +464,13 @@ class RuleClassifier:
                     tid = "Tree0" 
                 tree_rules_map[tid].append(rule)
             
+            # Determine number of classes from distributions
+            n_classes = 0
+            for rule in rules_to_compile:
+                if rule.class_distribution is not None:
+                    n_classes = len(rule.class_distribution)
+                    break
+            
             tree_func_names = []
             func_code = ""
             
@@ -465,8 +478,8 @@ class RuleClassifier:
                 func_name = f"predict_{tid}"
                 tree_func_names.append(func_name)
                 
-                # Build tree structure
-                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+                # Build tree structure — store probability distribution at leaves
+                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}}
                 next_id = 1
                 
                 for rule in rules:
@@ -474,30 +487,38 @@ class RuleClassifier:
                     for var, op, val in rule.parsed_conditions:
                         if tree_dict[curr]['f'] == -2:
                             tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
+                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
                             next_id += 2
                         if op in ['<=', '<']:
                             curr = tree_dict[curr]['l']
                         else:
                             curr = tree_dict[curr]['r']
                     
-                    try:
-                        clean_class = int(str(rule.class_).replace('Class', '').strip())
-                    except Exception:
-                        clean_class = rule.class_
-                    tree_dict[curr]['v'] = clean_class
+                    # Store normalized probability distribution at leaf
+                    # (raw counts -> probabilities at compile time for fast runtime)
+                    if rule.class_distribution is not None:
+                        raw = rule.class_distribution
+                        total_c = sum(raw)
+                        if total_c > 0:
+                            tree_dict[curr]['v'] = [c / total_c for c in raw]
+                        else:
+                            tree_dict[curr]['v'] = list(raw)
+                    else:
+                        try:
+                            clean_class = int(str(rule.class_).replace('Class', '').strip())
+                        except Exception:
+                            clean_class = rule.class_
+                        tree_dict[curr]['v'] = clean_class
 
                 def build_rf_code(node_id, indent):
                     node = tree_dict[node_id]
                     tab = "    " * indent
                     if node['f'] == -2:
                         val = node['v']
-                        if val == -1:
+                        if val is None:
                             return f"{tab}return None\n" 
-                        if isinstance(val, str):
-                            return f"{tab}return '{val}'\n"
-                        return f"{tab}return {val}\n"
+                        return f"{tab}return {repr(val)}\n"
                     
                     feat = node['f']
                     # Use repr(float(t)) to ensure no numpy precision issues in literals
@@ -511,13 +532,7 @@ class RuleClassifier:
                 func_code += build_rf_code(0, 1)
                 func_code += "\n"
 
-            # Main Voting Function
-            func_code += "def native_predict(sample):\n"
-            func_code += "    votes = []\n"
-            for func in tree_func_names:
-                func_code += f"    v = {func}(sample)\n"
-                func_code += "    if v is not None: votes.append(v)\n"
-            
+            # Main Voting Function — soft probability averaging
             try:
                 default_val = int(str(self.default_class).replace('Class', '').strip())
             except Exception:
@@ -528,10 +543,34 @@ class RuleClassifier:
             else:
                 def_str = str(default_val)
 
-            func_code += f"    if not votes: return {def_str}, [], None\n"
-            # Return tuple (pred, votes, proba) as expected by RuleClassifier.classify
-            func_code += "    pred = Counter(votes).most_common(1)[0][0]\n"
-            func_code += "    return pred, votes, None\n"
+            func_code += "def native_predict(sample):\n"
+            func_code += "    tree_results = []\n"
+            for func in tree_func_names:
+                func_code += f"    v = {func}(sample)\n"
+                func_code += "    if v is not None: tree_results.append(v)\n"
+            func_code += f"    if not tree_results: return {def_str}, [], None\n"
+            
+            if n_classes > 0:
+                # Soft voting path: each tree returns a probability list
+                func_code += "    # Check if results are probability lists (soft voting)\n"
+                func_code += "    if isinstance(tree_results[0], list):\n"
+                func_code += f"        n_classes = {n_classes}\n"
+                func_code += "        avg = [0.0] * n_classes\n"
+                func_code += "        for proba in tree_results:\n"
+                func_code += "            for j in range(n_classes):\n"
+                func_code += "                avg[j] += proba[j]\n"
+                func_code += "        n = len(tree_results)\n"
+                func_code += "        avg = [p / n for p in avg]\n"
+                func_code += "        best = avg.index(max(avg))\n"
+                func_code += "        return best, None, avg\n"
+                func_code += "    else:\n"
+                func_code += "        # Fallback: hard voting (distributions unavailable)\n"
+                func_code += "        pred = Counter(tree_results).most_common(1)[0][0]\n"
+                func_code += "        return pred, tree_results, None\n"
+            else:
+                # No distributions at all — hard voting fallback
+                func_code += "    pred = Counter(tree_results).most_common(1)[0][0]\n"
+                func_code += "    return pred, tree_results, None\n"
 
         # --- Decision Tree Compilation (Single Tree) ---
         else:
@@ -707,7 +746,8 @@ class RuleClassifier:
     def classify_rf(data, rules):
         """
         Classifies a single data instance using extracted rules from a Random Forest.
-        Aggregates votes from individual trees.
+        Uses soft probability averaging (like sklearn) when class distributions are
+        available, otherwise falls back to hard majority voting.
 
         Args:
             data (Dict[str, float]): Instance data.
@@ -720,23 +760,22 @@ class RuleClassifier:
             return None, [], [], []
         
         # 1. Organize rules by Tree (DT1, DT2...)
-        # This creates a virtual "Forest" structure from the flat rule list
         tree_rules = defaultdict(list)
         for rule in rules:
-            # Assuming format "DT{id}_..."
             tree_identifier = rule.name.split('_')[0]
             tree_rules[tree_identifier].append(rule)
 
         votes = []
         all_matched_rules = []
+        tree_probas = []  # Per-tree probability distributions for soft voting
+        has_distributions = True  # Track if all matched rules have distributions
 
-        # 2. Vote: Evaluate each tree
+        # 2. Evaluate each tree
         for _, rules_in_tree in tree_rules.items():
-            # Reuse logic from classify_dt for each tree
             matched_rule = RuleClassifier.classify_dt(data, rules_in_tree)
             
             if matched_rule:
-                # Extract clean label
+                # Extract clean label for votes list
                 try:
                     label = int(str(matched_rule.class_).replace('Class', '').strip())
                 except ValueError:
@@ -744,33 +783,50 @@ class RuleClassifier:
                 
                 votes.append(label)
                 all_matched_rules.append(matched_rule)
+                
+                # Collect class distribution for soft voting (normalize raw counts to probabilities)
+                if matched_rule.class_distribution is not None:
+                    dist = matched_rule.class_distribution
+                    total_counts = sum(dist)
+                    if total_counts > 0:
+                        tree_probas.append([c / total_counts for c in dist])
+                    else:
+                        tree_probas.append(dist)
+                else:
+                    has_distributions = False
 
-        # 3. Aggregate Results (CPU/NumPy version)
+        # 3. Aggregate Results
         if not votes:
             return None, [], [], []
 
-        # Calculate probabilities
-        counts = Counter(votes)
-        total_votes = len(votes)
-        
-        # Get all unique classes known to this specific rule set
-        unique_classes = sorted(list(set(r.class_ for r in rules)))
-        
-        # Build probability distribution
-        # We infer from votes here.
-        proba_map = {k: v / total_votes for k, v in counts.items()}
-        
-        # Ensure all known classes are represented in the probability map
-        for cls in unique_classes:
-            if cls not in proba_map:
-                proba_map[cls] = 0.0
-        
-        # Determine winner
-        predicted_class = counts.most_common(1)[0][0]
-        
-        # Format probabilities as a list (optional, mostly for compatibility)
-        # Using a simple list of values present in the votes for now
-        probas_out = [proba_map[cls] for cls in unique_classes]
+        # --- Soft Voting (probability averaging, matches sklearn behavior) ---
+        if has_distributions and tree_probas:
+            n_classes = len(tree_probas[0])
+            # Average probabilities across trees
+            avg_proba = [0.0] * n_classes
+            for proba in tree_probas:
+                for i in range(n_classes):
+                    avg_proba[i] += proba[i]
+            n_trees = len(tree_probas)
+            avg_proba = [p / n_trees for p in avg_proba]
+            
+            # Predicted class = argmax of averaged probabilities
+            best_idx = avg_proba.index(max(avg_proba))
+            predicted_class = best_idx
+            probas_out = avg_proba
+        else:
+            # --- Fallback: Hard Voting ---
+            counts = Counter(votes)
+            total_votes = len(votes)
+            
+            unique_classes = sorted(list(set(r.class_ for r in rules)))
+            proba_map = {k: v / total_votes for k, v in counts.items()}
+            for cls in unique_classes:
+                if cls not in proba_map:
+                    proba_map[cls] = 0.0
+            
+            predicted_class = counts.most_common(1)[0][0]
+            probas_out = [proba_map[cls] for cls in unique_classes]
 
         return predicted_class, votes, probas_out, all_matched_rules
 
@@ -1033,6 +1089,23 @@ class RuleClassifier:
                                 and abs(rule1.leaf_value - rule2.leaf_value) > 1e-9):
                             is_duplicate = False
 
+                    # RF soft voting: siblings must have proportionally identical
+                    # probability distributions.  Merging siblings with different
+                    # distributions changes the per-tree probability, which can
+                    # flip the overall soft vote even though the hard vote
+                    # (majority class) stays the same.
+                    if is_duplicate and self.algorithm_type == 'Random Forest':
+                        d1 = rule1.class_distribution
+                        d2 = rule2.class_distribution
+                        if d1 is not None and d2 is not None:
+                            t1 = sum(d1)
+                            t2 = sum(d2)
+                            if t1 > 0 and t2 > 0:
+                                p1 = [c / t1 for c in d1]
+                                p2 = [c / t2 for c in d2]
+                                if any(abs(a - b) > 1e-9 for a, b in zip(p1, p2)):
+                                    is_duplicate = False
+
                     if is_duplicate:
                         duplicated_rules.append((rule1, rule2))
                             
@@ -1127,7 +1200,24 @@ class RuleClassifier:
                                 learning_rate=rule1.learning_rate,
                                 class_group=rule1.class_group)
             else:
-                new_rule = Rule(new_rule_name, rule1.class_, common_conditions)
+                # Combine class distributions: element-wise sum of raw counts
+                # This correctly represents the parent node's distribution
+                combined_dist = None
+                merged_class = rule1.class_
+                if rule1.class_distribution is not None and rule2.class_distribution is not None:
+                    combined_dist = [
+                        a + b for a, b in zip(rule1.class_distribution, rule2.class_distribution)
+                    ]
+                    # Update class_ to reflect the majority class of the combined distribution
+                    best_idx = combined_dist.index(max(combined_dist))
+                    merged_class = str(best_idx)
+                elif rule1.class_distribution is not None:
+                    combined_dist = list(rule1.class_distribution)
+                elif rule2.class_distribution is not None:
+                    combined_dist = list(rule2.class_distribution)
+                
+                new_rule = Rule(new_rule_name, merged_class, common_conditions,
+                                class_distribution=combined_dist)
             
             # CRITICAL: Parse immediately so this rule is ready for the next analysis iteration
             new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
@@ -1152,8 +1242,9 @@ class RuleClassifier:
                     # Merge names for traceability
                     new_name = "_&_".join(sorted([r.name for r in group]))
                     
-                    # Create representative rule
-                    new_rule = Rule(new_name, representative.class_, representative.conditions)
+                    # Create representative rule — preserve class_distribution
+                    new_rule = Rule(new_name, representative.class_, representative.conditions,
+                                    class_distribution=representative.class_distribution)
                     new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
                     
                     new_generalized_rules.append(new_rule)
@@ -1278,6 +1369,17 @@ class RuleClassifier:
                 # Promote the sibling: remove its last condition
                 sibling.conditions = sibling.conditions[:-1]
                 sibling.parsed_conditions = sibling.parsed_conditions[:-1]
+
+                # Combine class_distribution: the promoted sibling now covers
+                # the region of the removed rule as well, so add their counts
+                if (hasattr(rule, 'class_distribution') and rule.class_distribution is not None
+                        and hasattr(sibling, 'class_distribution') and sibling.class_distribution is not None):
+                    sibling.class_distribution = [
+                        a + b for a, b in zip(sibling.class_distribution, rule.class_distribution)
+                    ]
+                    # Update class_ to match the new majority class
+                    best_idx = sibling.class_distribution.index(max(sibling.class_distribution))
+                    sibling.class_ = str(best_idx)
 
                 # Update its name to indicate promotion
                 if "_promoted" not in sibling.name:
@@ -1406,9 +1508,8 @@ class RuleClassifier:
                     f.write(f'    classes = {class_ints}\n')
                     f.write('    return classes[scores.index(max(scores))]\n')
 
-            # --- Random Forest Export Strategy ---
+            # --- Random Forest Export Strategy (Soft Voting) ---
             elif self.algorithm_type == 'Random Forest':
-                f.write("from collections import Counter\n\n")
                 tree_rules_map = defaultdict(list)
                 for rule in rules_to_export:
                     if "_" in rule.name:
@@ -1417,14 +1518,21 @@ class RuleClassifier:
                         tid = "Tree0" 
                     tree_rules_map[tid].append(rule)
                 
+                # Determine number of classes from distributions
+                n_classes = 0
+                for rule in rules_to_export:
+                    if rule.class_distribution is not None:
+                        n_classes = len(rule.class_distribution)
+                        break
+                
                 # Generate a function for each tree
                 tree_func_names = []
                 for tid, rules in tree_rules_map.items():
                     func_name = f"predict_{tid}"
                     tree_func_names.append(func_name)
                     
-                    # Build tree structure
-                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+                    # Build tree structure — store probability distributions at leaves
+                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}}
                     next_id = 1
                     
                     for rule in rules:
@@ -1432,19 +1540,27 @@ class RuleClassifier:
                         for var, op, val in rule.parsed_conditions:
                             if tree_dict[curr]['f'] == -2:
                                 tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
+                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
                                 next_id += 2
                             if op in ['<=', '<']:
                                 curr = tree_dict[curr]['l']
                             else:
                                 curr = tree_dict[curr]['r']
                         
-                        try:
-                            clean_class = int(str(rule.class_).replace('Class', '').strip())
-                        except Exception:
-                            clean_class = rule.class_
-                        tree_dict[curr]['v'] = clean_class
+                        if rule.class_distribution is not None:
+                            raw = rule.class_distribution
+                            total_c = sum(raw)
+                            if total_c > 0:
+                                tree_dict[curr]['v'] = [c / total_c for c in raw]
+                            else:
+                                tree_dict[curr]['v'] = list(raw)
+                        else:
+                            try:
+                                clean_class = int(str(rule.class_).replace('Class', '').strip())
+                            except Exception:
+                                clean_class = rule.class_
+                            tree_dict[curr]['v'] = clean_class
 
                     # Build code string for this tree
                     def build_rf_code(node_id, indent):
@@ -1452,11 +1568,9 @@ class RuleClassifier:
                         tab = "    " * indent
                         if node['f'] == -2:
                             val = node['v']
-                            if val == -1:
+                            if val is None:
                                 return f"{tab}return None\n" 
-                            if isinstance(val, str):
-                                return f"{tab}return '{val}'\n"
-                            return f"{tab}return {val}\n"
+                            return f"{tab}return {repr(val)}\n"
                         
                         feat = node['f']
                         # Use repr(float(t)) for precision
@@ -1470,13 +1584,7 @@ class RuleClassifier:
                     f.write(build_rf_code(0, 1))
                     f.write("\n")
 
-                # Generate Main Voting Function
-                f.write("def predict(sample):\n")
-                f.write("    votes = []\n")
-                for func in tree_func_names:
-                    f.write(f"    v = {func}(sample)\n")
-                    f.write("    if v is not None: votes.append(v)\n")
-                
+                # Generate Main Prediction Function — soft voting
                 try:
                     default_val = int(str(self.default_class).replace('Class', '').strip())
                 except Exception:
@@ -1487,8 +1595,30 @@ class RuleClassifier:
                 else:
                     def_str = str(default_val)
 
-                f.write(f"    if not votes: return {def_str}\n")
-                f.write("    return Counter(votes).most_common(1)[0][0]\n")
+                f.write("def predict(sample):\n")
+                f.write("    tree_results = []\n")
+                for func in tree_func_names:
+                    f.write(f"    v = {func}(sample)\n")
+                    f.write("    if v is not None: tree_results.append(v)\n")
+                f.write(f"    if not tree_results: return {def_str}\n")
+                
+                if n_classes > 0:
+                    f.write("    # Soft voting: average probability distributions\n")
+                    f.write("    if isinstance(tree_results[0], list):\n")
+                    f.write(f"        n_classes = {n_classes}\n")
+                    f.write("        avg = [0.0] * n_classes\n")
+                    f.write("        for proba in tree_results:\n")
+                    f.write("            for j in range(n_classes):\n")
+                    f.write("                avg[j] += proba[j]\n")
+                    f.write("        n = len(tree_results)\n")
+                    f.write("        avg = [p / n for p in avg]\n")
+                    f.write("        return avg.index(max(avg))\n")
+                    f.write("    else:\n")
+                    f.write("        from collections import Counter\n")
+                    f.write("        return Counter(tree_results).most_common(1)[0][0]\n")
+                else:
+                    f.write("    from collections import Counter\n")
+                    f.write("    return Counter(tree_results).most_common(1)[0][0]\n")
 
             # --- Decision Tree Export Strategy (Single Tree) ---
             else:
@@ -1821,9 +1951,9 @@ class RuleClassifier:
 
         # 1. Calculate Standard Metrics
         accuracy = correct / total if total > 0 else 0.0
-        precision = precision_score(y_true, y_pred_safe, average='macro', zero_division=0)
-        recall = recall_score(y_true, y_pred_safe, average='macro', zero_division=0)
-        f1 = f1_score(y_true, y_pred_safe, average='macro', zero_division=0)
+        precision = precision_score(y_true, y_pred_safe, average='macro', zero_division=0.0)
+        recall = recall_score(y_true, y_pred_safe, average='macro', zero_division=0.0)
+        f1 = f1_score(y_true, y_pred_safe, average='macro', zero_division=0.0)
 
         # 2. Confusion Matrix & Specificity
         # Get active labels (excluding placeholder -1)
@@ -2313,7 +2443,18 @@ class RuleClassifier:
                 )
             else:
                 # Leaf node
-                class_idx = np.argmax(tree_.value[node])
+                value_array = tree_.value[node].flatten()
+                class_idx = np.argmax(value_array)
+                
+                # Store weighted sample counts per class for RF soft voting.
+                # sklearn's tree_.value stores normalized probabilities (sum=1),
+                # so we multiply by the weighted sample count at this leaf to
+                # recover the actual (weighted) sample counts.
+                # Raw counts allow correct merging (element-wise addition)
+                # during adjust_and_remove_rules; normalization to probabilities
+                # happens at classification time in classify_rf / native model.
+                weighted_n = tree_.weighted_n_node_samples[node]
+                class_dist = (value_array * weighted_n).tolist()
                 
                 # Ensure we handle class names correctly (int or str)
                 try:
@@ -2323,8 +2464,9 @@ class RuleClassifier:
 
                 rule_name = f"Rule{len(rules)}_Class{class_label}"
                 
-                # Create the Rule object
-                new_rule = Rule(rule_name, str(class_label), conditions_str)
+                # Create the Rule object with class distribution
+                new_rule = Rule(rule_name, str(class_label), conditions_str,
+                                class_distribution=class_dist)
                 
                 # OPTIMIZATION: Assign the pre-parsed conditions immediately.
                 # This bypasses 'parse_conditions_static' later, saving time and keeping precision.
@@ -2421,8 +2563,18 @@ class RuleClassifier:
                 n_features = len(feature_names)
                 dummy_sample = np.zeros((1, n_features))
                 init_preds = np.asarray(init.predict_proba(dummy_sample))
-                col_idx = class_idx if not is_binary else 0
-                init_score = float(np.log(init_preds[0, col_idx] + 1e-15))
+                if is_binary:
+                    # Binary GBDT: sklearn uses log-odds (logit) of
+                    # the positive class as the initial raw score.
+                    p = float(init_preds[0, 1])
+                    p = np.clip(p, 1e-15, 1 - 1e-15)
+                    init_score = float(np.log(p / (1 - p)))
+                else:
+                    # Multiclass GBDT: sklearn uses centered log-priors
+                    # log(p_k) - mean(log(p_j) for all j).
+                    log_priors = np.log(init_preds[0] + 1e-15)
+                    mean_log = float(np.mean(log_priors))
+                    init_score = float(log_priors[class_idx] - mean_log)
 
             init_scores[class_label] = init_score
 
