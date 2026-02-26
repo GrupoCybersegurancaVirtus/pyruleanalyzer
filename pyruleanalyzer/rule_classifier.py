@@ -1,12 +1,11 @@
 import os
-import time
 import pickle
 import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
-from typing import Any, Dict, List, Optional, Union, Tuple
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier, _tree
+from typing import Any, Dict, List
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
 
@@ -27,9 +26,15 @@ class Rule:
         parsed_conditions (List[Tuple[str, str, float]]): Cached parsed conditions for faster access.
     """
 
-    __slots__ = ['name', 'class_', 'conditions', 'usage_count', 'error_count', 'parsed_conditions']
+    __slots__ = [
+        'name', 'class_', 'conditions', 'usage_count', 'error_count',
+        'parsed_conditions',
+        # GBDT-specific fields (None for DT/RF rules)
+        'leaf_value', 'learning_rate', 'contribution', 'class_group',
+    ]
 
-    def __init__(self, name, class_, conditions):
+    def __init__(self, name, class_, conditions, leaf_value=None,
+                 learning_rate=None, class_group=None):
         """
         Initializes a new Rule instance representing a decision path.
 
@@ -37,6 +42,9 @@ class Rule:
             name (str): Unique identifier for the rule.
             class_ (str): Target class label as a string.
             conditions (List[str]): List of conditions required to trigger this rule.
+            leaf_value (float, optional): Raw residual value at the leaf (GBDT only).
+            learning_rate (float, optional): Learning rate for this tree (GBDT only).
+            class_group (str, optional): The class group this tree contributes to (GBDT only).
         """
         self.name = name
         self.class_ = class_
@@ -44,6 +52,16 @@ class Rule:
         self.usage_count = 0
         self.error_count = 0
         self.parsed_conditions = []  # Populated by parse_conditions_static
+        # GBDT-specific
+        self.leaf_value = leaf_value
+        self.learning_rate = learning_rate
+        self.class_group = class_group
+        if leaf_value is not None and learning_rate is not None:
+            self.contribution = learning_rate * leaf_value
+        elif leaf_value is not None:
+            self.contribution = leaf_value  # Init score (no LR scaling)
+        else:
+            self.contribution = None
 
     def __repr__(self):
         return f"Rule(name={self.name}, class={self.class_}, conditions={self.conditions})"
@@ -51,6 +69,7 @@ class Rule:
 # Class to handle the rule classification process
 class RuleClassifier:
     # Represents a rule-based classifier built from decision paths in tree models.
+    
     def __init__(self, rules, algorithm_type='Decision Tree'):
         """
         Represents a rule-based classifier built from decision paths in tree models.
@@ -61,7 +80,7 @@ class RuleClassifier:
 
         Args:
             rules (Union[List[Rule], List[List[Rule]], Dict, str]): The extracted rules.
-            algorithm_type (str): Type of model ('Decision Tree' or 'Random Forest').
+            algorithm_type (str): Type of model ('Decision Tree', 'Random Forest', or 'Gradient Boosting Decision Trees').
         """
         # Parse raw rules into Rule objects
         self.initial_rules = self.parse_rules(rules, algorithm_type)
@@ -71,6 +90,11 @@ class RuleClassifier:
         self.final_rules = []
         self.duplicated_rules = []
         self.specific_rules = []
+        
+        # GBDT-specific model metadata (None for DT/RF)
+        self._gbdt_init_scores = None
+        self._gbdt_is_binary = False
+        self._gbdt_classes = None
         
         # --- OPTIMIZED CLASS & LABEL DETECTION ---
         labels = []
@@ -99,8 +123,10 @@ class RuleClassifier:
 
         # --- NATIVE OPTIMIZATION ---
         # Compile the initial rules into an in-memory Python function immediately
+        # For GBDT, the caller (new_classifier) sets metadata first, then calls update_native_model
         self.native_fn = None
-        self.update_native_model(self.initial_rules)
+        if algorithm_type != 'Gradient Boosting Decision Trees':
+            self.update_native_model(self.initial_rules)
 
     # Methods to support pickling and unpickling of the RuleClassifier
     def __getstate__(self):
@@ -117,7 +143,7 @@ class RuleClassifier:
         if 'custom_rule_removal' in state:
              # Reset to default logic string or None to be safe, 
              # or just assume the user sets it again if needed.
-             pass 
+             pass
         return state
 
     # Method used when unpickling
@@ -175,7 +201,8 @@ class RuleClassifier:
         if isinstance(rules, str):
             for line in rules.split('\n'):
                 line = line.strip()
-                if not line: continue
+                if not line:
+                    continue
                 
                 # Expected format: "RuleName: ['cond1', 'cond2']"
                 if ':' in line:
@@ -194,7 +221,7 @@ class RuleClassifier:
                         # Safe eval for list strings like "['a', 'b']"
                         import ast
                         conditions = ast.literal_eval(conditions_str)
-                    except:
+                    except Exception:
                         conditions = []
 
                     rule = Rule(rule_name, class_label, conditions)
@@ -228,6 +255,63 @@ class RuleClassifier:
                     parsed_conditions.append((var, op, value))
         return parsed_conditions
 
+    # Helper method to compile a list of rules into a fast lookup function
+    def _compile_tree_lookup(self, rules_to_compile):
+        """
+        Compiles a list of rules into a function that returns the index of the matched rule.
+        Used for optimizing Random Forest analysis.
+        """
+        # Map rule logic to rule index
+        # We need to ensure we don't change the order of rules passed in
+        
+        # Build tree structure
+        tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+        next_id = 1
+        
+        for idx, rule in enumerate(rules_to_compile):
+            curr = 0
+            for var, op, val in rule.parsed_conditions:
+                if tree_dict[curr]['f'] == -2:
+                    tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                    tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                    tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                    next_id += 2
+                
+                if op in ['<=', '<']:
+                    curr = tree_dict[curr]['l']
+                else:
+                    curr = tree_dict[curr]['r']
+            
+            # Store the index of the rule at the leaf
+            tree_dict[curr]['v'] = idx
+
+        # Build code
+        def build_code(node_id, indent):
+            node = tree_dict[node_id]
+            tab = "    " * indent
+            
+            if node['f'] == -2: 
+                # Return the index of the rule
+                return f"{tab}return {node['v']}\n"
+            
+            feat_name = node['f']
+            # Use repr(float(t)) for precision
+            code = f"{tab}if sample.get('{feat_name}', 0) <= {repr(float(node['t']))}:\n"
+            code += build_code(node['l'], indent + 1)
+            code += f"{tab}else:\n"
+            code += build_code(node['r'], indent + 1)
+            return code
+
+        func_code = "def lookup(sample):\n"
+        func_code += build_code(0, 1)
+
+        context = {}
+        try:
+            exec(func_code, {}, context)
+            return context['lookup']
+        except Exception:
+            return None
+
     # Method to compile rules into a native Python function
     def update_native_model(self, rules_to_compile):
         """
@@ -240,69 +324,270 @@ class RuleClassifier:
         Args:
             rules_to_compile (List[Rule]): The rules to be compiled.
         """
-        # Tree structure: {id: {'l': left, 'r': right, 'f': feature, 't': threshold, 'v': value}}
-        # 'f': -2 indicates a leaf node
-        tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
-        next_id = 1
-        
-        for rule in rules_to_compile:
-            curr = 0
-            for var, op, val in rule.parsed_conditions:
-                # If current node is a leaf, transform it into a decision node
-                if tree_dict[curr]['f'] == -2:
-                    tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                    # Create children
-                    tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    next_id += 2
-                
-                # Traverse
-                if op in ['<=', '<']:
-                    curr = tree_dict[curr]['l']
+        # --- GBDT Compilation (Additive Scoring) ---
+        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+            import math as _math
+
+            # Group rules by tree identifier (prefix before first '_')
+            tree_rules_map = defaultdict(list)
+            for rule in rules_to_compile:
+                if '_' in rule.name:
+                    tid = rule.name.split('_')[0]
                 else:
-                    curr = tree_dict[curr]['r']
-            
-            # Assign leaf class (ensure int if possible)
+                    tid = rule.name
+                tree_rules_map[tid].append(rule)
+
+            # Separate init rules from tree rules, group by class_group
+            init_scores = {}
+
+            # First pass: extract init scores
+            for tid, rules in tree_rules_map.items():
+                if not rules:
+                    continue
+                class_group = rules[0].class_group
+                if len(rules) == 1 and not rules[0].parsed_conditions and rules[0].contribution is not None:
+                    init_scores[class_group] = rules[0].contribution
+
+            # Now build the complete function code
+            func_code = 'import math\n'
+
+            # Re-iterate to build tree functions in order
+            for tid, rules in tree_rules_map.items():
+                if not rules:
+                    continue
+                # Skip init rules
+                if len(rules) == 1 and not rules[0].parsed_conditions and rules[0].contribution is not None:
+                    continue
+
+                func_name = f'predict_{tid}'
+                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}}
+                next_id = 1
+
+                for rule in rules:
+                    curr = 0
+                    for var, op, val in rule.parsed_conditions:
+                        if tree_dict[curr]['f'] == -2:
+                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
+                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
+                            next_id += 2
+                        if op in ['<=', '<']:
+                            curr = tree_dict[curr]['l']
+                        else:
+                            curr = tree_dict[curr]['r']
+                    tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
+
+                def _build_code(node_id, indent, td=tree_dict):
+                    node = td[node_id]
+                    tab = '    ' * indent
+                    if node['f'] == -2:
+                        return f'{tab}return {repr(float(node["v"]))}\n'
+                    feat = node['f']
+                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code += _build_code(node['l'], indent + 1, td)
+                    code += f'{tab}else:\n'
+                    code += _build_code(node['r'], indent + 1, td)
+                    return code
+
+                func_code += f'def {func_name}(sample):\n'
+                func_code += _build_code(0, 1)
+                func_code += '\n'
+
+            # Main prediction function
+            is_binary = self._gbdt_is_binary
+            classes = self._gbdt_classes or []
+
+            func_code += 'def native_predict(sample):\n'
+
+            if is_binary and len(classes) >= 2:
+                pos_class = classes[1]
+                score_init = init_scores.get(pos_class, 0.0)
+                func_code += f'    score = {repr(score_init)}\n'
+                for tid, rules in tree_rules_map.items():
+                    if not rules:
+                        continue
+                    if len(rules) == 1 and not rules[0].parsed_conditions:
+                        continue
+                    if rules[0].class_group != pos_class:
+                        continue
+                    func_name = f'predict_{tid}'
+                    func_code += f'    score += {func_name}(sample)\n'
+                func_code += '    prob = 1.0 / (1.0 + math.exp(-score))\n'
+                func_code += '    if prob >= 0.5:\n'
+                func_code += f'        return {int(classes[1])}, None, None\n'
+                func_code += '    else:\n'
+                func_code += f'        return {int(classes[0])}, None, None\n'
+            else:
+                # Multiclass
+                for class_label in classes:
+                    score_init = init_scores.get(class_label, 0.0)
+                    func_code += f'    score_{class_label} = {repr(score_init)}\n'
+                for tid, rules in tree_rules_map.items():
+                    if not rules:
+                        continue
+                    if len(rules) == 1 and not rules[0].parsed_conditions:
+                        continue
+                    class_group = rules[0].class_group
+                    func_name = f'predict_{tid}'
+                    func_code += f'    score_{class_group} += {func_name}(sample)\n'
+
+                # Argmax
+                score_vars = [f'score_{cl}' for cl in classes]
+                class_ints = [int(cl) for cl in classes]
+                func_code += f'    scores = [{", ".join(score_vars)}]\n'
+                func_code += f'    classes = {class_ints}\n'
+                func_code += '    best_idx = scores.index(max(scores))\n'
+                func_code += '    return classes[best_idx], None, None\n'
+
+            context = {'math': _math}
             try:
-                clean_class = int(str(rule.class_).replace('Class', '').strip())
-            except:
-                clean_class = rule.class_
-            tree_dict[curr]['v'] = clean_class
+                exec(func_code, context)
+                self.native_fn = context['native_predict']
+            except Exception as e:
+                print(f'Error compiling GBDT native model: {e}')
+                self.native_fn = None
+            return
 
-        # Recursive function to build Python code string
-        def build_code(node_id, indent):
-            node = tree_dict[node_id]
-            tab = "    " * indent
+        # --- Random Forest Compilation ---
+        if self.algorithm_type == 'Random Forest':
+            tree_rules_map = defaultdict(list)
+            for rule in rules_to_compile:
+                if "_" in rule.name:
+                    tid = rule.name.split('_')[0]
+                else:
+                    tid = "Tree0" 
+                tree_rules_map[tid].append(rule)
             
-            # Leaf Node
-            if node['f'] == -2: 
-                val = node['v']
-                # Handle empty leaves (default class)
-                if val == -1: 
+            tree_func_names = []
+            func_code = ""
+            
+            for tid, rules in tree_rules_map.items():
+                func_name = f"predict_{tid}"
+                tree_func_names.append(func_name)
+                
+                # Build tree structure
+                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+                next_id = 1
+                
+                for rule in rules:
+                    curr = 0
+                    for var, op, val in rule.parsed_conditions:
+                        if tree_dict[curr]['f'] == -2:
+                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                            next_id += 2
+                        if op in ['<=', '<']:
+                            curr = tree_dict[curr]['l']
+                        else:
+                            curr = tree_dict[curr]['r']
+                    
                     try:
-                        val = int(str(self.default_class).replace('Class', '').strip())
-                    except:
-                        val = self.default_class
-                # Return tuple (class, votes_placeholder, proba_placeholder)
-                return f"{tab}return {val}, None, None\n"
-            
-            # Decision Node
-            feat_name = node['f']
-            code = f"{tab}if sample.get('{feat_name}', 0) <= {node['t']}:\n"
-            code += build_code(node['l'], indent + 1)
-            code += f"{tab}else:\n"
-            code += build_code(node['r'], indent + 1)
-            return code
+                        clean_class = int(str(rule.class_).replace('Class', '').strip())
+                    except Exception:
+                        clean_class = rule.class_
+                    tree_dict[curr]['v'] = clean_class
 
-        # Generate the full function code
-        func_code = "def native_predict(sample):\n"
-        func_code += build_code(0, 1)
+                def build_rf_code(node_id, indent):
+                    node = tree_dict[node_id]
+                    tab = "    " * indent
+                    if node['f'] == -2:
+                        val = node['v']
+                        if val == -1:
+                            return f"{tab}return None\n" 
+                        if isinstance(val, str):
+                            return f"{tab}return '{val}'\n"
+                        return f"{tab}return {val}\n"
+                    
+                    feat = node['f']
+                    # Use repr(float(t)) to ensure no numpy precision issues in literals
+                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code += build_rf_code(node['l'], indent + 1)
+                    code += f"{tab}else:\n"
+                    code += build_rf_code(node['r'], indent + 1)
+                    return code
+
+                func_code += f"def {func_name}(sample):\n"
+                func_code += build_rf_code(0, 1)
+                func_code += "\n"
+
+            # Main Voting Function
+            func_code += "def native_predict(sample):\n"
+            func_code += "    votes = []\n"
+            for func in tree_func_names:
+                func_code += f"    v = {func}(sample)\n"
+                func_code += "    if v is not None: votes.append(v)\n"
+            
+            try:
+                default_val = int(str(self.default_class).replace('Class', '').strip())
+            except Exception:
+                default_val = self.default_class
+            
+            if isinstance(default_val, str):
+                def_str = f"'{default_val}'"
+            else:
+                def_str = str(default_val)
+
+            func_code += f"    if not votes: return {def_str}, [], None\n"
+            # Return tuple (pred, votes, proba) as expected by RuleClassifier.classify
+            func_code += "    pred = Counter(votes).most_common(1)[0][0]\n"
+            func_code += "    return pred, votes, None\n"
+
+        # --- Decision Tree Compilation (Single Tree) ---
+        else:
+            tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+            next_id = 1
+            for rule in rules_to_compile:
+                curr = 0
+                for var, op, val in rule.parsed_conditions:
+                    if tree_dict[curr]['f'] == -2:
+                        tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                        tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                        tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                        next_id += 2
+                    if op in ['<=', '<']:
+                        curr = tree_dict[curr]['l']
+                    else:
+                        curr = tree_dict[curr]['r']
+                
+                try:
+                    clean_class = int(str(rule.class_).replace('Class', '').strip())
+                except Exception:
+                    clean_class = rule.class_
+                tree_dict[curr]['v'] = clean_class
+
+            def build_dt_code(node_id, indent):
+                node = tree_dict[node_id]
+                tab = "    " * indent
+                if node['f'] == -2: 
+                    val = node['v']
+                    if val == -1: 
+                        try:
+                            val = int(str(self.default_class).replace('Class', '').strip())
+                        except Exception:
+                            val = self.default_class
+                    if isinstance(val, str):
+                        return f"{tab}return '{val}', None, None\n"
+                    return f"{tab}return {val}, None, None\n"
+                
+                feat = node['f']
+                # Use repr(float(t)) for precision
+                code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                code += build_dt_code(node['l'], indent + 1)
+                code += f"{tab}else:\n"
+                code += build_dt_code(node['r'], indent + 1)
+                return code
+
+            func_code = "def native_predict(sample):\n"
+            func_code += build_dt_code(0, 1)
 
         # Compile logic into the local namespace
-        context = {}
+        context = {'Counter': Counter}
         try:
-            exec(func_code, {}, context)
-            self.native_fn = context['native_predict']
+            exec(func_code, context)
+            self.native_fn = context.get('native_predict')
+            if self.native_fn is None:
+                print("Error: 'native_predict' function not found in compiled code.")
         except Exception as e:
             print(f"Error compiling native model: {e}")
             self.native_fn = None
@@ -332,7 +617,7 @@ class RuleClassifier:
         if not final and self.native_fn is not None:
             try:
                 # native_fn returns (prediction, votes, proba)
-                return self.native_fn(data)
+                return self.native_fn(data) # pyright: ignore[reportCallIssue]
             except Exception:
                 # Fallback to standard execution if something goes wrong (e.g., missing keys)
                 pass
@@ -347,6 +632,12 @@ class RuleClassifier:
         if self.algorithm_type == 'Random Forest':
             predicted_class, votes, proba, _ = self.classify_rf(data, rules)
         
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            predicted_class, _, _ = self.classify_gbdt(
+                data, rules, self._gbdt_init_scores,
+                self._gbdt_is_binary, self._gbdt_classes,
+            )
+
         elif self.algorithm_type == 'Decision Tree':
             matched_rule = self.classify_dt(data, rules)
             if matched_rule:
@@ -448,7 +739,7 @@ class RuleClassifier:
                 # Extract clean label
                 try:
                     label = int(str(matched_rule.class_).replace('Class', '').strip())
-                except:
+                except ValueError:
                     label = matched_rule.class_
                 
                 votes.append(label)
@@ -469,14 +760,158 @@ class RuleClassifier:
         # We infer from votes here.
         proba_map = {k: v / total_votes for k, v in counts.items()}
         
+        # Ensure all known classes are represented in the probability map
+        for cls in unique_classes:
+            if cls not in proba_map:
+                proba_map[cls] = 0.0
+        
         # Determine winner
         predicted_class = counts.most_common(1)[0][0]
         
         # Format probabilities as a list (optional, mostly for compatibility)
         # Using a simple list of values present in the votes for now
-        probas_out = list(proba_map.values())
+        probas_out = [proba_map[cls] for cls in unique_classes]
 
         return predicted_class, votes, probas_out, all_matched_rules
+
+    # Method to classify data using GBDT rules (additive scoring)
+    @staticmethod
+    def classify_gbdt(data, rules, init_scores, is_binary, classes):
+        """
+        Classifies a single data instance using GBDT additive scoring.
+
+        For each class group, the method sums the init score plus the
+        contribution of the first matching rule in each tree. Binary
+        classification uses sigmoid; multiclass uses argmax.
+
+        Args:
+            data (Dict[str, float]): Instance data.
+            rules (List[Rule]): All GBDT Rule objects (init + tree rules).
+            init_scores (Dict[str, float]): Init scores per class group.
+            is_binary (bool): Whether this is binary classification.
+            classes (List[str]): List of class label strings.
+
+        Returns:
+            Tuple[int, List[Rule], None]:
+                - Predicted class label (int).
+                - List of matched rules (one per tree per class group).
+                - None (kept for API consistency).
+        """
+        import math
+
+        # Group rules by tree identifier (prefix before first '_')
+        # e.g., 'GBDT1T0' for init, 'GBDT1T1' for tree 1 of class 1
+        tree_rules_map = defaultdict(list)
+        for rule in rules:
+            if '_' in rule.name:
+                tree_id = rule.name.split('_')[0]
+            else:
+                tree_id = rule.name
+            tree_rules_map[tree_id].append(rule)
+
+        # Compute scores per class group
+        scores = {}
+        matched_rules = []
+
+        if is_binary:
+            # Binary: only positive class (classes[1]) has trees
+            pos_class = classes[1]
+            score = init_scores.get(pos_class, 0.0)
+
+            for tree_id, tree_rules in tree_rules_map.items():
+                # Skip init rules (no conditions)
+                if tree_rules and tree_rules[0].class_group != pos_class:
+                    continue
+
+                for rule in tree_rules:
+                    # Init rules have no conditions — skip scoring (already in init_score)
+                    if not rule.parsed_conditions and rule.contribution is not None:
+                        # This is the init rule — already accounted for
+                        matched_rules.append(rule)
+                        continue
+
+                    # Check if rule matches
+                    matched = True
+                    for var, op, value in rule.parsed_conditions:
+                        instance_value = data.get(var)
+                        if instance_value is None:
+                            matched = False
+                            break
+                        if op == '<=':
+                            if not (instance_value <= value):
+                                matched = False
+                        elif op == '>':
+                            if not (instance_value > value):
+                                matched = False
+                        elif op == '<':
+                            if not (instance_value < value):
+                                matched = False
+                        elif op == '>=':
+                            if not (instance_value >= value):
+                                matched = False
+                        if not matched:
+                            break
+
+                    if matched:
+                        if rule.contribution is not None:
+                            score += rule.contribution
+                        matched_rules.append(rule)
+                        break  # Only one match per tree
+
+            # Sigmoid
+            prob = 1.0 / (1.0 + math.exp(-score))
+            predicted_class = int(classes[1]) if prob >= 0.5 else int(classes[0])
+
+        else:
+            # Multiclass: compute score for each class group
+            for class_label in classes:
+                scores[class_label] = init_scores.get(class_label, 0.0)
+
+            for tree_id, tree_rules in tree_rules_map.items():
+                if not tree_rules:
+                    continue
+                class_group = tree_rules[0].class_group
+
+                for rule in tree_rules:
+                    if not rule.parsed_conditions and rule.contribution is not None:
+                        matched_rules.append(rule)
+                        continue
+
+                    matched = True
+                    for var, op, value in rule.parsed_conditions:
+                        instance_value = data.get(var)
+                        if instance_value is None:
+                            matched = False
+                            break
+                        if op == '<=':
+                            if not (instance_value <= value):
+                                matched = False
+                        elif op == '>':
+                            if not (instance_value > value):
+                                matched = False
+                        elif op == '<':
+                            if not (instance_value < value):
+                                matched = False
+                        elif op == '>=':
+                            if not (instance_value >= value):
+                                matched = False
+                        if not matched:
+                            break
+
+                    if matched:
+                        if rule.contribution is not None and class_group in scores:
+                            scores[class_group] += rule.contribution
+                        matched_rules.append(rule)
+                        break
+
+            # Argmax
+            best_class = max(scores, key=lambda c: scores[c])
+            try:
+                predicted_class = int(best_class)
+            except (ValueError, TypeError):
+                predicted_class = best_class
+
+        return predicted_class, matched_rules, None
 
     # Method to find similar rules between trees
     def find_duplicated_rules_between_trees(self):
@@ -590,6 +1025,14 @@ class RuleClassifier:
                         if op_pair in [{'<=', '>'}, {'<', '>='}, {'<', '>'}, {'>=', '<'}, {'<=', '<'}]:
                             is_duplicate = True
 
+                    # GBDT: siblings must also have the same leaf_value
+                    # to be considered redundant (different leaf values change
+                    # the residual sum and affect predictions)
+                    if is_duplicate and self.algorithm_type == 'Gradient Boosting Decision Trees':
+                        if (rule1.leaf_value is not None and rule2.leaf_value is not None
+                                and abs(rule1.leaf_value - rule2.leaf_value) > 1e-9):
+                            is_duplicate = False
+
                     if is_duplicate:
                         duplicated_rules.append((rule1, rule2))
                             
@@ -664,7 +1107,10 @@ class RuleClassifier:
         new_generalized_rules = []
 
         if similar_rules_soft:
-            print(f"Merging {len(similar_rules_soft)} pairs of boundary rules...")
+            # Silence per-iteration print to avoid clutter if desired, or keep it.
+            # user asked for "Merging X pairs..." to be consolidated, but seeing progress is also good.
+            # I'll keep the granular print but the summary is what counts.
+            print(f"Merging {len(similar_rules_soft)} pairs of duplicated rules...")
 
         for rule1, rule2 in similar_rules_soft:
             rules_to_remove.add(rule1)
@@ -675,7 +1121,13 @@ class RuleClassifier:
             common_conditions = rule1.conditions[:-1]
             
             new_rule_name = f"{rule1.name}_&_{rule2.name}"
-            new_rule = Rule(new_rule_name, rule1.class_, common_conditions)
+            if self.algorithm_type == 'Gradient Boosting Decision Trees':
+                new_rule = Rule(new_rule_name, rule1.class_, common_conditions,
+                                leaf_value=rule1.leaf_value,
+                                learning_rate=rule1.learning_rate,
+                                class_group=rule1.class_group)
+            else:
+                new_rule = Rule(new_rule_name, rule1.class_, common_conditions)
             
             # CRITICAL: Parse immediately so this rule is ready for the next analysis iteration
             new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
@@ -712,87 +1164,379 @@ class RuleClassifier:
         
         return final_list, similar_rules_soft
     
-    # Exports the rule set to a standalone native Python classifier file
-    def export_to_native_python(self, feature_names=None, filename="fast_classifier.py"):
+    # Method to find the sibling of a rule in the tree
+    def _find_sibling(self, rule, rules):
         """
-        Generates a standalone Python file with the decision logic using nested if/else.
+        Finds the sibling rule of a given rule in the decision tree.
 
-        This allows for high-performance inference outside of this package, using only 
-        standard Python dictionaries as input. The generated code uses .get() for safety against 
-        missing keys.
+        Two rules are siblings if they share the same prefix (all conditions
+        except the last) and their last conditions are complementary (same
+        variable and threshold but opposite operators: <= vs >, or < vs >=).
 
         Args:
-            feature_names (List[str], optional): List of feature names (kept for compatibility, 
-                                                 not strictly used as rules already contain names).
+            rule (Rule): The rule whose sibling to find.
+            rules (List[Rule]): The full list of rules to search.
+
+        Returns:
+            Rule|None: The sibling rule if found, otherwise None.
+        """
+        if not rule.parsed_conditions:
+            return None
+
+        # Build the prefix key (all conditions except the last)
+        rule_prefix = tuple(rule.parsed_conditions[:-1])
+        last_var, last_op, last_val = rule.parsed_conditions[-1]
+
+        # Define complementary operators
+        complement = {'<=': '>', '>': '<=', '<': '>=', '>=': '<'}
+        expected_op = complement.get(last_op)
+        if expected_op is None:
+            return None
+
+        for candidate in rules:
+            if candidate is rule:
+                continue
+            if not candidate.parsed_conditions:
+                continue
+
+            # Check prefix match
+            candidate_prefix = tuple(candidate.parsed_conditions[:-1])
+            if candidate_prefix != rule_prefix:
+                continue
+
+            # Check last condition: same variable, same threshold, complementary op
+            c_var, c_op, c_val = candidate.parsed_conditions[-1]
+            if c_var == last_var and c_op == expected_op and abs(c_val - last_val) < 1e-9:
+                return candidate
+
+        return None
+
+    # Method to promote sibling when removing specific rules
+    def _promote_siblings(self, rules_to_remove, all_rules):
+        """
+        Promotes sibling rules when their counterparts are removed.
+
+        When a low-usage rule is removed, its sibling (the other child of
+        the same parent node) becomes the sole representative of that region.
+        The sibling's last condition (which only existed to distinguish it
+        from the removed rule) is stripped, effectively promoting it to the
+        parent node's level.
+
+        **Critical**: Rules are processed from deepest to shallowest. This
+        ensures that when a removed rule's sibling is not a direct leaf but
+        a sub-branch (i.e., its sibling at the same depth doesn't exist as
+        a single rule), the deeper removals and promotions happen first,
+        potentially creating the sibling that the shallower removal needs.
+
+        Example:
+            Given tree:
+                          [x <= 5]
+                         /        \\
+                    [y <= 3]      D (usage: 200)
+                    /      \\
+                A (uso: 0)  [z <= 7]
+                            /      \\
+                         B (uso:0)  C (uso: 1)
+
+            Rules to remove: A (depth 2), B (depth 3)
+
+            Processing deepest first:
+            1. Remove B (depth 3) -> promote sibling C: becomes "x<=5 AND y>3 -> C"
+            2. Remove A (depth 2) -> now promoted C is A's sibling -> promote C: becomes "x<=5 -> C"
+
+            If processed shallowest first, step 2 would fail (no direct sibling found).
+
+        Args:
+            rules_to_remove (List[Rule]): Rules identified for removal.
+            all_rules (List[Rule]): The complete set of current rules.
+
+        Returns:
+            List[Rule]: The adjusted rule set after promotions.
+        """
+        # Work on a mutable copy
+        working_rules = list(all_rules)
+        promoted_count = 0
+
+        # Sort rules to remove by depth (deepest first)
+        sorted_to_remove = sorted(
+            rules_to_remove,
+            key=lambda r: len(r.parsed_conditions),
+            reverse=True
+        )
+
+        # Track which rules have been removed by identity
+        removed_ids = set()
+
+        for rule in sorted_to_remove:
+            if id(rule) in removed_ids:
+                continue
+
+            # Find the sibling of the rule being removed
+            sibling = self._find_sibling(rule, working_rules)
+
+            if sibling is not None and id(sibling) not in removed_ids:
+                # Promote the sibling: remove its last condition
+                sibling.conditions = sibling.conditions[:-1]
+                sibling.parsed_conditions = sibling.parsed_conditions[:-1]
+
+                # Update its name to indicate promotion
+                if "_promoted" not in sibling.name:
+                    sibling.name = f"{sibling.name}_promoted"
+
+                promoted_count += 1
+            # If no sibling is found, the rule is simply removed.
+            # Samples that would have matched it will fall through to
+            # default_class (existing fallback behavior).
+
+            # Remove the rule from working set
+            removed_ids.add(id(rule))
+            working_rules = [r for r in working_rules if id(r) != id(rule)]
+
+        if promoted_count > 0:
+            print(f"Promoted {promoted_count} sibling rule(s) after specific rule removal.")
+
+        return working_rules
+
+    # Exports the rule set to a standalone native Python classifier file
+    def export_to_native_python(self, feature_names=None, filename="examples/files/fast_classifier.py"):
+        """
+        Generates a standalone Python file with the decision logic.
+        
+        For Decision Trees, it exports a single nested if/else function.
+        For Random Forests, it exports multiple functions (one per tree) and a voting aggregator.
+
+        Args:
+            feature_names (List[str], optional): Kept for compatibility.
             filename (str): Output filename.
         """
         print(f"[EXPORT] Generating native classifier: {filename}")
         
-        # Determine which rules to export (Final if available, else Initial)
         rules_to_export = self.final_rules if self.final_rules else self.initial_rules
-
-        # Tree Structure: {id: {'l': left, 'r': right, 'f': feature, 't': threshold, 'v': value}}
-        # 'f': -2 indicates a leaf node
-        tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
-        next_id = 1
         
-        for rule in rules_to_export:
-            curr = 0
-            for var, op, val in rule.parsed_conditions:
-                # 'var' comes directly from the parsed rule (e.g., 'dur')
-                if tree_dict[curr]['f'] == -2:
-                    # Update current node to be a decision node
-                    tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                    
-                    # Create empty children
-                    tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    next_id += 2
-                
-                # Navigate tree
-                if op in ['<=', '<']:
-                    curr = tree_dict[curr]['l']
-                else:
-                    curr = tree_dict[curr]['r']
-            
-            # Set the leaf value (Class)
-            # Ensure we save as integer for consistency
-            try:
-                clean_class = int(str(rule.class_).replace('Class', '').strip())
-            except:
-                clean_class = rule.class_
-            tree_dict[curr]['v'] = clean_class
-
-        # Recursive function to generate Python code strings
-        def build_if_else(node_id, indent):
-            node = tree_dict[node_id]
-            tab = "    " * indent
-            
-            # Leaf Node
-            if node['f'] == -2: 
-                val = node['v']
-                # If value wasn't set (unreachable path), use default class
-                if val == -1: 
-                    try:
-                        val = int(str(self.default_class).replace('Class', '').strip())
-                    except:
-                        val = self.default_class
-                return f"{tab}return {val}\n"
-            
-            # Decision Node
-            feat_name = node['f']
-            
-            # OPTIMIZATION: Use sample.get(key, 0) instead of sample[key].
-            # This makes the standalone file robust against missing features in input dicts.
-            code = f"{tab}if sample.get('{feat_name}', 0) <= {node['t']}:\n"
-            code += build_if_else(node['l'], indent + 1)
-            code += f"{tab}else:\n"
-            code += build_if_else(node['r'], indent + 1)
-            return code
-
         with open(filename, "w") as f:
-            f.write("def predict(sample):\n")
-            f.write(build_if_else(0, 1))
+            
+            # --- GBDT Export Strategy (Additive Scoring) ---
+            if self.algorithm_type == 'Gradient Boosting Decision Trees':
+                f.write("import math\n\n")
+
+                tree_rules_map = defaultdict(list)
+                for rule in rules_to_export:
+                    if '_' in rule.name:
+                        tid = rule.name.split('_')[0]
+                    else:
+                        tid = rule.name
+                    tree_rules_map[tid].append(rule)
+
+                # Collect init scores and write tree functions
+                init_scores = {}
+                for tid, rules in tree_rules_map.items():
+                    if not rules:
+                        continue
+                    if len(rules) == 1 and not rules[0].parsed_conditions and rules[0].contribution is not None:
+                        init_scores[rules[0].class_group] = rules[0].contribution
+                        continue
+
+                    func_name = f'predict_{tid}'
+                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}}
+                    next_id = 1
+                    for rule in rules:
+                        curr = 0
+                        for var, op, val in rule.parsed_conditions:
+                            if tree_dict[curr]['f'] == -2:
+                                tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
+                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
+                                next_id += 2
+                            if op in ['<=', '<']:
+                                curr = tree_dict[curr]['l']
+                            else:
+                                curr = tree_dict[curr]['r']
+                        tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
+
+                    def _build_export_code(node_id, indent, td=tree_dict):
+                        node = td[node_id]
+                        tab = '    ' * indent
+                        if node['f'] == -2:
+                            return f'{tab}return {repr(float(node["v"]))}\n'
+                        feat = node['f']
+                        code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                        code += _build_export_code(node['l'], indent + 1, td)
+                        code += f'{tab}else:\n'
+                        code += _build_export_code(node['r'], indent + 1, td)
+                        return code
+
+                    f.write(f'def {func_name}(sample):\n')
+                    f.write(_build_export_code(0, 1))
+                    f.write('\n')
+
+                # Main predict function
+                is_binary = self._gbdt_is_binary
+                classes = self._gbdt_classes or []
+
+                f.write('def predict(sample):\n')
+
+                if is_binary and len(classes) >= 2:
+                    pos_class = classes[1]
+                    score_init = init_scores.get(pos_class, 0.0)
+                    f.write(f'    score = {repr(score_init)}\n')
+                    for tid, rules in tree_rules_map.items():
+                        if not rules:
+                            continue
+                        if len(rules) == 1 and not rules[0].parsed_conditions:
+                            continue
+                        if rules[0].class_group != pos_class:
+                            continue
+                        f.write(f'    score += predict_{tid}(sample)\n')
+                    f.write('    prob = 1.0 / (1.0 + math.exp(-score))\n')
+                    f.write(f'    return {int(classes[1])} if prob >= 0.5 else {int(classes[0])}\n')
+                else:
+                    for class_label in classes:
+                        score_init = init_scores.get(class_label, 0.0)
+                        f.write(f'    score_{class_label} = {repr(score_init)}\n')
+                    for tid, rules in tree_rules_map.items():
+                        if not rules:
+                            continue
+                        if len(rules) == 1 and not rules[0].parsed_conditions:
+                            continue
+                        class_group = rules[0].class_group
+                        f.write(f'    score_{class_group} += predict_{tid}(sample)\n')
+                    score_vars = [f'score_{cl}' for cl in classes]
+                    class_ints = [int(cl) for cl in classes]
+                    f.write(f'    scores = [{", ".join(score_vars)}]\n')
+                    f.write(f'    classes = {class_ints}\n')
+                    f.write('    return classes[scores.index(max(scores))]\n')
+
+            # --- Random Forest Export Strategy ---
+            elif self.algorithm_type == 'Random Forest':
+                f.write("from collections import Counter\n\n")
+                tree_rules_map = defaultdict(list)
+                for rule in rules_to_export:
+                    if "_" in rule.name:
+                        tid = rule.name.split('_')[0]
+                    else:
+                        tid = "Tree0" 
+                    tree_rules_map[tid].append(rule)
+                
+                # Generate a function for each tree
+                tree_func_names = []
+                for tid, rules in tree_rules_map.items():
+                    func_name = f"predict_{tid}"
+                    tree_func_names.append(func_name)
+                    
+                    # Build tree structure
+                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+                    next_id = 1
+                    
+                    for rule in rules:
+                        curr = 0
+                        for var, op, val in rule.parsed_conditions:
+                            if tree_dict[curr]['f'] == -2:
+                                tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                                next_id += 2
+                            if op in ['<=', '<']:
+                                curr = tree_dict[curr]['l']
+                            else:
+                                curr = tree_dict[curr]['r']
+                        
+                        try:
+                            clean_class = int(str(rule.class_).replace('Class', '').strip())
+                        except Exception:
+                            clean_class = rule.class_
+                        tree_dict[curr]['v'] = clean_class
+
+                    # Build code string for this tree
+                    def build_rf_code(node_id, indent):
+                        node = tree_dict[node_id]
+                        tab = "    " * indent
+                        if node['f'] == -2:
+                            val = node['v']
+                            if val == -1:
+                                return f"{tab}return None\n" 
+                            if isinstance(val, str):
+                                return f"{tab}return '{val}'\n"
+                            return f"{tab}return {val}\n"
+                        
+                        feat = node['f']
+                        # Use repr(float(t)) for precision
+                        code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                        code += build_rf_code(node['l'], indent + 1)
+                        code += f"{tab}else:\n"
+                        code += build_rf_code(node['r'], indent + 1)
+                        return code
+
+                    f.write(f"def {func_name}(sample):\n")
+                    f.write(build_rf_code(0, 1))
+                    f.write("\n")
+
+                # Generate Main Voting Function
+                f.write("def predict(sample):\n")
+                f.write("    votes = []\n")
+                for func in tree_func_names:
+                    f.write(f"    v = {func}(sample)\n")
+                    f.write("    if v is not None: votes.append(v)\n")
+                
+                try:
+                    default_val = int(str(self.default_class).replace('Class', '').strip())
+                except Exception:
+                    default_val = self.default_class
+                
+                if isinstance(default_val, str):
+                    def_str = f"'{default_val}'"
+                else:
+                    def_str = str(default_val)
+
+                f.write(f"    if not votes: return {def_str}\n")
+                f.write("    return Counter(votes).most_common(1)[0][0]\n")
+
+            # --- Decision Tree Export Strategy (Single Tree) ---
+            else:
+                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
+                next_id = 1
+                for rule in rules_to_export:
+                    curr = 0
+                    for var, op, val in rule.parsed_conditions:
+                        if tree_dict[curr]['f'] == -2:
+                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
+                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
+                            next_id += 2
+                        if op in ['<=', '<']:
+                            curr = tree_dict[curr]['l']
+                        else:
+                            curr = tree_dict[curr]['r']
+                    
+                    try:
+                        clean_class = int(str(rule.class_).replace('Class', '').strip())
+                    except Exception:
+                        clean_class = rule.class_
+                    tree_dict[curr]['v'] = clean_class
+
+                def build_dt_code(node_id, indent):
+                    node = tree_dict[node_id]
+                    tab = "    " * indent
+                    if node['f'] == -2:
+                        val = node['v']
+                        if val == -1:
+                            try:
+                                val = int(str(self.default_class).replace('Class', '').strip())
+                            except Exception:
+                                val = self.default_class
+                        if isinstance(val, str):
+                            return f"{tab}return '{val}'\n"
+                        return f"{tab}return {val}\n"
+                    
+                    feat = node['f']
+                    # Use repr(float(t)) for precision
+                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code += build_dt_code(node['l'], indent + 1)
+                    code += f"{tab}else:\n"
+                    code += build_dt_code(node['r'], indent + 1)
+                    return code
+
+                f.write("def predict(sample):\n")
+                f.write(build_dt_code(0, 1))
         
         print(f"[EXPORT] File '{filename}' generated.")
         
@@ -804,14 +1548,19 @@ class RuleClassifier:
         This method:
         - Applies optional duplicate rule removal (iteratively until convergence).
         - Recompiles the native Python model for speed.
-        - Runs evaluation using the appropriate algorithm.
+        - Runs evaluation using the appropriate algorithm via DTAnalyzer/RFAnalyzer/GBDTAnalyzer.
         - Optionally removes rules used less than or equal to a given threshold.
+        - Tracks and prints redundancy metrics by type.
 
         Args:
             file_path (str): Path to the CSV file containing data for evaluation.
             remove_duplicates (str): Strategy ("soft", "hard", "custom", "none").
             remove_below_n_classifications (int): Threshold for pruning low-usage rules.
         """
+        from .dt_analyzer import DTAnalyzer
+        from .rf_analyzer import RFAnalyzer
+        from .gbdt_analyzer import GBDTAnalyzer
+
         print("\n" + "*"*80)
         print("EXECUTING RULE ANALYSIS")
         print("*"*80 + "\n")
@@ -819,192 +1568,89 @@ class RuleClassifier:
         # Start with a copy of initial rules
         self.final_rules = list(self.initial_rules)
 
-        # 1. Duplicate Removal Loop
+        # 1. Create the appropriate analyzer
+        if self.algorithm_type == 'Decision Tree':
+            analyzer = DTAnalyzer(self)
+        elif self.algorithm_type == 'Random Forest':
+            analyzer = RFAnalyzer(self)
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            analyzer = GBDTAnalyzer(self)
+        else:
+            raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
+
+        # Store analyzer for later use (e.g., compare_initial_final_results)
+        self._analyzer = analyzer
+
+        # 2. Duplicate Removal Loop
+        all_intra_pairs = []
+        all_inter_groups = []
+
         if remove_duplicates != "none":
             iteration = 1
+            total_merged = 0
             while True:
                 prev_count = len(self.final_rules)
+
+                # Track inter-tree groups separately for RF "hard" method
+                inter_tree_groups = []
+                if remove_duplicates == "hard" and self.algorithm_type == 'Random Forest':
+                    inter_tree_groups = self.find_duplicated_rules_between_trees()
+                    all_inter_groups.extend(inter_tree_groups)
+
                 self.final_rules, self.duplicated_rules = self.adjust_and_remove_rules(remove_duplicates)
+                
+                merged_count = len(self.duplicated_rules)
+                total_merged += merged_count
+                all_intra_pairs.extend(self.duplicated_rules)
                 
                 # Convergence check: stop if no duplicates found or count didn't change
                 if not self.duplicated_rules or len(self.final_rules) == prev_count:
                     break
                 iteration += 1
+            
+            print(f"Total duplicated rules merged/removed: {total_merged}")
 
-        # 2. CRITICAL OPTIMIZATION: Update native model immediately
-        # This ensures the subsequent analysis steps use the optimized compiled function
-        # instead of slow object iteration.
+        # 3. Update redundancy counters on the analyzer
+        if isinstance(analyzer, DTAnalyzer):
+            analyzer.track_intra_tree_from_duplicates(all_intra_pairs)
+        elif isinstance(analyzer, RFAnalyzer):
+            analyzer.track_from_adjust_and_remove(
+                remove_duplicates, all_intra_pairs, all_inter_groups
+            )
+        elif isinstance(analyzer, GBDTAnalyzer):
+            analyzer.track_from_adjust_and_remove(
+                remove_duplicates, all_intra_pairs
+            )
+
+        # 4. CRITICAL OPTIMIZATION: Update native model immediately
         self.update_native_model(self.final_rules)
 
-        # 3. Route to specific analyzer
-        if self.algorithm_type == 'Random Forest':
-            self.execute_rule_analysis_rf(file_path, remove_below_n_classifications)
-        elif self.algorithm_type == 'Decision Tree':
-            self.execute_rule_analysis_dt(file_path, remove_below_n_classifications)
+        # 5. Delegate to the specific analyzer for evaluation + low-usage pruning
+        analyzer.execute_rule_analysis(file_path, remove_below_n_classifications)
 
     # Method to execute the rule analysis for Decision Tree
     def execute_rule_analysis_dt(self, file_path, remove_below_n_classifications=-1):
-        """
-        Evaluates Decision Tree rules on a dataset and logs classification performance.
-
-        This method tests the rules, evaluates performance, removes infrequent rules 
-        (if specified), and logs detailed diagnostics to 'examples/files/output_classifier_dt.txt'.
+        """Delegates to DTAnalyzer. Kept for backward compatibility.
 
         Args:
             file_path (str): Path to the CSV file.
             remove_below_n_classifications (int): Minimum usage count threshold.
         """
-        print(f"Testing Decision Tree Rules on {file_path}...")
-        start_time = time.time()
-
-        # 1. Load Data
-        _, _, X_test, y_test, _, _, feature_names = self.process_data(".", file_path, is_test_only=True)
-        sample_dicts = [dict(zip(feature_names, row)) for row in X_test]
-        total_samples = len(y_test)
-
-        # 2. Reset Counters
-        for rule in self.final_rules:
-            rule.usage_count = 0
-            rule.error_count = 0
-
-        # 3. Classification Loop
-        # We iterate samples to collect usage stats per rule. 
-        # Note: classify_dt is optimized to be fast, but we cannot use native_fn 
-        # for stats because native_fn hides which rule triggered.
-        y_pred = []
-        
-        for i, sample in enumerate(sample_dicts):
-            true_label = int(y_test[i])
-            
-            # Find the specific rule that applies
-            matched_rule = self.classify_dt(sample, self.final_rules)
-            
-            if matched_rule:
-                # Update Rule Stats
-                matched_rule.usage_count += 1
-                try:
-                    pred_label = int(str(matched_rule.class_).replace('Class', '').strip())
-                except:
-                    pred_label = matched_rule.class_
-                
-                if pred_label != true_label:
-                    matched_rule.error_count += 1
-            else:
-                # Fallback
-                try:
-                    pred_label = int(str(self.default_class).replace('Class', '').strip())
-                except:
-                    pred_label = self.default_class
-            
-            y_pred.append(pred_label)
-
-        # 4. Metrics
-        y_pred = np.array(y_pred)
-        correct = np.sum(y_pred == y_test)
-        
-        self.display_metrics(y_test, y_pred, correct, total_samples, class_names=self.class_labels)
-
-        # 5. Pruning (Specific Rules)
-        if remove_below_n_classifications > -1:
-            print(f"\nPruning rules with <= {remove_below_n_classifications} classifications...")
-            rules_to_keep = []
-            self.specific_rules = []
-            
-            for rule in self.final_rules:
-                if rule.usage_count > remove_below_n_classifications:
-                    rules_to_keep.append(rule)
-                else:
-                    self.specific_rules.append(rule)
-            
-            self.final_rules = rules_to_keep
-            # Recompile native model after pruning
-            self.update_native_model(self.final_rules)
-
-        # 6. Generate Report
-        self._write_report(
-            "examples/files/output_classifier_dt.txt", 
-            file_path, correct, total_samples, 
-            remove_below_n_classifications
-        )
-
-        print(f"Analysis Time: {time.time() - start_time:.3f}s")
-        self._save_final_model()
+        from .dt_analyzer import DTAnalyzer
+        analyzer = DTAnalyzer(self)
+        analyzer.execute_rule_analysis(file_path, remove_below_n_classifications)
 
     # Method to execute the rule analysis for Random Forest
     def execute_rule_analysis_rf(self, file_path, remove_below_n_classifications=-1):
+        """Delegates to RFAnalyzer. Kept for backward compatibility.
+
+        Args:
+            file_path (str): Path to the CSV file.
+            remove_below_n_classifications (int): Minimum usage count threshold.
         """
-        Evaluates Random Forest rules on a dataset and logs classification performance.
-
-        Uses voting logic from classify_rf. Logs results to 'examples/files/output_classifier_rf.txt'.
-        """
-        print(f"Testing Random Forest Rules on {file_path}...")
-        start_time = time.time()
-
-        _, _, X_test, y_test, _, _, feature_names = self.process_data(".", file_path, is_test_only=True)
-        sample_dicts = [dict(zip(feature_names, row)) for row in X_test]
-        total_samples = len(y_test)
-
-        # Reset counts
-        for rule in self.final_rules:
-            rule.usage_count = 0
-            rule.error_count = 0
-
-        y_pred = []
-
-        # Classification Loop (CPU Optimized)
-        for i, sample in enumerate(sample_dicts):
-            true_label = int(y_test[i])
-            
-            # Get prediction and the list of rules that voted
-            pred_label, _, _, matched_rules = self.classify_rf(sample, self.final_rules)
-            
-            # Convert prediction to int
-            try:
-                pred_label = int(str(pred_label).replace('Class', '').strip())
-            except:
-                pass
-            y_pred.append(pred_label)
-            
-            # Update stats for ALL rules that participated in the vote
-            for rule in matched_rules:
-                rule.usage_count += 1
-                try:
-                    r_class = int(str(rule.class_).replace('Class', '').strip())
-                except:
-                    r_class = rule.class_
-                
-                # In RF, "error" for a rule is ambiguous. 
-                # We define it here as: the rule voted for the wrong class (regardless of final outcome)
-                if r_class != true_label:
-                    rule.error_count += 1
-
-        # Metrics
-        y_pred = np.array(y_pred)
-        correct = np.sum(y_pred == y_test)
-        self.display_metrics(y_test, y_pred, correct, total_samples, class_names=self.class_labels)
-
-        # Pruning
-        if remove_below_n_classifications > -1:
-            print(f"\nPruning rules with <= {remove_below_n_classifications} classifications...")
-            rules_to_keep = []
-            self.specific_rules = []
-            for rule in self.final_rules:
-                if rule.usage_count > remove_below_n_classifications:
-                    rules_to_keep.append(rule)
-                else:
-                    self.specific_rules.append(rule)
-            self.final_rules = rules_to_keep
-            self.update_native_model(self.final_rules)
-
-        # Generate Report
-        self._write_report(
-            "examples/files/output_classifier_rf.txt", 
-            file_path, correct, total_samples, 
-            remove_below_n_classifications
-        )
-
-        print(f"Analysis Time: {time.time() - start_time:.3f}s")
-        self._save_final_model()
+        from .rf_analyzer import RFAnalyzer
+        analyzer = RFAnalyzer(self)
+        analyzer.execute_rule_analysis(file_path, remove_below_n_classifications)
 
     # Helper to save the final model state
     def _save_final_model(self):
@@ -1247,242 +1893,64 @@ class RuleClassifier:
         """
         Compares the classification performance of the initial and final rule sets.
 
-        This method evaluates both the original (`initial_rules`) and pruned (`final_rules`)
-        rule sets on the same dataset, and logs performance metrics such as:
-        - Accuracy,
-        - Confusion matrices,
-        - Divergent predictions between the two rule sets,
-        - Interpretability metrics per tree.
-
-        It delegates to algorithm-specific methods based on the classifier type.
+        Delegates to DTAnalyzer, RFAnalyzer, or GBDTAnalyzer.  If ``execute_rule_analysis``
+        was called earlier in the same session, the cached ``_analyzer`` is
+        reused; otherwise a fresh one is created.
 
         Args:
             file_path (str): Path to the CSV file used for evaluation.
         """
-        # Robust data loading using static method
-        _, _, X_test, y_test, _, target_column_name, feature_names = RuleClassifier.process_data(".", file_path, is_test_only=True)
-        
-        # Convert to DataFrame for easier handling in comparisons (optional but kept for structure compatibility)
-        df_test = pd.DataFrame(X_test, columns=feature_names)
-        df_test[target_column_name] = y_test
+        from .dt_analyzer import DTAnalyzer
+        from .rf_analyzer import RFAnalyzer
+        from .gbdt_analyzer import GBDTAnalyzer
 
-        if self.algorithm_type == 'Random Forest':
-            self.compare_initial_final_results_rf(df_test, target_column_name)
+        # Reuse the analyzer created during execute_rule_analysis when possible
+        if hasattr(self, '_analyzer') and self._analyzer is not None:
+            self._analyzer.compare_initial_final_results(file_path)
+        elif self.algorithm_type == 'Random Forest':
+            RFAnalyzer(self).compare_initial_final_results(file_path)
         elif self.algorithm_type == 'Decision Tree':
-            self.compare_initial_final_results_dt(df_test, target_column_name)
+            DTAnalyzer(self).compare_initial_final_results(file_path)
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            GBDTAnalyzer(self).compare_initial_final_results(file_path)
         else:
             raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
 
     # Method to compare initial and final results for Decision Tree
-    def compare_initial_final_results_dt(self, df_test, target_column_name):
+    def compare_initial_final_results_dt(self, df_test=None, target_column_name=None, file_path=None):
+        """Delegates to DTAnalyzer. Kept for backward compatibility.
+
+        Args:
+            df_test: Ignored (kept for signature compatibility).
+            target_column_name: Ignored (kept for signature compatibility).
+            file_path (str, optional): Path to the CSV test file.
         """
-        Compares performance of initial vs final rules for Decision Tree models.
-        
-        Optimized to use native execution for final rules where possible.
-        """
-        print("\n" + "*"*80)
-        print("RUNNING INITIAL AND FINAL CLASSIFICATIONS (Decision Tree)")
-        print("*"*80 + "\n")
-
-        # Prepare Data
-        df = df_test.copy()
-        y_true = df[target_column_name].astype(int).values
-        feature_cols = [c for c in df.columns if c != target_column_name]
-        
-        # Pre-convert to list of dicts for fast iteration
-        sample_dicts = [dict(zip(feature_cols, row)) for row in df[feature_cols].values]
-        total_samples = len(y_true)
-        indices = df.index
-
-        with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
-            f.write("******************** INITIAL VS FINAL DECISION TREE CLASSIFICATION REPORT ********************\n\n")
-
-            # --- 1. Scikit-Learn Model ---
-            print("Evaluated Scikit-Learn Model...")
-            f.write("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
-            try:
-                with open('examples/files/sklearn_model.pkl', 'rb') as mf:
-                    sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(df[feature_cols].values)
-                correct_sk = np.sum(y_pred_sk == y_true)
-                self.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, self.class_labels)
-            except Exception as e:
-                msg = f"Could not load/evaluate sklearn model: {e}"
-                print(msg)
-                f.write(msg + "\n")
-
-            # --- 2. Initial Rules (Iterative) ---
-            print("\nEvaluating Initial Rules...")
-            f.write("\n******************************* INITIAL MODEL *******************************\n")
-            
-            y_pred_initial = []
-            for sample in sample_dicts:
-                matched = self.classify_dt(sample, self.initial_rules)
-                if matched:
-                    try:
-                        pred = int(str(matched.class_).replace('Class', '').strip())
-                    except:
-                        pred = matched.class_
-                else:
-                    try:
-                        pred = int(str(self.default_class).replace('Class', '').strip())
-                    except:
-                        pred = self.default_class
-                y_pred_initial.append(pred)
-            
-            y_pred_initial = np.array(y_pred_initial)
-            correct_initial = np.sum(y_pred_initial == y_true)
-            self.display_metrics(y_true, y_pred_initial, correct_initial, total_samples, f, self.class_labels)
-            f.write(f"\nNumber of initial rules: {len(self.initial_rules)}\n")
-
-            # --- 3. Final Rules (Native/Fast) ---
-            print("\nEvaluating Final Rules...")
-            f.write("\n******************************* FINAL MODEL *******************************\n")
-            
-            y_pred_final = []
-            # Use native function if available (it corresponds to final_rules after analysis)
-            use_native = (self.native_fn is not None)
-            
-            for sample in sample_dicts:
-                if use_native:
-                    try:
-                        # native_fn returns (pred, votes, proba)
-                        pred, _, _ = self.native_fn(sample)
-                    except:
-                        # Fallback
-                        matched = self.classify_dt(sample, self.final_rules)
-                        if matched:
-                            pred = int(str(matched.class_).replace('Class', '').strip())
-                        else:
-                            pred = int(str(self.default_class).replace('Class', '').strip())
-                else:
-                     matched = self.classify_dt(sample, self.final_rules)
-                     if matched:
-                        try:
-                            pred = int(str(matched.class_).replace('Class', '').strip())
-                        except:
-                            pred = matched.class_
-                     else:
-                        pred = int(str(self.default_class).replace('Class', '').strip())
-                y_pred_final.append(pred)
-
-            y_pred_final = np.array(y_pred_final)
-            correct_final = np.sum(y_pred_final == y_true)
-            self.display_metrics(y_true, y_pred_final, correct_final, total_samples, f, self.class_labels)
-            f.write(f"\nNumber of final rules: {len(self.final_rules)}\n")
-
-            # --- 4. Divergent Cases ---
-            print("\nAnalyzing Divergent Cases...")
-            f.write("\n******************************* DIVERGENT CASES *******************************\n")
-            
-            divergent_count = 0
-            for i in range(total_samples):
-                if y_pred_initial[i] != y_pred_final[i]:
-                    divergent_count += 1
-                    f.write(f"Index: {indices[i]}, Initial: {y_pred_initial[i]}, Final: {y_pred_final[i]}, Actual: {y_true[i]}\n")
-            
-            print(f"Total divergent cases: {divergent_count}")
-            f.write(f"Total divergent cases: {divergent_count}\n")
-            if divergent_count == 0: f.write("No divergent cases found.\n")
-
-            # --- 5. Interpretability Metrics ---
-            print("\nCalculating Interpretability Metrics...")
-            f.write("\n******************************* INTERPRETABILITY METRICS *******************************\n")
-            
-            n_features = len(feature_cols)
-            metrics_init = self.calculate_structural_complexity(self.initial_rules, n_features)
-            metrics_final = self.calculate_structural_complexity(self.final_rules, n_features)
-            
-            f.write("\nMetrics (Initial):\n")
-            for k, v in metrics_init.items():
-                f.write(f"  {k}: {v}\n")
-            
-            f.write("\nMetrics (Final):\n")
-            for k, v in metrics_final.items():
-                diff = ""
-                if isinstance(v, (int, float)) and metrics_init.get(k, 0) != 0:
-                    pct = ((v - metrics_init[k]) / metrics_init[k]) * 100
-                    diff = f" ({pct:+.1f}%)"
-                f.write(f"  {k}: {v}{diff}\n")
+        from .dt_analyzer import DTAnalyzer
+        # If called via the old dispatcher with df_test, we still need a file_path.
+        # The new DTAnalyzer.compare_initial_final_results loads data from the path.
+        if file_path is None:
+            raise ValueError(
+                "compare_initial_final_results_dt now requires 'file_path'. "
+                "Use compare_initial_final_results(file_path) instead."
+            )
+        DTAnalyzer(self).compare_initial_final_results(file_path)
 
     # Method to compare initial and final results for Random Forest
-    def compare_initial_final_results_rf(self, df_test, target_column_name):
+    def compare_initial_final_results_rf(self, df_test=None, target_column_name=None, file_path=None):
+        """Delegates to RFAnalyzer. Kept for backward compatibility.
+
+        Args:
+            df_test: Ignored (kept for signature compatibility).
+            target_column_name: Ignored (kept for signature compatibility).
+            file_path (str, optional): Path to the CSV test file.
         """
-        Compares performance of initial vs final rules for Random Forest models.
-        """
-        print("\n" + "*"*80)
-        print("RUNNING INITIAL AND FINAL CLASSIFICATIONS (Random Forest)")
-        print("*"*80 + "\n")
-
-        df = df_test.copy()
-        y_true = df[target_column_name].astype(int).values
-        feature_cols = [c for c in df.columns if c != target_column_name]
-        sample_dicts = [dict(zip(feature_cols, row)) for row in df[feature_cols].values]
-        total_samples = len(y_true)
-        indices = df.index
-
-        with open('examples/files/output_final_classifier_rf.txt', 'w') as f:
-            f.write("******************** INITIAL VS FINAL RANDOM FOREST CLASSIFICATION REPORT ********************\n\n")
-
-            # 1. Scikit-Learn
-            f.write("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
-            try:
-                with open('examples/files/sklearn_model.pkl', 'rb') as mf:
-                    sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(df[feature_cols].values)
-                correct_sk = np.sum(y_pred_sk == y_true)
-                self.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, self.class_labels)
-            except Exception:
-                f.write("Could not load/evaluate sklearn model.\n")
-
-            # 2. Initial Rules
-            print("Evaluating Initial Rules...")
-            f.write("\n******************************* INITIAL MODEL *******************************\n")
-            y_pred_initial = []
-            for sample in sample_dicts:
-                pred, _, _, _ = self.classify_rf(sample, self.initial_rules)
-                try: pred = int(str(pred).replace('Class', '').strip())
-                except: pass
-                y_pred_initial.append(pred)
-            
-            y_pred_initial = np.array(y_pred_initial)
-            correct_init = np.sum(y_pred_initial == y_true)
-            self.display_metrics(y_true, y_pred_initial, correct_init, total_samples, f, self.class_labels)
-            
-            # 3. Final Rules
-            print("Evaluating Final Rules...")
-            f.write("\n******************************* FINAL MODEL *******************************\n")
-            y_pred_final = []
-            for sample in sample_dicts:
-                pred, _, _, _ = self.classify_rf(sample, self.final_rules)
-                try: pred = int(str(pred).replace('Class', '').strip())
-                except: pass
-                y_pred_final.append(pred)
-                
-            y_pred_final = np.array(y_pred_final)
-            correct_final = np.sum(y_pred_final == y_true)
-            self.display_metrics(y_true, y_pred_final, correct_final, total_samples, f, self.class_labels)
-
-            # 4. Divergence & Metrics
-            divergent_count = np.sum(y_pred_initial != y_pred_final)
-            print(f"Total divergent cases: {divergent_count}")
-            f.write(f"\n******************************* DIVERGENT CASES *******************************\n")
-            f.write(f"Total divergent cases: {divergent_count}\n")
-            
-            # Metrics
-            n_features = len(feature_cols)
-            metrics_init = self.calculate_structural_complexity(self.initial_rules, n_features)
-            metrics_final = self.calculate_structural_complexity(self.final_rules, n_features)
-            
-            f.write("\n******************************* INTERPRETABILITY METRICS *******************************\n")
-            f.write("Metrics (Final vs Initial):\n")
-            for k, v in metrics_final.items():
-                init_v = metrics_init.get(k, 0)
-                diff = ""
-                if isinstance(v, (int, float)) and init_v != 0:
-                    pct = ((v - init_v) / init_v) * 100
-                    diff = f" ({pct:+.1f}%)"
-                f.write(f"  {k}: {v}{diff}\n")
+        from .rf_analyzer import RFAnalyzer
+        if file_path is None:
+            raise ValueError(
+                "compare_initial_final_results_rf now requires 'file_path'. "
+                "Use compare_initial_final_results(file_path) instead."
+            )
+        RFAnalyzer(self).compare_initial_final_results(file_path)
 
     # Method to edit rules manually
     def edit_rules(self):
@@ -1543,7 +2011,7 @@ class RuleClassifier:
             while True:
                 print(f"\n--- Editing Rule: {selected_rule.name} ---")
                 print(f"  Current Class: {selected_rule.class_}")
-                print(f"  Current Conditions:")
+                print("  Current Conditions:")
                 for i, cond in enumerate(selected_rule.conditions):
                     print(f"    [{i}] {cond}")
                 
@@ -1699,7 +2167,7 @@ class RuleClassifier:
                     first_line = f.readline().strip()
                     # Heuristic: if line contains letters, assume it's a header
                     has_header = any(c.isalpha() for c in first_line)
-            except:
+            except Exception:
                 pass
 
             header_row = 0 if has_header else None
@@ -1734,7 +2202,7 @@ class RuleClassifier:
                     except ValueError:
                         # Fallback: simple factorization if it's a string category
                         codes, _ = pd.factorize(df_test[col])
-                        df_test[col] = codes
+                        df_test[col] = pd.Series(codes, index=df_test.index)
 
             X_test = df_test.iloc[:, :-1].values.astype(float)
             y_test = df_test.iloc[:, -1].values.astype(int) # Assumes target is interpretable as int
@@ -1751,13 +2219,13 @@ class RuleClassifier:
             if df_train[col].dtype == 'object':
                 le = LabelEncoder()
                 # Convert to string to handle mixed types safely
-                df_train[col] = le.fit_transform(df_train[col].astype(str))
+                df_train[col] = pd.Series(le.fit_transform(df_train[col].astype(str)), index=df_train.index)
                 
                 # Transform Test set if column exists
                 if col in df_test.columns:
                     # Handle unseen labels: map them to the first known class to avoid crashes
                     df_test[col] = df_test[col].apply(lambda x: x if x in le.classes_ else le.classes_[0])
-                    df_test[col] = le.transform(df_test[col].astype(str))
+                    df_test[col] = pd.Series(le.transform(df_test[col].astype(str)), index=df_test.index)
 
         # Extract Metadata
         feature_names = df_train.columns[:-1].tolist()
@@ -1803,7 +2271,7 @@ class RuleClassifier:
         
         # Mapping feature indices to names
         feature_name = [
-            feature_names[i] if i != _tree.TREE_UNDEFINED else "undefined!"
+            feature_names[i] if i != -2 else "undefined!"
             for i in tree_.feature
         ]
         
@@ -1821,7 +2289,7 @@ class RuleClassifier:
                 conditions_str (List[str]): List of condition strings accumulated so far (e.g., ["v1 <= 0.5", "v2 > 0.3"]).
                 conditions_parsed (List[Tuple[str, str, float]]): List of parsed conditions as tuples (variable, operator, value).
             """
-            if tree_.feature[node] != _tree.TREE_UNDEFINED:
+            if tree_.feature[node] != -2:
                 name = feature_name[node]
                 threshold = tree_.threshold[node]
                 
@@ -1891,8 +2359,12 @@ class RuleClassifier:
         rules = []
         if algorithm_type == 'Random Forest':
             # Iterate over all trees in the forest
-            for estimator in model.estimators_:
-                rules.append(RuleClassifier.get_rules(estimator, feature_names, class_names))
+            for i, estimator in enumerate(model.estimators_):
+                tree_rules = RuleClassifier.get_rules(estimator, feature_names, class_names)
+                # Add Tree Identifier to Rule Names (DT{i}_...)
+                for rule in tree_rules:
+                    rule.name = f"DT{i}_{rule.name}"
+                rules.append(tree_rules)
         
         elif algorithm_type == 'Decision Tree':
             # Single tree
@@ -1902,6 +2374,116 @@ class RuleClassifier:
             raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
         
         return rules
+
+    # Method to extract rules from a Gradient Boosting model
+    @staticmethod
+    def get_gbdt_rules(model, feature_names, class_names):
+        """
+        Extracts rules from a trained GradientBoostingClassifier into standard Rule objects.
+
+        Each leaf in each boosting tree becomes a Rule with GBDT-specific metadata
+        (leaf_value, learning_rate, contribution, class_group). An additional
+        init rule (no conditions) is created per class group to represent the
+        initial score from the prior estimator.
+
+        Args:
+            model (GradientBoostingClassifier): A fitted sklearn GBDT model.
+            feature_names (List[str]): Feature names used during training.
+            class_names (List[str]): Class label strings.
+
+        Returns:
+            Tuple[List[Rule], Dict[str, float], bool, List[str]]:
+                - List of all Rule objects (init rules + tree rules).
+                - Dict mapping class_group -> init_score.
+                - Whether the model is binary classification.
+                - List of class label strings.
+        """
+        classes = [str(c) for c in model.classes_]
+        is_binary = len(classes) == 2
+        learning_rate = model.get_params()['learning_rate']
+
+        all_rules = []
+        init_scores = {}
+
+        # For binary: only positive class (index 1) has trees, stored in estimators_[:, 0]
+        # For multiclass: each class has its own trees, stored in estimators_[:, class_idx]
+        class_iter = (
+            [(1, classes[1])] if is_binary
+            else list(enumerate(classes))
+        )
+
+        for class_idx, class_label in class_iter:
+            # Compute init score from the prior estimator (DummyClassifier)
+            init = model.init_
+            if init == 'zero':
+                init_score = 0.0
+            else:
+                n_features = len(feature_names)
+                dummy_sample = np.zeros((1, n_features))
+                init_preds = np.asarray(init.predict_proba(dummy_sample))
+                col_idx = class_idx if not is_binary else 0
+                init_score = float(np.log(init_preds[0, col_idx] + 1e-15))
+
+            init_scores[class_label] = init_score
+
+            # Create init rule (no conditions, just a constant score)
+            init_rule_name = f'GBDT{class_label}T0_Init_Class{class_label}'
+            init_rule = Rule(
+                init_rule_name, str(class_label), [],
+                leaf_value=init_score, learning_rate=None,
+                class_group=str(class_label),
+            )
+            init_rule.parsed_conditions = []
+            all_rules.append(init_rule)
+
+            # Extract rules from each estimator tree
+            estimator_col = class_idx if not is_binary else 0
+            for tree_idx, estimator in enumerate(model.estimators_[:, estimator_col]):
+                tree_ = estimator.tree_
+                tree_rules = []
+
+                def recurse(node_id, conditions_str, conditions_parsed):
+                    left = int(tree_.children_left[node_id])
+                    right = int(tree_.children_right[node_id])
+
+                    if left == right:  # leaf
+                        leaf_value = float(tree_.value[node_id, 0, 0])
+                        leaf_idx = len(tree_rules)
+                        rule_name = (
+                            f'GBDT{class_label}T{tree_idx + 1}'
+                            f'_Rule{leaf_idx}_Class{class_label}'
+                        )
+                        rule = Rule(
+                            rule_name, str(class_label), list(conditions_str),
+                            leaf_value=leaf_value, learning_rate=learning_rate,
+                            class_group=str(class_label),
+                        )
+                        rule.parsed_conditions = list(conditions_parsed)
+                        tree_rules.append(rule)
+                        return
+
+                    feat_idx = int(tree_.feature[node_id])
+                    feat_name = feature_names[feat_idx]
+                    threshold = float(tree_.threshold[node_id])
+                    threshold_str = f'{threshold}'
+
+                    # Left child (<=)
+                    recurse(
+                        left,
+                        conditions_str + [f'{feat_name} <= {threshold_str}'],
+                        conditions_parsed + [(feat_name, '<=', threshold)],
+                    )
+                    # Right child (>)
+                    recurse(
+                        right,
+                        conditions_str + [f'{feat_name} > {threshold_str}'],
+                        conditions_parsed + [(feat_name, '>', threshold)],
+                    )
+
+                recurse(0, [], [])
+                all_rules.extend(tree_rules)
+
+        return all_rules, init_scores, is_binary, classes
 
     # Method to generate a classifier model based on rules
     @staticmethod
@@ -1955,7 +2537,7 @@ class RuleClassifier:
             test_path (str): Path to testing CSV.
             model_parameters (dict): Arguments for the sklearn classifier.
             model_path (Optional[str]): Path to existing .pkl model to skip training.
-            algorithm_type (str): 'Random Forest' or 'Decision Tree'.
+            algorithm_type (str): 'Random Forest', 'Decision Tree', or 'Gradient Boosting Decision Trees'.
 
         Returns:
             RuleClassifier: The final rule-based model.
@@ -1970,22 +2552,36 @@ class RuleClassifier:
         # Returns correctly encoded data and class names
         X_train, y_train, X_test, y_test, class_names, _, feature_names = RuleClassifier.process_data(train_path, test_path)
 
+        # Ensure class_names is always a list (process_data may return None in test-only mode)
+        if class_names is None:
+            class_names = [str(c) for c in sorted(np.unique(np.asarray(y_test)))]
+
         # 2. Train or Load Model
         if model_path:
             print(f"Loading model from: {model_path}")
             with open(model_path, 'rb') as model_file:
                 model = pickle.load(model_file)
         else:
+            if X_train is None or y_train is None:
+                raise ValueError("Training data could not be loaded. Please check the train_path parameter.")
+            
             print(f"Training a new Scikit-Learn {algorithm_type}...")
             if algorithm_type == 'Random Forest':
                 model = RandomForestClassifier(**model_parameters)
             elif algorithm_type == 'Decision Tree':
                 model = DecisionTreeClassifier(**model_parameters)
+            elif algorithm_type == 'Gradient Boosting Decision Trees':
+                model = GradientBoostingClassifier(**model_parameters)
             else:
                 raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
             
             # Fit model
-            model.fit(X_train, y_train)
+            # For GBDT, fit with DataFrame so feature_names_in_ is populated
+            if algorithm_type == 'Gradient Boosting Decision Trees':
+                X_train_fit = pd.DataFrame(X_train, columns=feature_names)
+                model.fit(X_train_fit, np.asarray(y_train))
+            else:
+                model.fit(X_train, np.asarray(y_train))
 
             # Save Sklearn model
             model_save_path = 'examples/files/sklearn_model.pkl'
@@ -1995,13 +2591,50 @@ class RuleClassifier:
 
         # 3. Test Scikit-Learn Model (Benchmark)
         print("\nTesting Scikit-Learn Model (Benchmark):")
-        y_pred = model.predict(X_test)
+        # For GBDT, use DataFrame to avoid feature name warnings
+        if algorithm_type == 'Gradient Boosting Decision Trees':
+            X_test_predict = pd.DataFrame(X_test, columns=feature_names)
+        else:
+            X_test_predict = X_test
+        y_pred = model.predict(X_test_predict)
         
         correct = np.sum(y_pred == y_test)
         total = len(y_test)
         
         # Display metrics using the extracted class names for better readability
         RuleClassifier.display_metrics(y_test, y_pred, correct, total, class_names=class_names)
+
+        # --- GBDT: Extract standard Rule objects, same as DT/RF ---
+        if algorithm_type == 'Gradient Boosting Decision Trees':
+            print("\nExtracting GBDT rules into standard Rule objects...")
+            rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
+                model, feature_names, class_names
+            )
+            print(f"Extracted {len(rules)} GBDT rules.")
+
+            # Build RuleClassifier using standard constructor
+            # (constructor defers native compilation for GBDT)
+            classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+
+            # Set GBDT-specific metadata
+            classifier._gbdt_init_scores = init_scores
+            classifier._gbdt_is_binary = is_binary
+            classifier._gbdt_classes = gbdt_classes
+
+            # Compile native model now that metadata is set
+            classifier.update_native_model(classifier.initial_rules)
+
+            # Save initial model (after metadata is set)
+            path = 'examples/files/initial_model.pkl'
+            try:
+                with open(path, 'wb') as model_file:
+                    pickle.dump(classifier, model_file)
+                print(f"Classifier file saved: {path}")
+            except Exception as e:
+                print(f"Warning: Could not save classifier to {path}. Error: {e}")
+
+            print(f"Algorithm Type: {classifier.algorithm_type}")
+            return classifier
 
         # 4. Extract Rules
         # We pass class_names so the rules are generated with "Class_Normal" instead of "Class_0"

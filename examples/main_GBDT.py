@@ -25,10 +25,10 @@ test_path = "examples/data/covid_test.csv"
 # test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
 # Model parameters
-model_parameters = {"min_samples_leaf": 1, "min_samples_split": 2, "max_features": "sqrt", "max_depth": None, "n_estimators": 100, "bootstrap": True, "random_state": 42 }
+model_parameters = {}
 
 # Generating the initial rule based model
-classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Random Forest')
+classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Gradient Boosting Decision Trees')
 
 # Executing the rule analysis method
 # remove_duplicates = "soft" (in the same tree, probably does not affect the final metrics), "hard" (between trees, may affect the final metrics), "custom" (custom function to remove duplicates) or "none" (no removal)
