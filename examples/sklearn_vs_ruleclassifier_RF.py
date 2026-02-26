@@ -6,11 +6,12 @@ import numpy as np
 import pandas as pd
 import importlib
 
-# Adiciona o diretório pai ao path para encontrar o pacote pyruleanalyzer
+# Adiciona o diretorio pai ao path para encontrar o pacote pyruleanalyzer
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer._accel import HAS_C_EXTENSION
 
-# --- CONFIGURAÇÃO ---
+# --- CONFIGURACAO ---
 # Escolha o dataset descomentando abaixo
 # train_path = "examples/data/covid_train.csv"
 # test_path = "examples/data/covid_test.csv"
@@ -27,12 +28,11 @@ test_path = "examples/data/A Machine Learning-Based Classification and Predictio
 # train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
 # test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
-# Configuração Específica para Random Forest
-# Recomendado limitar profundidade e estimadores para testes iniciais para não gerar milhões de regras
+# Configuracao Especifica para Random Forest
 model_params = {
     # "random_state": 42,
     # "n_estimators": 10,
-    # # ,'max_depth': 10       # Profundidade máxima para manter as regras legíveis
+    # "max_depth": 10,
 }
 
 # ==============================================================================
@@ -43,42 +43,41 @@ classifier = RuleClassifier.new_classifier(
     train_path, test_path, model_params, algorithm_type="Random Forest"
 )
 
-# Executa a análise
-# Em RF, 'remove_duplicates' geralmente tem menos impacto visual que em DT,
-# mas ajuda a limpar regras redundantes entre árvores se usar "hard"
+# Executa a analise
 classifier.execute_rule_analysis(
     test_path, remove_duplicates="soft", remove_below_n_classifications=1
 )
 
-# Gera relatório detalhado
+# Gera relatorio detalhado
 classifier.compare_initial_final_results(test_path)
 
 # ==============================================================================
-# 2. EXPORTAÇÃO
+# 2. EXPORTACAO
 # ==============================================================================
 X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
     train_path, test_path
 )
 sample_dicts = pd.DataFrame(X_test, columns=feature_names).to_dict("records")
 
-# Nome do arquivo de exportação para RF
 export_file = "examples/files/rf_classifier.py"
-
-# Nota: A exportação nativa converte a Floresta em uma lista sequencial de regras (Decision List)
 classifier.export_to_native_python(feature_names, filename=export_file)
 
+# Compilar arrays de arvore para predict_batch
+classifier.compile_tree_arrays(feature_names=feature_names)
+
 # ==============================================================================
-# 3. BENCHMARK E VALIDAÇÃO DE PERFORMANCE
+# 3. BENCHMARK E VALIDACAO DE PERFORMANCE
 # ==============================================================================
-print("\n" + "=" * 80)
-print("RELATÓRIO DE COMPARAÇÃO DE DESEMPENHO: SKLEARN (RF) vs NATIVE PYTHON")
-print("=" * 80)
+print("\n" + "=" * 90)
+print("RELATORIO DE COMPARACAO DE DESEMPENHO: SKLEARN (RF) vs PYRULEANALYZER")
+print("=" * 90)
+print(f"Extensao C disponivel: {HAS_C_EXTENSION}")
 
 # A. Carregamento do Sklearn Original
 with open("examples/files/sklearn_model.pkl", "rb") as f:
     sk_orig = pickle.load(f)
 
-# B. Importação dinâmica do classificador exportado
+# B. Importacao dinamica do classificador exportado
 rf_classifier = None
 option3_available = False
 try:
@@ -90,12 +89,11 @@ try:
         importlib.reload(rf_classifier)
         option3_available = True
     else:
-        print(f"[ERRO] Arquivo {export_file} não encontrado.")
+        print(f"[ERRO] Arquivo {export_file} nao encontrado.")
 except Exception as e:
     print(f"[ERRO] Falha ao importar {export_file}: {e}")
 
-# --- FUNÇÕES AUXILIARES ---
-
+# --- FUNCOES AUXILIARES ---
 
 def count_leaves_in_file(filename):
     if not os.path.exists(filename):
@@ -112,7 +110,7 @@ def safe_speed(n, t):
 
 leaves_native = count_leaves_in_file(export_file)
 
-# Lógica ajustada para contar folhas em Random Forest (Soma das folhas de todas as árvores)
+# Logica ajustada para contar folhas em Random Forest
 if hasattr(sk_orig, "estimators_"):
     leaves_sklearn = sum([tree.get_n_leaves() for tree in sk_orig.estimators_])
 elif hasattr(sk_orig, "get_n_leaves"):
@@ -120,19 +118,19 @@ elif hasattr(sk_orig, "get_n_leaves"):
 else:
     leaves_sklearn = "N/A"
 
-# --- RELATÓRIO DE ESTRUTURA ---
-print(f"{'ESTRUTURA':<30} | {'FOLHAS/REGRAS':<15}")
+# --- RELATORIO DE ESTRUTURA ---
+print(f"\n{'ESTRUTURA':<30} | {'FOLHAS/REGRAS':<15}")
 print("-" * 50)
 print(f"{'Sklearn Original (Total)':<30} | {leaves_sklearn:<15}")
-print(f"{'pyRuleAnalyzer (Novo)':<30} | {leaves_native:<15}")
-print(f"{'pyRuleAnalyzer (Antigo)':<30} | {len(classifier.final_rules):<15}")
+print(f"{'Python Standalone':<30} | {leaves_native:<15}")
+print(f"{'pyRuleAnalyzer (Regras)':<30} | {len(classifier.final_rules):<15}")
 
 
-print("\n" + "-" * 80)
+print("\n" + "-" * 90)
 print(
-    f"{'MOTOR DE INFERÊNCIA':<30} | {'ACURÁCIA':<15} | {'TEMPO (s)':<12} | {'SAMPLES/s':<12}"
+    f"{'MOTOR DE INFERENCIA':<30} | {'ACURACIA':<15} | {'TEMPO (s)':<12} | {'SAMPLES/s':<12}"
 )
-print("-" * 80)
+print("-" * 90)
 
 # 1. Sklearn Original
 start = time.time()
@@ -143,43 +141,70 @@ print(
     f"{'1. Sklearn Original':<30} | {acc_orig:<15.5f} | {t_orig:<12.4f} | {safe_speed(len(y_test), t_orig)}"
 )
 
-# 2. Python Standalone
+# 2. predict_batch (Vetorizado com extensao C)
+start = time.time()
+y_batch = classifier.predict_batch(X_test, feature_names=feature_names)
+t_batch = time.time() - start
+acc_batch = np.mean(y_batch == y_test)
+backend = "C ext" if HAS_C_EXTENSION else "numpy"
+print(
+    f"{'2. predict_batch (' + backend + ')':<30} | {acc_batch:<15.5f} | {t_batch:<12.4f} | {safe_speed(len(y_test), t_batch)}"
+)
+
+# 3. Python Standalone
 if option3_available and rf_classifier is not None:
     start = time.time()
-    # Simula inferência
     y_opt3 = [rf_classifier.predict(s) for s in sample_dicts]
     t_opt3 = time.time() - start
 
     y_opt3 = np.array(y_opt3)
     acc_opt3 = np.mean(y_opt3 == y_test)
     print(
-        f"{'2. pyRuleAnalyzer (Novo)':<30} | {acc_opt3:<15.5f} | {t_opt3:<12.4f} | {safe_speed(len(y_test), t_opt3)}"
+        f"{'3. Python Standalone (.py)':<30} | {acc_opt3:<15.5f} | {t_opt3:<12.4f} | {safe_speed(len(y_test), t_opt3)}"
     )
 
-# 3. pyRuleAnalyzer Internal
+# 4. pyRuleAnalyzer classify() per-sample
 start = time.time()
-# classify retorna tupla (pred, votes, proba), pegamos [0]
 y_py = [classifier.classify(s, final=True)[0] for s in sample_dicts]
 t_py = time.time() - start
 
 y_py = np.array(y_py)
 acc_py = np.mean(y_py == y_test)
 print(
-    f"{'3. pyRuleAnalyzer (Antigo)':<30} | {acc_py:<15.5f} | {t_py:<12.4f} | {safe_speed(len(y_test), t_py)}"
+    f"{'4. classify() per-sample':<30} | {acc_py:<15.5f} | {t_py:<12.4f} | {safe_speed(len(y_test), t_py)}"
 )
 
-print("=" * 80)
+print("=" * 90)
+
+# --- SPEEDUP RELATIVO ---
+print(f"\n{'SPEEDUP RELATIVO AO SKLEARN'}")
+print("-" * 50)
+if t_orig > 0:
+    print(f"  predict_batch ({backend}): {t_orig/max(t_batch, 1e-9):.2f}x {'mais rapido' if t_batch < t_orig else 'mais lento'}")
+    if option3_available:
+        print(f"  Python Standalone:        {t_orig/max(t_opt3, 1e-9):.2f}x {'mais rapido' if t_opt3 < t_orig else 'mais lento'}")
+    print(f"  classify() per-sample:    {t_orig/max(t_py, 1e-9):.2f}x {'mais rapido' if t_py < t_orig else 'mais lento'}")
 
 # --- COMPARATIVO DE TAMANHO (DISCO) ---
+print(f"\n{'COMPARATIVO DE TAMANHO (DISCO)'}")
+
+export_bin = "examples/files/rf_model.bin"
+classifier.export_to_binary(export_bin)
+
+export_h = "examples/files/rf_model.h"
+classifier.export_to_c_header(export_h)
+
 files = {
-    "Sklearn Original": "examples/files/sklearn_model.pkl",
-    "pyRuleAnalyzer (Novo)": export_file,
-    "pyRuleAnalyzer (Antigo)": "examples/files/final_model.pkl",
+    "Sklearn Original (.pkl)": "examples/files/sklearn_model.pkl",
+    "predict_batch (.bin)": export_bin,
+    "Python Standalone (.py)": export_file,
+    "C Header (.h)": export_h,
+    "pyRuleAnalyzer (.pkl)": "examples/files/final_model.pkl",
 }
 
 orig_size = (
-    os.path.getsize(files["Sklearn Original"])
-    if os.path.exists(files["Sklearn Original"])
+    os.path.getsize(files["Sklearn Original (.pkl)"])
+    if os.path.exists(files["Sklearn Original (.pkl)"])
     else 0
 )
 

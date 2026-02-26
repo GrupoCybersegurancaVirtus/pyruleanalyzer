@@ -9,6 +9,7 @@ import pandas as pd
 # Adiciona o diretorio pai ao path para encontrar o pacote pyruleanalyzer
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer._accel import HAS_C_EXTENSION
 
 # --- CONFIGURACAO ---
 # Escolha o dataset descomentando abaixo
@@ -45,8 +46,6 @@ classifier = RuleClassifier.new_classifier(
 )
 
 # Executa a analise de redundancia
-# Em GBDT, remove_duplicates="hard" ativa deteccao intra-tree
-# remove_below_n_classifications controla poda de regras pouco usadas
 classifier.execute_rule_analysis(
     test_path, remove_duplicates="hard", remove_below_n_classifications=1
 )
@@ -69,6 +68,9 @@ sample_dicts = X_test_df.to_dict('records')
 export_file = "examples/files/gbdt_classifier.py"
 classifier.export_to_native_python(feature_names, filename=export_file)
 
+# Compilar arrays de arvore para predict_batch
+classifier.compile_tree_arrays(feature_names=feature_names)
+
 # Importacao dinamica do classificador exportado
 gbdt_classifier = None
 option_standalone = False
@@ -89,9 +91,10 @@ except Exception as e:
 # 3. BENCHMARK E VALIDACAO DE PERFORMANCE
 # ==============================================================================
 
-print("\n" + "=" * 80)
+print("\n" + "=" * 90)
 print("RELATORIO DE COMPARACAO DE DESEMPENHO: SKLEARN (GBDT) vs PYRULEANALYZER")
-print("=" * 80)
+print("=" * 90)
+print(f"Extensao C disponivel: {HAS_C_EXTENSION}")
 
 # A. Carregamento do Sklearn Original
 with open('examples/files/sklearn_model.pkl', 'rb') as f:
@@ -107,9 +110,6 @@ def safe_speed(n, t):
 
 
 # --- Contagem de regras/folhas ---
-# Sklearn: GBDT tem estimators_ como array 2D (n_estimators, n_classes) para multiclass
-# ou (n_estimators, 1) para binario.
-# Devemos contar as folhas de TODAS as colunas (classes), nao apenas da coluna 0.
 if hasattr(sk_orig, 'estimators_'):
     n_estimators, n_cols = sk_orig.estimators_.shape
     leaves_sklearn = sum(
@@ -117,13 +117,11 @@ if hasattr(sk_orig, 'estimators_'):
         for i in range(n_estimators)
         for j in range(n_cols)
     )
-    # Adicionar as init rules (1 por classe) para comparacao justa com o pyRuleAnalyzer
     n_classes = len(sk_orig.classes_)
     leaves_sklearn += n_classes if not (n_classes == 2 and n_cols == 1) else 1
 else:
     leaves_sklearn = "N/A"
 
-# pyRuleAnalyzer: contar regras do modelo inicial e refinado
 rules_initial = len(classifier.initial_rules)
 rules_refined = len(classifier.final_rules) if classifier.final_rules else rules_initial
 
@@ -134,15 +132,15 @@ print(f"{'Sklearn Original (Total)':<35} | {leaves_sklearn:<15}")
 print(f"{'pyRuleAnalyzer Inicial':<35} | {rules_initial:<15}")
 print(f"{'pyRuleAnalyzer Refinado':<35} | {rules_refined:<15}")
 
-print("\n" + "-" * 80)
+print("\n" + "-" * 90)
 print(
     f"{'MOTOR DE INFERENCIA':<35} | {'ACURACIA':<15} | {'TEMPO (s)':<12} | {'SAMPLES/s':<12}"
 )
-print("-" * 80)
+print("-" * 90)
 
 # 1. Sklearn Original (Vetorizado em C)
 start = time.time()
-y_orig_raw = sk_orig.predict(X_test_df)  # DataFrame para evitar warning
+y_orig_raw = sk_orig.predict(X_test_df)
 t_orig = time.time() - start
 y_orig = np.array([int(p) for p in y_orig_raw])
 y_test_int = np.array([int(y) for y in y_test])
@@ -151,7 +149,17 @@ print(
     f"{'1. Sklearn Original':<35} | {acc_orig:<15.5f} | {t_orig:<12.4f} | {safe_speed(len(y_test), t_orig)}"
 )
 
-# 2. pyRuleAnalyzer (Modelo Inicial - usando classify_gbdt)
+# 2. predict_batch (Vetorizado com extensao C)
+start = time.time()
+y_batch = classifier.predict_batch(X_test, feature_names=feature_names)
+t_batch = time.time() - start
+acc_batch = np.mean(y_batch == y_test_int)
+backend = "C ext" if HAS_C_EXTENSION else "numpy"
+print(
+    f"{'2. predict_batch (' + backend + ')':<35} | {acc_batch:<15.5f} | {t_batch:<12.4f} | {safe_speed(len(y_test), t_batch)}"
+)
+
+# 3. pyRuleAnalyzer (Modelo Inicial - usando classify_gbdt)
 print("   Classificando com modelo inicial...")
 start = time.time()
 y_initial = []
@@ -172,10 +180,10 @@ t_initial = time.time() - start
 y_initial = np.array(y_initial)
 acc_initial = np.mean(y_initial == y_test_int)
 print(
-    f"{'2. pyRuleAnalyzer (Inicial)':<35} | {acc_initial:<15.5f} | {t_initial:<12.4f} | {safe_speed(len(y_test), t_initial)}"
+    f"{'3. classify_gbdt (Inicial)':<35} | {acc_initial:<15.5f} | {t_initial:<12.4f} | {safe_speed(len(y_test), t_initial)}"
 )
 
-# 3. pyRuleAnalyzer (Modelo Refinado - usando native_fn ou classify_gbdt)
+# 4. pyRuleAnalyzer (Modelo Refinado - usando native_fn ou classify_gbdt)
 if classifier.final_rules:
     print("   Classificando com modelo refinado...")
     start = time.time()
@@ -209,10 +217,10 @@ if classifier.final_rules:
     y_refined = np.array(y_refined)
     acc_refined = np.mean(y_refined == y_test_int)
     print(
-        f"{'3. pyRuleAnalyzer (Refinado)':<35} | {acc_refined:<15.5f} | {t_refined:<12.4f} | {safe_speed(len(y_test), t_refined)}"
+        f"{'4. classify_gbdt (Refinado)':<35} | {acc_refined:<15.5f} | {t_refined:<12.4f} | {safe_speed(len(y_test), t_refined)}"
     )
 
-# 4. Python Standalone (Arquivo exportado)
+# 5. Python Standalone (Arquivo exportado)
 if option_standalone and gbdt_classifier is not None:
     start = time.time()
     y_standalone = []
@@ -228,23 +236,37 @@ if option_standalone and gbdt_classifier is not None:
     y_standalone = np.array(y_standalone)
     acc_standalone = np.mean(y_standalone == y_test_int)
     print(
-        f"{'4. Python Standalone (Arquivo)':<35} | {acc_standalone:<15.5f} | {t_standalone:<12.4f} | {safe_speed(len(y_test), t_standalone)}"
+        f"{'5. Python Standalone (.py)':<35} | {acc_standalone:<15.5f} | {t_standalone:<12.4f} | {safe_speed(len(y_test), t_standalone)}"
     )
 
-print("=" * 80)
+print("=" * 90)
+
+# --- SPEEDUP RELATIVO ---
+print(f"\n{'SPEEDUP RELATIVO AO SKLEARN'}")
+print("-" * 55)
+if t_orig > 0:
+    print(f"  predict_batch ({backend}):     {t_orig/max(t_batch, 1e-9):.2f}x {'mais rapido' if t_batch < t_orig else 'mais lento'}")
+    print(f"  classify_gbdt (Inicial):    {t_orig/max(t_initial, 1e-9):.2f}x {'mais rapido' if t_initial < t_orig else 'mais lento'}")
+    if classifier.final_rules:
+        print(f"  classify_gbdt (Refinado):   {t_orig/max(t_refined, 1e-9):.2f}x {'mais rapido' if t_refined < t_orig else 'mais lento'}")
+    if option_standalone:
+        print(f"  Python Standalone:          {t_orig/max(t_standalone, 1e-9):.2f}x {'mais rapido' if t_standalone < t_orig else 'mais lento'}")
 
 # --- ANALISE DE DIVERGENCIAS ---
 print(f"\n{'ANALISE DE DIVERGENCIAS'}")
 print("-" * 55)
 
 divergent_initial = int(np.sum(y_orig != y_initial))
-print(f"Sklearn vs Inicial:  {divergent_initial}/{len(y_test)} ({divergent_initial / len(y_test) * 100:.2f}%)")
+print(f"Sklearn vs Inicial:    {divergent_initial}/{len(y_test)} ({divergent_initial / len(y_test) * 100:.2f}%)")
+
+divergent_batch = int(np.sum(y_orig != y_batch))
+print(f"Sklearn vs Batch:      {divergent_batch}/{len(y_test)} ({divergent_batch / len(y_test) * 100:.2f}%)")
 
 if classifier.final_rules:
     divergent_refined = int(np.sum(y_orig != y_refined))
     divergent_init_ref = int(np.sum(y_initial != y_refined))
-    print(f"Sklearn vs Refinado: {divergent_refined}/{len(y_test)} ({divergent_refined / len(y_test) * 100:.2f}%)")
-    print(f"Inicial vs Refinado: {divergent_init_ref}/{len(y_test)} ({divergent_init_ref / len(y_test) * 100:.2f}%)")
+    print(f"Sklearn vs Refinado:   {divergent_refined}/{len(y_test)} ({divergent_refined / len(y_test) * 100:.2f}%)")
+    print(f"Inicial vs Refinado:   {divergent_init_ref}/{len(y_test)} ({divergent_init_ref / len(y_test) * 100:.2f}%)")
 
 if option_standalone and gbdt_classifier is not None:
     divergent_standalone = int(np.sum(y_orig != y_standalone))
@@ -253,15 +275,23 @@ if option_standalone and gbdt_classifier is not None:
 # --- COMPARATIVO DE TAMANHO (DISCO) ---
 print(f"\n{'COMPARATIVO DE TAMANHO (DISCO)'}")
 
+export_bin = "examples/files/gbdt_model.bin"
+classifier.export_to_binary(export_bin)
+
+export_h = "examples/files/gbdt_model.h"
+classifier.export_to_c_header(export_h)
+
 files = {
-    "Sklearn Original": "examples/files/sklearn_model.pkl",
-    "pyRuleAnalyzer (Modelo)": "examples/files/initial_model.pkl",
-    "Python Standalone (Arquivo)": export_file,
+    "Sklearn Original (.pkl)": "examples/files/sklearn_model.pkl",
+    "predict_batch (.bin)": export_bin,
+    "Python Standalone (.py)": export_file,
+    "C Header (.h)": export_h,
+    "pyRuleAnalyzer (.pkl)": "examples/files/initial_model.pkl",
 }
 
 orig_size = (
-    os.path.getsize(files["Sklearn Original"])
-    if os.path.exists(files["Sklearn Original"])
+    os.path.getsize(files["Sklearn Original (.pkl)"])
+    if os.path.exists(files["Sklearn Original (.pkl)"])
     else 0
 )
 

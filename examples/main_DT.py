@@ -1,8 +1,13 @@
 import sys
 import os
+import time
+import numpy as np
+import pandas as pd
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer._accel import HAS_C_EXTENSION
 
 train_path = "examples/data/covid_train.csv"
 test_path = "examples/data/covid_test.csv"
@@ -24,6 +29,9 @@ model_parameters = {
     'random_state': 42
 }
 
+# ==============================================================================
+# 1. RULE EXTRACTION AND ANALYSIS
+# ==============================================================================
 # Generating the initial rule based model
 classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Decision Tree')
 
@@ -34,3 +42,65 @@ classifier.execute_rule_analysis(test_path, remove_duplicates="soft", remove_bel
 
 # Comparing initial and final results
 classifier.compare_initial_final_results(test_path)
+
+# ==============================================================================
+# 2. BATCH PREDICTION (Vectorized, with optional C acceleration)
+# ==============================================================================
+print("\n" + "=" * 80)
+print("BATCH PREDICTION DEMO (Decision Tree)")
+print("=" * 80)
+print(f"C extension available: {HAS_C_EXTENSION}")
+
+# Load test data as numpy array
+X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(train_path, test_path)
+
+# Compile tree arrays for vectorized prediction
+classifier.compile_tree_arrays(feature_names=feature_names)
+
+# Batch predict
+start = time.time()
+y_batch = classifier.predict_batch(X_test, feature_names=feature_names)
+t_batch = time.time() - start
+
+acc_batch = np.mean(y_batch == y_test)
+print(f"  Samples:   {len(y_test)}")
+print(f"  Accuracy:  {acc_batch:.5f}")
+print(f"  Time:      {t_batch:.4f}s")
+print(f"  Speed:     {len(y_test) / max(t_batch, 1e-9):.0f} samples/s")
+
+# Batch predict probabilities
+y_proba = classifier.predict_batch_proba(X_test, feature_names=feature_names)
+print(f"  Proba shape: {y_proba.shape}")
+
+# ==============================================================================
+# 3. EXPORT FORMATS
+# ==============================================================================
+print("\n" + "=" * 80)
+print("EXPORT FORMATS")
+print("=" * 80)
+
+# Native Python export (standalone .py file)
+export_py = "examples/files/dt_classifier.py"
+classifier.export_to_native_python(feature_names, filename=export_py)
+
+# Binary export (compact .bin file for fast loading)
+export_bin = "examples/files/dt_model.bin"
+classifier.export_to_binary(export_bin)
+
+# C header export (for Arduino / embedded targets)
+export_h = "examples/files/dt_model.h"
+classifier.export_to_c_header(export_h)
+
+# Size comparison
+print(f"\n{'FORMAT':<30} | {'SIZE':>12}")
+print("-" * 48)
+for label, path in [("Python (.py)", export_py), ("Binary (.bin)", export_bin), ("C Header (.h)", export_h)]:
+    if os.path.exists(path):
+        size = os.path.getsize(path)
+        print(f"{label:<30} | {size / 1024:>10.2f} KB")
+
+# Verify binary round-trip
+clf_loaded = RuleClassifier.load_binary(export_bin)
+y_loaded = clf_loaded.predict_batch(X_test, feature_names=feature_names)
+match = np.mean(y_loaded == y_batch) == 1.0
+print(f"\nBinary round-trip match: {'OK' if match else 'MISMATCH'}")

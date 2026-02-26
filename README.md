@@ -18,12 +18,17 @@
   - [Rule Optimization](#2-rule-optimization)
   - [Classification Strategies](#3-classification-strategies)
   - [Native Python Export](#4-native-python-export)
+  - [High-Performance Batch Prediction](#5-high-performance-batch-prediction)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage Examples](#usage-examples)
   - [Decision Tree](#decision-tree)
   - [Random Forest](#random-forest)
   - [Gradient Boosting (GBDT)](#gradient-boosting-gbdt)
+  - [Batch Prediction](#batch-prediction)
+  - [Probability Prediction](#probability-prediction)
+  - [Binary Export & Loading](#binary-export--loading)
+  - [C Header Export (Embedded/Arduino)](#c-header-export-embeddedaruino)
   - [Interactive Rule Editing](#interactive-rule-editing)
   - [Export Standalone Classifier](#export-standalone-classifier)
   - [Custom Rule Removal](#custom-rule-removal)
@@ -48,6 +53,10 @@
 | **Low-Usage Pruning** | Removes rarely-triggered rules with automatic sibling promotion |
 | **Custom Pruning** | Inject your own rule removal logic via callback functions |
 | **Native Python Compilation** | Compiles rules into optimized `if/else` Python code (in-memory via `exec()` and file export) |
+| **Batch Prediction** | Vectorized `predict_batch()` using compiled tree arrays -- with optional C extension for **1.45x faster inference than sklearn** |
+| **Binary Export** | Compact `.bin` format for instant model loading via `load_binary()` |
+| **C Header Export** | Standalone `.h` file with a `predict()` function for Arduino and embedded targets |
+| **C Extension Acceleration** | Optional compiled C extension for tree traversal; falls back gracefully to numpy if unavailable |
 | **Interpretability Metrics** | Depth balance, attribute usage, complexity score, feature coverage |
 | **Interactive Editing** | Terminal-based rule editor: add/remove conditions, change class labels |
 | **Pickle Serialization** | Save/load models with automatic native model recompilation |
@@ -212,6 +221,35 @@ def predict(sample):
 
 **Performance:** Native export typically achieves **10-20x faster inference** than the rule-matching engine, with file sizes often **90%+ smaller** than sklearn pickle files.
 
+### 5. High-Performance Batch Prediction
+
+For maximum inference speed, pyRuleAnalyzer provides a **vectorized batch prediction** pipeline that compiles the tree structure into flat arrays and traverses them using C-level operations:
+
+```
+rule_classifier.py
+  └── predict_batch() / predict_batch_proba()
+       └── _accel.traverse_tree_batch() / traverse_tree_batch_multi()
+            ├── [FAST] _tree_traversal.c  (compiled C extension, ~1.45x faster than sklearn)
+            └── [FALLBACK] numpy vectorized traversal (no compiler required)
+```
+
+**How it works:**
+
+1. **`compile_tree_arrays()`** converts the rule set into flat numpy arrays (`feature_indices`, `thresholds`, `children_left`, `children_right`, `leaf_classes`) with self-loop sentinel nodes at each leaf. This eliminates active-masking overhead during traversal.
+
+2. **`predict_batch(X)`** feeds the entire dataset through the compiled arrays in one vectorized pass -- no Python-level per-sample loops. For ensemble models (RF/GBDT), all trees are batched into a single C call via `traverse_tree_batch_multi()`.
+
+3. **C extension** (`_tree_traversal.c`) is compiled automatically during `pip install` if a C compiler is available. It iterates all samples over `max_depth` steps, performing branchless left/right child selection. If the C extension is not available, the same algorithm runs in pure numpy.
+
+**Performance results (Iris dataset, 100 estimators):**
+
+| Engine | Relative Speed |
+|---|---|
+| `predict_batch` (C extension) | **1.45x faster** than sklearn |
+| `predict_batch` (numpy fallback) | ~0.35x sklearn speed |
+| Native Python export (`.py`) | ~0.05-0.1x sklearn speed |
+| `classify()` per-sample | ~0.001x sklearn speed |
+
 ---
 
 ## Installation
@@ -229,6 +267,13 @@ pip install -e .
 ```
 
 **Dependencies:** `numpy`, `pandas`, `scikit-learn`, `matplotlib`
+
+**C Extension (optional):** During installation, the build system attempts to compile the C extension (`_tree_traversal.c`) for accelerated batch prediction. This requires a C compiler (e.g., MSVC on Windows, gcc on Linux/macOS). If no compiler is found, installation succeeds normally and batch prediction falls back to numpy. You can check whether the C extension is active:
+
+```python
+from pyruleanalyzer._accel import HAS_C_EXTENSION
+print(f'C extension available: {HAS_C_EXTENSION}')
+```
 
 ---
 
@@ -319,6 +364,81 @@ classifier.execute_rule_analysis("test.csv", remove_duplicates="hard", remove_be
 classifier.compare_initial_final_results("test.csv")
 ```
 
+### Batch Prediction
+
+Use `predict_batch()` for high-performance vectorized inference. This is the fastest prediction method available.
+
+```python
+import numpy as np
+from pyruleanalyzer import RuleClassifier
+
+# Load or create a classifier
+classifier = RuleClassifier.new_classifier(
+    "train.csv", "test.csv",
+    model_parameters={'random_state': 42},
+    algorithm_type='Decision Tree'
+)
+
+# Get test data
+X_train, y_train, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
+    "train.csv", "test.csv"
+)
+
+# Compile rules into flat arrays (required before predict_batch)
+classifier.compile_tree_arrays(feature_names=feature_names)
+
+# Predict all samples at once
+predictions = classifier.predict_batch(X_test, feature_names=feature_names)
+accuracy = np.mean(predictions == y_test)
+print(f'Batch accuracy: {accuracy:.4f}')
+```
+
+### Probability Prediction
+
+```python
+# After compile_tree_arrays(), get class probabilities
+probabilities = classifier.predict_batch_proba(X_test, feature_names=feature_names)
+print(f'Shape: {probabilities.shape}')  # (n_samples, n_classes)
+print(f'First sample probs: {probabilities[0]}')
+```
+
+### Binary Export & Loading
+
+Export a compiled model as a compact binary file for fast loading, without needing the original training data or sklearn:
+
+```python
+# Export to binary (requires compile_tree_arrays() first)
+classifier.export_to_binary('model.bin')
+
+# Later, load the binary model (no sklearn needed)
+loaded = RuleClassifier.load_binary('model.bin')
+preds = loaded.predict_batch(X_test, feature_names=feature_names)
+```
+
+The binary format uses a compact encoding (magic `b'PYRA'`, version 1) that stores only the tree arrays -- typically **much smaller** than pickle files.
+
+### C Header Export (Embedded/Arduino)
+
+Export a standalone C header file for use on microcontrollers or embedded systems:
+
+```python
+# Export to C header
+classifier.export_to_c_header('model.h', guard_name='MY_MODEL_H')
+```
+
+The generated `.h` file contains:
+- Const arrays for the compiled tree structure
+- A self-contained `predict(const float *features)` function
+- No external dependencies -- ready for Arduino, STM32, ESP32, etc.
+
+```c
+// Usage in Arduino/C:
+#include "model.h"
+
+float sample[] = {5.1, 3.5, 1.4, 0.2};
+int predicted_class = predict(sample);
+```
+
 ### Interactive Rule Editing
 
 After analysis, you can manually edit rules through an interactive terminal interface:
@@ -388,6 +508,7 @@ The main class that handles the entire pipeline.
 |---|---|
 | `RuleClassifier.new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest')` | Train a sklearn model, extract rules, and build a RuleClassifier |
 | `RuleClassifier.load(path)` | Load a pickled RuleClassifier (auto-recompiles native model) |
+| `RuleClassifier.load_binary(filepath)` | Load a RuleClassifier from a compact `.bin` file (arrays only, no Rule objects) |
 | `RuleClassifier.process_data(train_path, test_path)` | Load CSV data, apply LabelEncoding, return arrays and feature names |
 
 #### Analysis Pipeline
@@ -414,6 +535,9 @@ The main class that handles the entire pipeline.
 | Method | Description |
 |---|---|
 | `classify(sample, final=False)` | Classify a sample dict; returns `(class, votes, probabilities)` |
+| `predict_batch(X, feature_names=None, use_final=True)` | Vectorized batch prediction over a numpy array; returns int32 class labels |
+| `predict_batch_proba(X, feature_names=None)` | Vectorized batch probability prediction; returns float64 array of shape `(n_samples, n_classes)` |
+| `compile_tree_arrays(rules=None, feature_names=None)` | Compile rules into flat numpy arrays for `predict_batch()` / `predict_batch_proba()` |
 | `classify_dt(data, rules)` | Static: first-match classification for Decision Trees |
 | `classify_rf(data, rules)` | Static: majority-voting classification for Random Forests |
 | `classify_gbdt(data, rules, init_scores, is_binary, classes)` | Static: additive scoring for GBDT |
@@ -423,6 +547,8 @@ The main class that handles the entire pipeline.
 | Method | Description |
 |---|---|
 | `export_to_native_python(feature_names, filename)` | Write a standalone `.py` classifier file |
+| `export_to_binary(filepath='model.bin')` | Export compiled tree arrays to a compact binary file |
+| `export_to_c_header(filepath='model.h', guard_name='PYRULEANALYZER_MODEL_H')` | Export a standalone C header for embedded targets |
 | `update_native_model(rules)` | Compile rules into in-memory Python function via `exec()` |
 | `edit_rules()` | Open interactive terminal rule editor |
 | `set_custom_rule_removal(func)` | Set a custom pruning callback |
@@ -477,20 +603,26 @@ pyruleanalyzer/
 ├── pyruleanalyzer/
 │   ├── __init__.py              # Exports: RuleClassifier, Rule, DTAnalyzer, RFAnalyzer, GBDTAnalyzer
 │   ├── rule_classifier.py       # Core engine: Rule class, RuleClassifier class
+│   ├── _accel.py                # Acceleration layer (C extension / numpy fallback)
+│   ├── _tree_traversal.c        # C extension for vectorized tree traversal
 │   ├── dt_analyzer.py           # Decision Tree analyzer (wraps RuleClassifier)
 │   ├── rf_analyzer.py           # Random Forest analyzer (wraps RuleClassifier)
 │   └── gbdt_analyzer.py         # GBDT analyzer (wraps RuleClassifier)
+├── tests/
+│   ├── test_dt_invariants.py    # Decision Tree invariant test suite (25 configs)
+│   ├── test_rf_invariants.py    # Random Forest invariant test suite (25 configs)
+│   └── test_gbdt_invariants.py  # GBDT invariant test suite (25 configs)
 ├── examples/
 │   ├── data/                    # CSV datasets for testing
-│   ├── files/                   # Generated outputs (pkl, txt, py)
+│   ├── files/                   # Generated outputs (pkl, txt, py, bin, h)
 │   ├── main_DT.py               # End-to-end Decision Tree pipeline
 │   ├── main_RF.py               # End-to-end Random Forest pipeline
 │   ├── main_GBDT.py             # End-to-end GBDT pipeline
 │   ├── edited_DT.py             # Interactive rule editing (DT)
 │   ├── edited_RF.py             # Interactive rule editing (RF)
-│   ├── sklearn_vs_ruleclassifier_DT.py   # Benchmark: sklearn vs native export (DT)
-│   ├── sklearn_vs_ruleclassifier_RF.py   # Benchmark: sklearn vs native export (RF)
-│   └── sklearn_vs_ruleclassifier_GBDT.py # Benchmark: sklearn vs native export (GBDT)
+│   ├── sklearn_vs_ruleclassifier_DT.py   # Benchmark: sklearn vs pyRuleAnalyzer (DT)
+│   ├── sklearn_vs_ruleclassifier_RF.py   # Benchmark: sklearn vs pyRuleAnalyzer (RF)
+│   └── sklearn_vs_ruleclassifier_GBDT.py # Benchmark: sklearn vs pyRuleAnalyzer (GBDT)
 ├── docs/                        # Sphinx documentation source
 ├── pyproject.toml
 ├── setup.py
@@ -501,7 +633,7 @@ pyruleanalyzer/
 
 ## Output Formats
 
-pyRuleAnalyzer produces three types of output files:
+pyRuleAnalyzer produces five types of output files:
 
 | Format | File | Description |
 |---|---|---|
@@ -512,6 +644,8 @@ pyRuleAnalyzer produces three types of output files:
 | **Text Report** (`.txt`) | `output_classifier_*.txt` | Initial analysis: rules, accuracy, per-rule stats |
 | | `output_final_classifier_*.txt` | Comparison report: before/after metrics, divergences, interpretability |
 | **Standalone Python** (`.py`) | `*_classifier.py` | Zero-dependency predict function (DT/RF: no imports; GBDT: `math` only) |
+| **Binary** (`.bin`) | `model.bin` | Compact compiled tree arrays for `predict_batch()` / `load_binary()` |
+| **C Header** (`.h`) | `model.h` | Standalone `predict()` function for embedded targets (Arduino, STM32, ESP32) |
 
 ---
 
