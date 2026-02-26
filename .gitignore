@@ -183,3 +183,7 @@ examples/data/train-set1.csv
 examples/data/CICIDS2017-Wed2_train.csv
 examples/data/CICIDS2017-Wed2_test.csv
 /examples/files
+AGENTS.md
+start_opencode.bat
+*.pkl
+/examples/files

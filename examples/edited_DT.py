@@ -1,4 +1,9 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from pyruleanalyzer.rule_classifier import RuleClassifier
+
 
 # Caminho para os dados de teste
 test_path = "examples/data/iris_test.csv"
