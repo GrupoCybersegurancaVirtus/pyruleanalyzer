@@ -1,19 +1,19 @@
 DDOS
 ====
 
-This guild will go through the process of pruning a random forest model using the `DDoS evaluation dataset (CIC-DDoS2019) <https://www.unb.ca/cic/datasets/ddos-2019.html>`_ repository.
+This guide will go through the process of pruning a random forest model using the `DDoS evaluation dataset (CIC-DDoS2019) <https://www.unb.ca/cic/datasets/ddos-2019.html>`_ repository.
 
 Prerequisites
 -------------
 
-For this example we will be using the `UDPLag.csv` dataset, it is a large dataset that contains realistic traffic data with multiclass targeting and it's included in the `CSV-03-11.zip`, downloadable from the repository above.
+For this example we will be using the ``UDPLag.csv`` dataset, it is a large dataset that contains realistic traffic data with multiclass targeting and it's included in the ``CSV-03-11.zip``, downloadable from the repository above.
 
 To start off, follow the instructions specified in the :ref:`prerequisites section<tutorials/usage#prerequisites>` of the :doc:`usage guide<../usage>`.
 
 Prepare Your Dataset
 --------------------
 
-As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` `new_classifier` method expects a dataset split into two files: `train.csv` and `test.csv`. The dataset must also be formatted with the following characteristics:
+As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` ``new_classifier`` method expects a dataset split into two files: ``train.csv`` and ``test.csv``. The dataset must also be formatted with the following characteristics:
 
 - Each row represents a single sample.
 - The last column is the target class label.
@@ -23,7 +23,7 @@ As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_
 We can use the following script to apply an encoder to the string columns, remove infinites and split the data, be sure to adapt it to your current pipeline as needed:
 
 .. code-block:: python
-    
+
     import pandas as pd
     import numpy as np
     from sklearn.model_selection import train_test_split
@@ -45,9 +45,6 @@ We can use the following script to apply an encoder to the string columns, remov
     label_encoder = LabelEncoder().fit(df[' Label'])
     df[' Label'] = label_encoder.transform(df[' Label'])
 
-    label_encoder = LabelEncoder().fit(y)
-    y = label_encoder.transform(y)
-
     # Split into features and target
     X = df.iloc[:, :-1]
     y = df.iloc[:, -1]
@@ -67,7 +64,7 @@ We can use the following script to apply an encoder to the string columns, remov
 Training the Forest and Extracting Its Rules
 ---------------------------------------------------
 
-The `new_classifier` method from :ref:`RuleClassifier<rule_classifier>` will train a `scikit-learn` model, extract its rules and create a new :ref:`RuleClassifier<rule_classifier>` instance. It expects the path to the newly created CSV files, an algorithm type (can be either "Decision Tree" or "Random Forest") and the model parameters to be used in the respective `scikit-learn` model.
+The ``new_classifier`` method from :ref:`RuleClassifier<rule_classifier>` will train a ``scikit-learn`` model, extract its rules and create a new :ref:`RuleClassifier<rule_classifier>` instance. It expects the path to the newly created CSV files, an algorithm type (can be ``"Decision Tree"``, ``"Random Forest"``, or ``"Gradient Boosting Decision Trees"``) and the model parameters to be used in the respective ``scikit-learn`` model.
 
 .. code-block:: python
 
@@ -87,7 +84,7 @@ The `new_classifier` method from :ref:`RuleClassifier<rule_classifier>` will tra
 Pruning
 -------
 
-With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis with the `execute_rule_analysis` method, which will refine the forest by removing duplicate rules. This method expects the `test.csv` file, a duplicate removal method (which can be either "soft", removing duplicate rules in a single tree, "hard", deleting duplicate rules in distinct trees, only applicable to random forest models, "custom", that will use a custom function previously defined with the `set_custom_rule_removal` method, or "none", that will not remove any rules). You may also optionally specify rule removal based on classification count, which will remove rules that classify `n` or fewer entries with the `remove_below_n_classifications` parameter (disabled by default).
+With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis with the ``execute_rule_analysis`` method, which will refine the forest by removing duplicate rules. This method expects the ``test.csv`` file, a duplicate removal method (which can be either ``"soft"``, removing boundary-redundant sibling pairs within a single tree; ``"hard"``, also removing semantically similar rules across different trees, only applicable to Random Forest models; ``"custom"``, that will use a custom function previously defined with the ``set_custom_rule_removal`` method; or ``"none"``, that will not remove any rules). You may also optionally specify rule removal based on classification count, which will remove rules that classify ``n`` or fewer entries with the ``remove_below_n_classifications`` parameter (disabled by default).
 
 .. code-block:: python
 
@@ -96,24 +93,24 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
         remove_duplicates="soft"
     )
 
-Since this is a large dataset and the algorithm goes through many iterative steps to ensure no new duplicate rules are accidentally created during pruning, it may take a longer time to fully complete the analysis, specially if you use the "hard" removal method.
+Since this is a large dataset and the algorithm goes through many iterative steps to ensure no new duplicate rules are accidentally created during pruning, it may take a longer time to fully complete the analysis, specially if you use the ``"hard"`` removal method.
 
 Editing
 -------
 
 After pruning, you may also want to manually inspect and adjust the final rules before deploying the model.
-The :ref:`RuleClassifier<rule_classifier>` class provides an `edit_rules()` method that starts an interactive terminal session to perform these edits.
+The :ref:`RuleClassifier<rule_classifier>` class provides an ``edit_rules()`` method that starts an interactive terminal session to perform these edits.
 
-You’ll be able to:
+You'll be able to:
 
 - List all current final rules with their names, predicted classes, and conditions.
 - Select a rule by number or name.
 - Add new conditions (e.g. v5 > 10.5).
-- Remove existing conditions by index. 
+- Remove existing conditions by index.
 - Change the predicted class of a rule.
 - Save your edits, which will:
     - Re-parse the conditions to keep them consistent,
-    - Append an _edited suffix to the rule’s name,
+    - Append an _edited suffix to the rule's name,
     - Persist the entire classifier to examples/files/edited_model.pkl.
 
 .. code-block:: python
@@ -126,10 +123,10 @@ During editing:
 
 - Type the rule number or name to open it.
 - Use:
-    - :code:`a` → add condition
-    - :code:`r` → remove condition
-    - :code:`c` → change class
-    - :code:`s` → save changes
+    - :code:`a` -- add condition
+    - :code:`r` -- remove condition
+    - :code:`c` -- change class
+    - :code:`s` -- save changes
 - Type exit at the main prompt to finish editing.
 
 This is useful if you want to refine the automatically extracted rules with domain knowledge.
@@ -138,15 +135,58 @@ This is useful if you want to refine the automatically extracted rules with doma
 Using the model
 ---------------
 
-To use the refined model to classify new entries we can use the `classify` method with the `final` parameter set to `True`, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. If your dataset didn't include a header row you must name your features as “v{column}” where `column` is the column index in the csv.
+Single-sample prediction
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To use the refined model to classify new entries we can use the ``classify`` method with the ``final`` parameter set to ``True``, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. If your dataset didn't include a header row you must name your features as ``"v{column}"`` where ``column`` is the column index in the csv.
 
 .. code-block:: python
-    
+
     # Replace with actual values of your dataset
-    sample = {"Flow ID": "172.16.0.5-192.168.50.4-35468-49856-17", " Source IP": "172.16.0.5", ..., " Inbound": 1}
+    sample = {"Flow ID": "172.16.0.5-192.168.50.4-35468-49856-17", " Source IP": "172.16.0.5", " Inbound": 1}
 
     encoded_sample = feature_encoder.transform(sample)
 
     predicted_class, votes, probabilities = classifier.classify(encoded_sample, final=True)
-    
-    actual_class = label_encoder.inverse_transform(predicted_class)
+
+    actual_class = label_encoder.inverse_transform([predicted_class])
+
+Batch prediction
+^^^^^^^^^^^^^^^^^
+
+For high-performance inference on the entire test set, use ``predict_batch``:
+
+.. code-block:: python
+
+    import numpy as np
+
+    df_test = pd.read_csv("test.csv")
+    X_test = df_test.iloc[:, :-1].values.astype(np.float32)
+    feature_names = list(df_test.columns[:-1])
+
+    predictions = classifier.predict_batch(X_test, feature_names=feature_names, use_final=True)
+
+Comparing Metrics
+^^^^^^^^^^^^^^^^^
+
+Use the ``compare_initial_final_results`` method to evaluate both the original and pruned rule sets:
+
+.. code-block:: python
+
+    classifier.compare_initial_final_results("test.csv")
+
+Exporting
+^^^^^^^^^
+
+You can export the trained classifier to different formats:
+
+.. code-block:: python
+
+    # Standalone Python file
+    classifier.export_to_native_python(feature_names=feature_names, filename="ddos_classifier.py")
+
+    # Binary format (PYRA)
+    classifier.export_to_binary(filepath="ddos_model.bin")
+
+    # C header for embedded systems
+    classifier.export_to_c_header(filepath="ddos_model.h")

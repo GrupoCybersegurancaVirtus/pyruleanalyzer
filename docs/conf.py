@@ -6,12 +6,13 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "pyRuleAnalyzer"
 copyright = "2025, GrupoCybersegurancaVirtus"
 author = "GrupoCybersegurancaVirtus"
-version = "1.1.0"
-release = "1.1.0"
+version = "1.1.1"
+release = "1.1.1"
 
 extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autodoc",
+    "sphinx.ext.mathjax",
     "sphinxcontrib.bibtex",
 ]
 
