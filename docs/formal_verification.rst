@@ -118,42 +118,42 @@ For each class :math:`c \in C`, a dedicated sub-net :math:`SN^{(c)}` is construc
 
 .. math::
 
-   s_K^{(c)} = s_0^{(c)} + \sum_{k=1}^{K} \eta \cdot v_k^{(c)}
+   {s_K}^{(c)} = {s_0}^{(c)} + \sum_{k=1}^{K} \eta \cdot {v_k}^{(c)}
 
-where :math:`K` is the number of boosting stages, :math:`\eta` is the learning rate, and :math:`v_k^{(c)}` is the leaf value of the matched rule in tree :math:`k` for class :math:`c`.
+where :math:`K` is the number of boosting stages, :math:`\eta` is the learning rate, and :math:`{v_k}^{(c)}` is the leaf value of the matched rule in tree :math:`k` for class :math:`c`.
 
 **3.2.2 Initial Score (Bias)**
 
-Each sub-net starts from an initial score :math:`s_0^{(c)}` derived from the training set prior. This score is extracted from scikit-learn's prior estimator (``DummyClassifier``) and placed as the initial token in :math:`P_{accum}^{(c)}`:
+Each sub-net starts from an initial score :math:`{s_0}^{(c)}` derived from the training set prior. This score is extracted from scikit-learn's prior estimator (``DummyClassifier``) and placed as the initial token in :math:`{P_{accum}}^{(c)}`:
 
 .. math::
 
-   s_0^{(\text{binary})} = \ln\!\frac{p}{1-p}, \qquad s_{0,c}^{(\text{multi})} = \ln p_c - \frac{1}{|C|}\sum_j \ln p_j
+   {s_0}^{(\text{binary})} = \ln\!\frac{p}{1-p}, \qquad {s_{0,c}}^{(\text{multi})} = \ln p_c - \frac{1}{|C|}\sum_j \ln p_j
 
 **3.2.3 Sequential Accumulation Cycle**
 
-Within each sub-net :math:`SN^{(c)}`, the :math:`K` boosting stages are modelled as a sequence of transitions :math:`t_1^{(c)}, t_2^{(c)}, \dots, t_K^{(c)}`. Sequencing is enforced by a *stage counter* token :math:`\kappa \in \{1, 2, \dots, K\}` held in a control place :math:`P_{stage}^{(c)}`:
+Within each sub-net :math:`SN^{(c)}`, the :math:`K` boosting stages are modelled as a sequence of transitions :math:`{t_1}^{(c)}, {t_2}^{(c)}, \dots, {t_K}^{(c)}`. Sequencing is enforced by a *stage counter* token :math:`\kappa \in \{1, 2, \dots, K\}` held in a control place :math:`{P_{stage}}^{(c)}`:
 
-* **Places:** :math:`P_{accum}^{(c)}` (colour :math:`\text{SCORE}`) holds the current cumulative score; :math:`P_{stage}^{(c)}` (colour :math:`\text{STAGE}`) holds the stage counter.
-* **Guard:** :math:`G(t_k^{(c)}) = [\kappa = k] \;\wedge\; G_{tree_k}(x)`, ensuring the transition fires only at the correct stage and when the tree's rule conditions are met.
-* **Input arcs:** :math:`t_k^{(c)}` consumes the current score :math:`s` from :math:`P_{accum}^{(c)}` and the counter :math:`\kappa` from :math:`P_{stage}^{(c)}`.
-* **Output arcs:** :math:`t_k^{(c)}` deposits :math:`s + \eta \cdot v_k^{(c)}` back into :math:`P_{accum}^{(c)}` and :math:`\kappa + 1` into :math:`P_{stage}^{(c)}`.
+* **Places:** :math:`{P_{accum}}^{(c)}` (colour :math:`\text{SCORE}`) holds the current cumulative score; :math:`{P_{stage}}^{(c)}` (colour :math:`\text{STAGE}`) holds the stage counter.
+* **Guard:** :math:`G({t_k}^{(c)}) = [\kappa = k] \;\wedge\; G_{tree_k}(x)`, ensuring the transition fires only at the correct stage and when the tree's rule conditions are met.
+* **Input arcs:** :math:`{t_k}^{(c)}` consumes the current score :math:`s` from :math:`{P_{accum}}^{(c)}` and the counter :math:`\kappa` from :math:`{P_{stage}}^{(c)}`.
+* **Output arcs:** :math:`{t_k}^{(c)}` deposits :math:`s + \eta \cdot {v_k}^{(c)}` back into :math:`{P_{accum}}^{(c)}` and :math:`\kappa + 1` into :math:`{P_{stage}}^{(c)}`.
 
 This guarantees that at most one transition per sub-net is enabled at any time, and that scores are accumulated in the correct order.
 
 .. note::
 
-   Each stage transition :math:`t_k^{(c)}` is itself an abstraction: within a single boosting tree there are multiple leaf paths (rules), each with its own guard. In a fully expanded net, :math:`t_k^{(c)}` would be replaced by a sub-page containing guarded transitions for every leaf, exactly as in the DT case (Section 2). The single-transition notation is used here for clarity, with the understanding that the tree's internal mutual exclusivity guarantees that exactly one leaf fires per stage.
+   Each stage transition :math:`{t_k}^{(c)}` is itself an abstraction: within a single boosting tree there are multiple leaf paths (rules), each with its own guard. In a fully expanded net, :math:`{t_k}^{(c)}` would be replaced by a sub-page containing guarded transitions for every leaf, exactly as in the DT case (Section 2). The single-transition notation is used here for clarity, with the understanding that the tree's internal mutual exclusivity guarantees that exactly one leaf fires per stage.
 
 **3.2.4 Activation Transition**
 
-After all :math:`K` stages, a final activation transition :math:`t_{act}` produces the predicted class. In the binary case, :math:`t_{act}` has a single input arc from :math:`P_{accum}` and is guarded by :math:`[\kappa = K{+}1]`. In the multiclass case, :math:`t_{act}` is a *synchronization transition* with :math:`|C|` input arcs — one from each sub-net's accumulator :math:`P_{accum}^{(c)}` — and :math:`|C|` corresponding guards :math:`[\kappa^{(c)} = K{+}1]`. The transition fires only when **all** sub-nets have completed their :math:`K` stages, collecting the terminal scores :math:`s_K^{(1)}, s_K^{(2)}, \dots, s_K^{(|C|)}` in a single atomic step. The activation is a two-step process:
+After all :math:`K` stages, a final activation transition :math:`t_{act}` produces the predicted class. In the binary case, :math:`t_{act}` has a single input arc from :math:`P_{accum}` and is guarded by :math:`[\kappa = K{+}1]`. In the multiclass case, :math:`t_{act}` is a *synchronization transition* with :math:`|C|` input arcs — one from each sub-net's accumulator :math:`{P_{accum}}^{(c)}` — and :math:`|C|` corresponding guards :math:`{\kappa}^{(c)} = K{+}1`. The transition fires only when **all** sub-nets have completed their :math:`K` stages, collecting the terminal scores :math:`{s_K}^{(1)}, {s_K}^{(2)}, \dots, {s_K}^{(|C|)}` in a single atomic step. The activation is a two-step process:
 
 1. **Probability computation:**
 
 .. math::
 
-   p^{(\text{binary})} = \sigma(s_K) = \frac{1}{1 + e^{-s_K}}, \qquad \mathbf{p}^{(\text{multi})}_c = \frac{e^{s_K^{(c)}}}{\sum_j e^{s_K^{(j)}}} \;\text{(softmax)}
+   p^{(\text{binary})} = \sigma(s_K) = \frac{1}{1 + e^{-s_K}}, \qquad {\mathbf{p}_c}^{(\text{multi})} = \frac{e^{{s_K}^{(c)}}}{\sum_j e^{{s_K}^{(j)}}} \;\text{(softmax)}
 
 2. **Decision:**
 
@@ -161,12 +161,12 @@ After all :math:`K` stages, a final activation transition :math:`t_{act}` produc
 
    \hat{y} = \begin{cases}
    1 & \text{if } p^{(\text{binary})} \geq 0.5 \quad \text{(binary)} \\[4pt]
-   \arg\max_c \; s_K^{(c)} & \text{(multiclass)}
+   \arg\max_c \; {s_K}^{(c)} & \text{(multiclass)}
    \end{cases}
 
 .. note::
 
-   In the multiclass case, because softmax is a monotonic transformation, :math:`\arg\max` can be applied directly to the raw scores :math:`s_K^{(c)}` without computing the softmax probabilities, which is what the implementation does.
+   In the multiclass case, because softmax is a monotonic transformation, :math:`\arg\max` can be applied directly to the raw scores :math:`{s_K}^{(c)}` without computing the softmax probabilities, which is what the implementation does.
 
 The figure below depicts the additive composition for a single class channel. The place :math:`P_{initial\_score}` holds the bias token :math:`s_0`. Inside the additive boosting cycle, each gradient step transition :math:`T_{tree\_k}` adds :math:`\eta \cdot v_k` to the accumulator. After the final iteration, the activation transition :math:`T_{activation}` (sigmoid or softmax) converts the raw score into a class probability and deposits the result in :math:`P_{final\_prediction}`. For multiclass problems, :math:`|C|` such channels operate in parallel, and the activation transition collects all channel scores before producing the final label.
 
