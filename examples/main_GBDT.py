@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # from sklearn.model_selection import train_test_split
 from pyruleanalyzer.rule_classifier import RuleClassifier
 
-train_path = "examples/data/covid_train.csv"
-test_path = "examples/data/covid_test.csv"
+# train_path = "examples/data/covid_train.csv"
+# test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/CICIDS2017-Wed2_train.csv"
 # test_path = "examples/data/CICIDS2017-Wed2_test.csv"
@@ -18,14 +18,19 @@ test_path = "examples/data/covid_test.csv"
 # train_path = "examples/data/ddos-train.csv"
 # test_path = "examples/data/ddos-test.csv"
 
-# train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
-# test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
+train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
+test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
 
 # train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
 # test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
 
 # Model parameters
-model_parameters = {}
+model_parameters = {
+    'random_state': 42,
+    'n_estimators': 100,
+    # 'max_depth': 3,           # Max depth (default = 3 for GBDT)
+    # 'learning_rate': 0.1,     # Learning rate
+}
 
 # Generating the initial rule based model
 classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Gradient Boosting Decision Trees')

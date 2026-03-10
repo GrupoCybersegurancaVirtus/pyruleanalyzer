@@ -180,12 +180,20 @@ print("=" * 100)
 
 # --- RELATIVE SPEEDUP ---
 print("\nSPEEDUP RELATIVE TO SKLEARN")
-print("-" * 55)
+print("-" * 70)
+print(f"  {'ENGINE':<42} | {'SPEED vs SKLEARN':>18}")
+print(f"  {'-'*42}-+-{'-'*18}")
 if t_orig > 0:
-    print(f"  pyRuleAnalyzer Vectorized ({backend}):  {t_orig/max(t_batch, 1e-9):.2f}x {'faster' if t_batch < t_orig else 'slower'}")
+    pct_batch = ((t_orig - t_batch) / t_orig) * 100
+    sign_batch = "+" if pct_batch >= 0 else ""
+    print(f"  {'pyRuleAnalyzer Vectorized (' + backend + ')':<42} | {sign_batch}{pct_batch:>10.1f}% {'faster' if pct_batch >= 0 else 'slower'}")
     if option3_available:
-        print(f"  pyRuleAnalyzer Exported (.py):     {t_orig/max(t_opt3, 1e-9):.2f}x {'faster' if t_opt3 < t_orig else 'slower'}")
-    print(f"  pyRuleAnalyzer Rules (per sample): {t_orig/max(t_py, 1e-9):.2f}x {'faster' if t_py < t_orig else 'slower'}")
+        pct_opt3 = ((t_orig - t_opt3) / t_orig) * 100
+        sign_opt3 = "+" if pct_opt3 >= 0 else ""
+        print(f"  {'pyRuleAnalyzer Exported (.py)':<42} | {sign_opt3}{pct_opt3:>10.1f}% {'faster' if pct_opt3 >= 0 else 'slower'}")
+    pct_py = ((t_orig - t_py) / t_orig) * 100
+    sign_py = "+" if pct_py >= 0 else ""
+    print(f"  {'pyRuleAnalyzer Rules (per sample)':<42} | {sign_py}{pct_py:>10.1f}% {'faster' if pct_py >= 0 else 'slower'}")
 
 # --- FILE SIZE COMPARISON (DISK) ---
 print("\nFILE SIZE COMPARISON (DISK)")

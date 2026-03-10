@@ -245,14 +245,24 @@ print("=" * 100)
 
 # --- RELATIVE SPEEDUP ---
 print("\nSPEEDUP RELATIVE TO SKLEARN")
-print("-" * 60)
+print("-" * 70)
+print(f"  {'ENGINE':<42} | {'SPEED vs SKLEARN':>18}")
+print(f"  {'-'*42}-+-{'-'*18}")
 if t_orig > 0:
-    print(f"  pyRuleAnalyzer Vectorized ({backend}):  {t_orig/max(t_batch, 1e-9):.2f}x {'faster' if t_batch < t_orig else 'slower'}")
-    print(f"  pyRuleAnalyzer Rules (Initial):    {t_orig/max(t_initial, 1e-9):.2f}x {'faster' if t_initial < t_orig else 'slower'}")
+    pct_batch = ((t_orig - t_batch) / t_orig) * 100
+    sign_batch = "+" if pct_batch >= 0 else ""
+    print(f"  {'pyRuleAnalyzer Vectorized (' + backend + ')':<42} | {sign_batch}{pct_batch:>10.1f}% {'faster' if pct_batch >= 0 else 'slower'}")
+    pct_initial = ((t_orig - t_initial) / t_orig) * 100
+    sign_initial = "+" if pct_initial >= 0 else ""
+    print(f"  {'pyRuleAnalyzer Rules (Initial)':<42} | {sign_initial}{pct_initial:>10.1f}% {'faster' if pct_initial >= 0 else 'slower'}")
     if classifier.final_rules:
-        print(f"  pyRuleAnalyzer Rules (Refined):   {t_orig/max(t_refined, 1e-9):.2f}x {'faster' if t_refined < t_orig else 'slower'}")
+        pct_refined = ((t_orig - t_refined) / t_orig) * 100
+        sign_refined = "+" if pct_refined >= 0 else ""
+        print(f"  {'pyRuleAnalyzer Rules (Refined)':<42} | {sign_refined}{pct_refined:>10.1f}% {'faster' if pct_refined >= 0 else 'slower'}")
     if option_standalone:
-        print(f"  pyRuleAnalyzer Exported (.py):     {t_orig/max(t_standalone, 1e-9):.2f}x {'faster' if t_standalone < t_orig else 'slower'}")
+        pct_standalone = ((t_orig - t_standalone) / t_orig) * 100
+        sign_standalone = "+" if pct_standalone >= 0 else ""
+        print(f"  {'pyRuleAnalyzer Exported (.py)':<42} | {sign_standalone}{pct_standalone:>10.1f}% {'faster' if pct_standalone >= 0 else 'slower'}")
 
 # --- DIVERGENCE ANALYSIS ---
 print("\nDIVERGENCE ANALYSIS")
