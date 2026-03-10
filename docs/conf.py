@@ -29,3 +29,4 @@ language = "en_US"
 
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {"titles_only": True}
+html_static_path = ["_static"]
