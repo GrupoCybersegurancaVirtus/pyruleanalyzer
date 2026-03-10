@@ -128,7 +128,7 @@ Each sub-net starts from an initial score :math:`s_0^{(c)}` derived from the tra
 
 .. math::
 
-   s_0^{(\text{binary})} = \ln\!\frac{p}{1-p}, \qquad s_0^{(\text{multi})}_c = \ln p_c - \frac{1}{|C|}\sum_j \ln p_j
+   s_0^{(\text{binary})} = \ln\!\frac{p}{1-p}, \qquad s_{0,c}^{(\text{multi})} = \ln p_c - \frac{1}{|C|}\sum_j \ln p_j
 
 **3.2.3 Sequential Accumulation Cycle**
 
