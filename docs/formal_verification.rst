@@ -10,9 +10,42 @@ This section documents the mathematical foundation used by pyRuleAnalyzer to tra
 1. Formal Definitions
 ^^^^^^^^^^^^^^^^^^^^^
 
-**1.1 CPN Module (Definition 3)**
+**1.1 Coloured Petri Net**
 
-A CPN module is a tuple:
+A Coloured Petri Net (CPN) is the standard 9-tuple:
+
+.. math::
+
+   CPN = (\Sigma, P, T, A, N, C, G, E, I)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 85
+
+   * - Element
+     - Description
+   * - :math:`\Sigma`
+     - **Colour sets.** The data types carried by tokens: :math:`\text{VEC} = \mathbb{R}^d` (feature vectors), :math:`\text{LABEL}` (finite set of class labels), :math:`\text{PROB} = [0,1]^{|C|}` (probability vectors, used by RF), :math:`\text{SCORE} = \mathbb{R}` (real-valued scores, used by GBDT), and :math:`\text{STAGE} = \{1, 2, \dots, K{+}1\} \subset \mathbb{N}` (stage counter, used by GBDT to enforce sequential accumulation).
+   * - :math:`P`
+     - **Places.** The set of places within the net.
+   * - :math:`T`
+     - **Transitions.** The set of transitions within the net.
+   * - :math:`A`
+     - **Arcs.** Directed connections between places and transitions.
+   * - :math:`N`
+     - **Node function.** Maps each arc to its source and destination nodes, defining the net topology.
+   * - :math:`C`
+     - **Colour function.** Assigns colour sets to places (e.g. :math:`C(P_{in}) = \text{VEC}`, :math:`C(P_{out}) = \text{LABEL}`).
+   * - :math:`G`
+     - **Guards.** Boolean expressions on transitions: :math:`G(t_i) = \bigwedge_{j \in C_i} (x_{feat} \text{ op } \theta_j)`.
+   * - :math:`E`
+     - **Arc expressions.** Define how tokens flow. Input arcs: :math:`E(P_{in} \to t_i) = x`. Output arcs: :math:`E(t_i \to P_{out}) = v_i`.
+   * - :math:`I`
+     - **Initialization.** The initial marking of the net's places.
+
+**1.2 CPN Module**
+
+A CPN module extends a flat CPN with an interface for hierarchical composition:
 
 .. math::
 
@@ -27,7 +60,7 @@ where:
    * - Element
      - Description
    * - :math:`CPN`
-     - A non-hierarchical Coloured Petri Net :math:`CPN = (\Sigma, P, T, A, N, C, G, E, I)`. See Section 1.2 for the element descriptions.
+     - A non-hierarchical Coloured Petri Net :math:`CPN = (\Sigma, P, T, A, N, C, G, E, I)` as defined in Section 1.1.
    * - :math:`T_{sub} \subseteq T`
      - **Substitution transitions.** A subset of transitions that are placeholders for entire sub-modules. When a substitution transition is "refined", it is replaced by the internal net of the referenced sub-module.
    * - :math:`P_{port} \subseteq P`
@@ -35,38 +68,9 @@ where:
    * - :math:`PT : P_{port} \to \{In, Out, In/Out\}`
      - **Port-type function.** Assigns a direction to each port place: *In* (tokens flow into the module), *Out* (tokens flow out), or *In/Out* (bidirectional).
 
-**1.2 CPN Tuple Elements**
+**1.3 Hierarchical Coloured Petri Net**
 
-The internal CPN of each module is the standard 9-tuple :math:`(\Sigma, P, T, A, N, C, G, E, I)`:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 15 85
-
-   * - Element
-     - Description
-   * - :math:`\Sigma`
-     - **Colour sets.** The data types carried by tokens: :math:`\text{VEC} = \mathbb{R}^d` (feature vectors), :math:`\text{LABEL}` (finite set of class labels), :math:`\text{PROB} = [0,1]^{|C|}` (probability vectors, used by RF), :math:`\text{SCORE} = \mathbb{R}` (real-valued scores, used by GBDT), and :math:`\text{STAGE} = \{1, 2, \dots, K{+}1\} \subset \mathbb{N}` (stage counter, used by GBDT to enforce sequential accumulation).
-   * - :math:`P`
-     - **Places.** The set of places within the module.
-   * - :math:`T`
-     - **Transitions.** The set of transitions within the module, including both regular transitions and substitution transitions (:math:`T_{sub} \subseteq T`).
-   * - :math:`A`
-     - **Arcs.** Directed connections between places and transitions.
-   * - :math:`N`
-     - **Node function.** Maps each arc to its source and destination nodes, defining the net topology.
-   * - :math:`C`
-     - **Colour function.** Assigns colour sets to places (e.g. :math:`C(P_{in}) = \text{VEC}`, :math:`C(P_{out}) = \text{LABEL}`).
-   * - :math:`G`
-     - **Guards.** Boolean expressions on transitions: :math:`G(t_i) = \bigwedge_{j \in C_i} (x_{feat} \text{ op } \theta_j)`.
-   * - :math:`E`
-     - **Arc expressions.** Define how tokens flow. Input arcs: :math:`E(P_{in} \to t_i) = x`. Output arcs: :math:`E(t_i \to P_{out}) = v_i`.
-   * - :math:`I`
-     - **Initialization.** The initial marking of the module's places.
-
-**1.3 Hierarchical Coloured Petri Net (Definition 4)**
-
-An HCPN is a tuple:
+An HCPN composes multiple CPN modules into a hierarchical structure:
 
 .. math::
 
@@ -90,8 +94,8 @@ where:
      - **Fusion sets.** Each element of :math:`FS` is a nonempty set of places (possibly from different modules) that are identified as a single logical place. All places in a fusion set share the same colour set and marking at all times. This allows multiple modules to share a common place without explicit arcs between them.
 
 
-2. Decision Tree as a Leaf Module
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2. Decision Tree
+^^^^^^^^^^^^^^^^^
 
 **Definition:** A Decision Tree :math:`DT` is a set of rules :math:`R = \{r_1, r_2, \dots, r_n\}` that are exhaustive and mutually exclusive. Each rule :math:`r` is defined by a pair :math:`(C, v)`, where :math:`C` is the set of split conditions and :math:`v` is the resulting class.
 
@@ -133,13 +137,13 @@ The figure below shows the CPN structure for a Decision Tree module. The input p
    This property holds under the assumption that the input vector :math:`x` contains a value for every feature used by the tree. If any feature is missing, no transition may be enabled and the net falls back to the classifier's default class.
 
 
-3. Ensemble Models as Hierarchical Compositions
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3. Ensemble Models
+^^^^^^^^^^^^^^^^^^^
 
 The HCPN framework enables a natural representation of ensemble models: each individual tree is an instance of the leaf module :math:`s_{DT}`, composed into higher-level modules via substitution transitions, port-socket bindings, and fusion places.
 
-3.1 Random Forest (2-Level HCPN)
-"""""""""""""""""""""""""""""""""
+3.1 Random Forest
+""""""""""""""""""
 
 For a Random Forest with :math:`N` trees, the HCPN is:
 
@@ -211,19 +215,19 @@ The following figure shows the parallel composition. Each sub-page :math:`Tree_k
    :width: 80%
    :alt: Random Forest HCPN diagram
 
-   2-level HCPN for Random Forest: :math:`N` substitution transitions (each refining to a DT module) feed probability vectors into a collector place, followed by a soft-voting aggregation transition.
+   HCPN for Random Forest: :math:`N` substitution transitions (each refining to a DT module) feed probability vectors into a collector place, followed by a soft-voting aggregation transition.
 
 .. note::
 
    The figure labels the aggregation transition as "Mode Function" for visual simplicity. In the actual implementation, soft voting (probability averaging) is used as the primary path; hard voting (mode) exists only as a fallback when class distribution data is unavailable.
 
 
-3.2 GBDT (3-Level HCPN)
-"""""""""""""""""""""""""
+3.2 GBDT
+"""""""""
 
 In Gradient Boosting, classification is performed by sequential accumulation of real-valued scores. The implementation follows scikit-learn's One-vs-Rest (OVR) scheme: for a problem with :math:`|C|` classes, there are :math:`|C|` independent score channels.
 
-The GBDT model is represented as a **3-level HCPN**:
+The GBDT model is represented as a 3-level HCPN:
 
 .. math::
 
@@ -360,7 +364,7 @@ The figure below depicts the additive composition for a single class channel. Th
    :width: 85%
    :alt: GBDT HCPN diagram
 
-   3-level HCPN for GBDT (single class channel view): initial bias score, sequential accumulation via substitution transitions (each refining to a DT module), and a final activation transition (sigmoid/softmax).
+   HCPN for GBDT (single class channel view): initial bias score, sequential accumulation via substitution transitions (each refining to a DT module), and a final activation transition (sigmoid/softmax).
 
 
 4. Rule Extraction Algorithm
