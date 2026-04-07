@@ -177,7 +177,7 @@ def my_pruner(rules):
     return filtered, removed
 
 classifier.set_custom_rule_removal(my_pruner)
-classifier.execute_rule_analysis(test_path, remove_duplicates="custom")
+classifier.execute_rule_analysis(test_path, remove_low_usage=-1)
 ```
 
 ### 3. Classification Strategies
@@ -292,8 +292,7 @@ classifier = RuleClassifier.new_classifier(
 # 2. Optimize rules (remove redundancies + prune low-usage)
 classifier.execute_rule_analysis(
     "test.csv",
-    remove_duplicates="soft",
-    remove_below_n_classifications=1
+    remove_low_usage=1
 )
 
 # 3. Compare initial vs optimized model
@@ -322,8 +321,8 @@ classifier = RuleClassifier.new_classifier(
     algorithm_type='Decision Tree'
 )
 
-# "soft" = merge siblings within the same tree (safe, no accuracy loss)
-classifier.execute_rule_analysis("test.csv", remove_duplicates="soft", remove_below_n_classifications=-1)
+# Remove low-usage rules (safe, no accuracy loss)
+classifier.execute_rule_analysis("test.csv", remove_low_usage=-1)
 classifier.compare_initial_final_results("test.csv")
 ```
 
@@ -344,8 +343,8 @@ classifier = RuleClassifier.new_classifier(
     algorithm_type='Random Forest'
 )
 
-# "hard" = also remove identical rules across different trees
-classifier.execute_rule_analysis("test.csv", remove_duplicates="hard", remove_below_n_classifications=1)
+# Remove low-usage rules (safe for all algorithms)
+classifier.execute_rule_analysis("test.csv", remove_low_usage=1)
 classifier.compare_initial_final_results("test.csv")
 ```
 
@@ -360,7 +359,7 @@ classifier = RuleClassifier.new_classifier(
     algorithm_type='Gradient Boosting Decision Trees'
 )
 
-classifier.execute_rule_analysis("test.csv", remove_duplicates="hard", remove_below_n_classifications=1)
+classifier.execute_rule_analysis("test.csv", remove_low_usage=1)
 classifier.compare_initial_final_results("test.csv")
 ```
 
@@ -526,8 +525,7 @@ classifier = RuleClassifier.new_classifier(
 # Execute analysis without saving final model and reports
 classifier.execute_rule_analysis(
     test_path,
-    remove_duplicates="soft",
-    remove_below_n_classifications=-1,
+    remove_low_usage=-1,
     save_final_model=False,  # Don't save final_model.pkl
     save_report=False        # Don't save output_classifier_*.txt
 )

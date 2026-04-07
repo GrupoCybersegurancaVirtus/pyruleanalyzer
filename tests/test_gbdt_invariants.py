@@ -456,7 +456,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
         try:
             classifier_soft = build_gbdt_classifier(sk_model, feature_names, class_names)
             classifier_soft.execute_rule_analysis(
-                test_path, remove_duplicates='soft', remove_below_n_classifications=-1
+                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -503,7 +503,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
         try:
             classifier_hard = build_gbdt_classifier(sk_model, feature_names, class_names)
             classifier_hard.execute_rule_analysis(
-                test_path, remove_duplicates='hard', remove_below_n_classifications=-1
+                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -543,8 +543,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
             try:
                 clf_t = build_gbdt_classifier(sk_model, feature_names, class_names)
                 clf_t.execute_rule_analysis(
-                    test_path, remove_duplicates='soft',
-                    remove_below_n_classifications=threshold
+                    test_path, remove_low_usage=threshold, save_final_model=False, save_report=False
                 )
             finally:
                 sys.stdout.close()

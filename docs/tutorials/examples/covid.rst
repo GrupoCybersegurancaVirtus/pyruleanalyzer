@@ -69,14 +69,26 @@ The ``new_classifier`` method from :ref:`RuleClassifier<rule_classifier>` will t
 Pruning
 -------
 
-With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis with the ``execute_rule_analysis`` method, which will refine the tree by removing duplicate rules. This method expects the ``test.csv`` file, a duplicate removal method (which can be either ``"soft"``, removing boundary-redundant sibling pairs within a single tree; ``"hard"``, also removing semantically similar rules across different trees, only applicable to Random Forest models; ``"custom"``, that will use a custom function previously defined with the ``set_custom_rule_removal`` method; or ``"none"``, that will not remove any rules). You may also optionally specify rule removal based on classification count, which will remove rules that classify ``n`` or fewer entries with the ``remove_below_n_classifications`` parameter (disabled by default).
+With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis using the :ref:`DTAnalyzer<dt_analyzer>` class, which will refine the tree by removing duplicate rules.
 
 .. code-block:: python
 
-    classifier.execute_rule_analysis(
+    from pyruleanalyzer import DTAnalyzer
+
+    analyzer = DTAnalyzer(classifier)
+    analyzer.execute_rule_analysis(
         file_path="test.csv",
-        remove_duplicates="soft"
+        remove_low_usage=-1,
+        save_final_model=True,
+        save_report=True
     )
+
+Parameters:
+
+- ``file_path``: Path to the test dataset CSV file.
+- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+- ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
+- ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
 
 Editing
 -------

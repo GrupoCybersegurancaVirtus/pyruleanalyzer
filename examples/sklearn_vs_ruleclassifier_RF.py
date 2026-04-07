@@ -8,7 +8,7 @@ import importlib
 
 # Add parent directory to path to find pyruleanalyzer package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 from pyruleanalyzer._accel import HAS_C_EXTENSION
 
 # --- CONFIGURATION ---
@@ -38,15 +38,18 @@ model_params = {
 # ==============================================================================
 # 1. TRAINING AND REFINEMENT PROCESS (RANDOM FOREST)
 # ==============================================================================
-# Create classifier with algorithm_type='Random Forest'
-classifier = RuleClassifier.new_classifier(
-    train_path, test_path, model_params, algorithm_type="Random Forest"
+# Create analyzer and train model using the new factory method
+analyzer = PyRuleAnalyzer.create(
+    train_path=train_path,
+    test_path=test_path,
+    model='Random Forest',
+    params=model_params,
+    refine=True,  # Automatically refine rules after creation
+    refine_params={'remove_low_usage': 1}  # Remove rules with < 1 usage
 )
 
-# Execute analysis
-classifier.execute_rule_analysis(
-    test_path, remove_duplicates="soft", remove_below_n_classifications=1
-)
+# Get classifier for further operations
+classifier = analyzer.classifier
 
 # Generate detailed report
 classifier.compare_initial_final_results(test_path)

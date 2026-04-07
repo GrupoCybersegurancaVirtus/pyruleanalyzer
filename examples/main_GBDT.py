@@ -5,11 +5,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 from pyruleanalyzer._accel import HAS_C_EXTENSION
 
-# train_path = "examples/data/covid_train.csv"
-# test_path = "examples/data/covid_test.csv"
+train_path = "examples/data/covid_train.csv"
+test_path = "examples/data/covid_test.csv"
 
 # train_path = "examples/data/CICIDS2017-Wed2_train.csv"
 # test_path = "examples/data/CICIDS2017-Wed2_test.csv"
@@ -20,8 +20,8 @@ from pyruleanalyzer._accel import HAS_C_EXTENSION
 # train_path = "examples/data/ddos-train.csv"
 # test_path = "examples/data/ddos-test.csv"
 
-train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
-test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
+# train_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/train.csv"
+# test_path = "examples/data/A Machine Learning-Based Classification and Prediction Technique for DDoS Attacks/test.csv"
 
 # train_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/train.csv"
 # test_path = "examples/data/DDoS Attack Classification Leveraging Data Balancing and Hyperparameter Tuning Approach Using Ensemble Machine Learning with XAI/test.csv"
@@ -34,20 +34,22 @@ model_parameters = {
     # 'learning_rate': 0.1,     # Learning rate
 }
 
-# Generating the initial rule based model
-classifier = RuleClassifier.new_classifier(train_path, test_path, model_parameters, algorithm_type='Gradient Boosting Decision Trees')
+# ==============================================================================
+# 1. RULE EXTRACTION AND ANALYSIS
+# ==============================================================================
+# Creating analyzer and training model using the new factory method
+analyzer = PyRuleAnalyzer.create(
+    train_path=train_path,
+    test_path=test_path,
+    model='Gradient Boosting Decision Trees',
+    params=model_parameters,
+    refine=True,  # Automatically refine rules after creation
+    refine_params={'remove_low_usage': 1}  # Remove rules with < 1 usage
+)
 
-# Executing the rule analysis method
-# remove_duplicates = "soft" (in the same tree, probably does not affect the final metrics), "hard" (between trees, may affect the final metrics), "custom" (custom function to remove duplicates) or "none" (no removal)
-# remove_below_n_classifications = -1 (no removal), 0 (removal of rules with 0 classifications), or any other integer (removal of rules with equal or less than n classifications)
-classifier.execute_rule_analysis(test_path, remove_duplicates="hard", remove_below_n_classifications=1)
-
-# Comparing initial and final results
-classifier.compare_initial_final_results(test_path)
-
-# =============================================================================
+# ==============================================================================
 # 2. BATCH PREDICTION (Vectorized, with optional C acceleration)
-# =============================================================================
+# ==============================================================================
 print("\n" + "=" * 80)
 print("BATCH PREDICTION DEMO (Gradient Boosting Decision Trees)")
 print("=" * 80)
@@ -57,11 +59,11 @@ print(f"C extension available: {HAS_C_EXTENSION}")
 X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(train_path, test_path)
 
 # Compile tree arrays for vectorized prediction
-classifier.compile_tree_arrays(feature_names=feature_names)
+analyzer.classifier.compile_tree_arrays(feature_names=feature_names)
 
 # Batch predict
 start = time.time()
-y_batch = classifier.predict_batch(X_test, feature_names=feature_names)
+y_batch = analyzer.classifier.predict_batch(X_test, feature_names=feature_names)
 t_batch = time.time() - start
 
 acc_batch = np.mean(y_batch == y_test)
@@ -71,18 +73,18 @@ print(f"  Time:      {t_batch:.4f}s")
 print(f"  Speed:     {len(y_test) / max(t_batch, 1e-9):.0f} samples/s")
 
 # Batch predict probabilities
-y_proba = classifier.predict_batch_proba(X_test, feature_names=feature_names)
+y_proba = analyzer.classifier.predict_batch_proba(X_test, feature_names=feature_names)
 print(f"  Proba shape: {y_proba.shape}")
 
-# =============================================================================
+# ==============================================================================
 # 3. EXPORT FORMATS (Using export_all for selective export)
-# =============================================================================
+# ==============================================================================
 print("\n" + "=" * 80)
 print("EXPORT FORMATS")
 print("=" * 80)
 
 # Export to all formats (Python, Binary, C)
-classifier.export_all(
+analyzer.classifier.export_all(
     base_name="files/gbdt_model",
     feature_names=feature_names,
     export_python=True,   # Export to .py
@@ -91,7 +93,7 @@ classifier.export_all(
 )
 
 # Alternative: Export only specific formats
-# classifier.export_all("files/gbdt_model", export_python=False, export_binary=True, export_c=False)
+# analyzer.classifier.export_all("files/gbdt_model", export_python=False, export_binary=True, export_c=False)
 
 # Size comparison
 export_files = [

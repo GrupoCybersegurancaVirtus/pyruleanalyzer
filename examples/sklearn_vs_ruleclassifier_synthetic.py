@@ -24,7 +24,7 @@ from sklearn.datasets import make_classification
 
 # Add parent directory to path to find pyruleanalyzer package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 from pyruleanalyzer._accel import HAS_C_EXTENSION
 
 # ==============================================================================
@@ -62,8 +62,7 @@ MODEL_PARAMS = {
 }
 
 # --- Rule Analysis Parameters ---
-REMOVE_DUPLICATES = 'soft'           # 'soft', 'hard', 'custom', 'none'
-REMOVE_BELOW_N_CLASSIFICATIONS = 1  # -1 = no usage pruning, 0+ = threshold
+REMOVE_LOW_USAGE = 1  # -1 = no usage pruning, 0+ = threshold
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -204,16 +203,18 @@ def main():
         # ==================================================================
         # 2. TRAINING AND REFINEMENT
         # ==================================================================
-        classifier = RuleClassifier.new_classifier(
-            train_path, test_path, MODEL_PARAMS,
-            algorithm_type=ALGORITHM_TYPE
+        # Create analyzer using the new factory method
+        analyzer = PyRuleAnalyzer.create(
+            train_path=train_path,
+            test_path=test_path,
+            model=ALGORITHM_TYPE,
+            params=MODEL_PARAMS,
+            refine=True,  # Automatically refine rules after creation
+            refine_params={'remove_low_usage': REMOVE_LOW_USAGE}
         )
 
-        classifier.execute_rule_analysis(
-            test_path,
-            remove_duplicates=REMOVE_DUPLICATES,
-            remove_below_n_classifications=REMOVE_BELOW_N_CLASSIFICATIONS,
-        )
+        # Get classifier for further operations
+        classifier = analyzer.classifier
 
         classifier.compare_initial_final_results(test_path)
 

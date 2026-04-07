@@ -150,26 +150,41 @@ This process will:
 Analyze and Refine the Rules
 ----------------------------
 
-After initializing the :ref:`RuleClassifier<rule_classifier>` instance, you can analyze and refine the extracted rules using the ``execute_rule_analysis`` method. This method internally creates the appropriate analyzer (:ref:`DTAnalyzer<dt_analyzer>`, :ref:`RFAnalyzer<rf_analyzer>`, or :ref:`GBDTAnalyzer<gbdt_analyzer>`) based on the algorithm type.
+After initializing the :ref:`RuleClassifier<rule_classifier>` instance, you can analyze and refine the extracted rules using the appropriate analyzer class (:ref:`DTAnalyzer<dt_analyzer>`, :ref:`RFAnalyzer<rf_analyzer>`, or :ref:`GBDTAnalyzer<gbdt_analyzer>`) based on the algorithm type.
 
 .. code-block:: python
 
-    classifier.execute_rule_analysis(
+    from pyruleanalyzer import DTAnalyzer, RFAnalyzer, GBDTAnalyzer
+
+    # For a Decision Tree classifier
+    analyzer = DTAnalyzer(classifier)
+    analyzer.execute_rule_analysis(
         file_path="test.csv",
-        remove_duplicates="soft",
-        remove_below_n_classifications=1
+        remove_low_usage=-1,
+        save_final_model=True,
+        save_report=True
     )
 
 Parameters:
 
 - ``file_path``: Path to the test dataset CSV file.
-- ``remove_duplicates``: Strategy to remove duplicate rules. Options:
+- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+- ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
+- ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
 
-  - ``"soft"``: Remove boundary-redundant sibling pairs within the same tree.
-  - ``"hard"``: Also remove semantically similar rules across different trees (applicable to Random Forest).
-  - ``"custom"``: Use the custom function defined with ``set_custom_rule_removal`` for duplicate removal.
-  - ``"none"``: Do not remove duplicates.
-- ``remove_below_n_classifications``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+This method will:
+
+- Evaluate the rules on the test dataset.
+- Iteratively remove duplicate rules until convergence.
+- Optionally prune infrequently used rules (with sibling promotion to maintain coverage).
+- Update the :ref:`RuleClassifier<rule_classifier>` instance with the refined rule set.
+
+Parameters:
+
+- ``file_path``: Path to the test dataset CSV file.
+- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+- ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
+- ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
 
 This method will:
 

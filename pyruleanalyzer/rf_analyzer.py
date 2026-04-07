@@ -256,6 +256,26 @@ class RFAnalyzer:
         y_pred_arr = np.array(y_pred)
         correct = np.sum(y_pred_arr == y_test)
 
+        # Detect and remove intra-tree duplicated rules (soft mode)
+        # This is equivalent to the old remove_duplicates="soft" behavior
+        duplicated_pairs = clf.find_duplicated_rules(type='soft')
+        intra_tree_count = len(duplicated_pairs)
+        self.redundancy_counts["intra_tree"] = intra_tree_count
+        
+        if duplicated_pairs:
+            print(f"Found {intra_tree_count} duplicated rule pairs (intra-tree).")
+            # For duplicated rules, we only remove ONE rule from each pair (not both)
+            # We keep the first rule and remove the second one
+            rules_to_remove = []
+            for rule1, rule2 in duplicated_pairs:
+                rules_to_remove.append(rule2)  # Keep rule1, remove rule2
+            
+            # Simply filter out the duplicated rules (no promotion needed)
+            rules_to_remove_ids = {id(r) for r in rules_to_remove}
+            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids]
+            print(f"Rules after removing duplicates: {len(clf.final_rules)}")
+            clf.update_native_model(clf.final_rules)
+
         # Low-usage pruning with sibling promotion
         if remove_below_n_classifications > -1:
             print(f"\nPruning rules with <= {remove_below_n_classifications} classifications...")

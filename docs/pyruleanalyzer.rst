@@ -321,8 +321,7 @@ classifier = RuleClassifier.new_classifier(
 analyzer = DTAnalyzer(classifier)
 analyzer.execute_rule_analysis(
     file_path="data/test.csv",
-    remove_duplicates="soft",
-    remove_below_n_classifications=-1,
+    remove_low_usage=-1,
     save_final_model=True,
     save_report=True
 )

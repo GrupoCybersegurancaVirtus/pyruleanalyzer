@@ -408,7 +408,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 class_names_map, 'Random Forest'
             )
             classifier_soft.execute_rule_analysis(
-                test_path, remove_duplicates='soft', remove_below_n_classifications=-1
+                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -459,7 +459,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 class_names_map, 'Random Forest'
             )
             classifier_hard.execute_rule_analysis(
-                test_path, remove_duplicates='hard', remove_below_n_classifications=-1
+                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -504,8 +504,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                     class_names_map, 'Random Forest'
                 )
                 clf_t.execute_rule_analysis(
-                    test_path, remove_duplicates='soft',
-                    remove_below_n_classifications=threshold
+                    test_path, remove_low_usage=threshold, save_final_model=False, save_report=False
                 )
             finally:
                 sys.stdout.close()
