@@ -232,8 +232,14 @@ def main():
             'Gradient Boosting Decision Trees': 'gbdt',
         }[ALGORITHM_TYPE]
 
-        export_file = f"examples/files/{algo_prefix}_classifier.py"
-        classifier.export_to_native_python(feature_names, filename=export_file)
+        export_file = f"files/{algo_prefix}_classifier.py"
+        classifier.export_all(
+            base_name=f"files/{algo_prefix}_model",
+            feature_names=feature_names,
+            export_python=True,
+            export_binary=True,
+            export_c=True
+        )
 
         # Compile tree arrays for predict_batch
         classifier.compile_tree_arrays(feature_names=feature_names)
@@ -252,7 +258,7 @@ def main():
         print(f"C extension available: {HAS_C_EXTENSION}")
 
         # A. Load original Sklearn model
-        with open('examples/files/sklearn_model.pkl', 'rb') as f:
+        with open('files/sklearn_model.pkl', 'rb') as f:
             sk_orig = pickle.load(f)
 
         # B. Dynamic import of exported classifier
@@ -371,18 +377,15 @@ def main():
         # --- FILE SIZE COMPARISON ---
         print("\nFILE SIZE COMPARISON (DISK)")
 
-        export_bin = f"examples/files/{algo_prefix}_model.bin"
-        classifier.export_to_binary(export_bin)
-
-        export_h = f"examples/files/{algo_prefix}_model.h"
-        classifier.export_to_c_header(export_h)
+        export_bin = f"files/{algo_prefix}_model.bin"
+        export_h = f"files/{algo_prefix}_model.h"
 
         files = {
-            "Sklearn Original (.pkl)":            "examples/files/sklearn_model.pkl",
+            "Sklearn Original (.pkl)":            "files/sklearn_model.pkl",
             "Binary (.bin) [Vectorized]":         export_bin,
             "Exported (.py) [Exported]":          export_file,
             "C Header (.h) [Embedded]":           export_h,
-            "pyRuleAnalyzer Full (.pkl)":         "examples/files/initial_model.pkl",
+            "pyRuleAnalyzer Full (.pkl)":         "files/initial_model.pkl",
         }
 
         orig_size = (

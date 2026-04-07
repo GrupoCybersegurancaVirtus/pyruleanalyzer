@@ -65,8 +65,14 @@ X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
 X_test_df = pd.DataFrame(X_test, columns=feature_names)
 sample_dicts = X_test_df.to_dict('records')
 
-export_file = "examples/files/gbdt_classifier.py"
-classifier.export_to_native_python(feature_names, filename=export_file)
+export_file = "files/gbdt_classifier.py"
+classifier.export_all(
+    base_name="files/gbdt_model",
+    feature_names=feature_names,
+    export_python=True,
+    export_binary=True,
+    export_c=True
+)
 
 # Compile tree arrays for predict_batch
 classifier.compile_tree_arrays(feature_names=feature_names)
@@ -98,7 +104,7 @@ backend = "C" if HAS_C_EXTENSION else "NumPy"
 print(f"C extension available: {HAS_C_EXTENSION}")
 
 # A. Load original Sklearn model
-with open('examples/files/sklearn_model.pkl', 'rb') as f:
+with open('files/sklearn_model.pkl', 'rb') as f:
     sk_orig = pickle.load(f)
 
 # --- HELPER FUNCTIONS ---
@@ -287,18 +293,15 @@ if option_standalone and gbdt_classifier is not None:
 # --- FILE SIZE COMPARISON (DISK) ---
 print("\nFILE SIZE COMPARISON (DISK)")
 
-export_bin = "examples/files/gbdt_model.bin"
-classifier.export_to_binary(export_bin)
-
-export_h = "examples/files/gbdt_model.h"
-classifier.export_to_c_header(export_h)
+export_bin = "files/gbdt_model.bin"
+export_h = "files/gbdt_model.h"
 
 files = {
-    "Sklearn Original (.pkl)":              "examples/files/sklearn_model.pkl",
+    "Sklearn Original (.pkl)":              "files/sklearn_model.pkl",
     "Binary (.bin) [Vectorized]":           export_bin,
     "Exported (.py) [Exported]":            export_file,
     "C Header (.h) [Embedded]":             export_h,
-    "pyRuleAnalyzer Full (.pkl)":           "examples/files/initial_model.pkl",
+    "pyRuleAnalyzer Full (.pkl)":           "files/initial_model.pkl",
 }
 
 orig_size = (

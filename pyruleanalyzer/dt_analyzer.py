@@ -81,6 +81,8 @@ class DTAnalyzer:
         self,
         file_path: str,
         remove_below_n_classifications: int = -1,
+        save_final_model: bool = True,
+        save_report: bool = True,
     ) -> None:
         """Evaluates DT rules on a dataset, detects redundancies, and refines.
 
@@ -94,6 +96,10 @@ class DTAnalyzer:
             file_path: Path to the CSV test file.
             remove_below_n_classifications: Threshold for low-usage pruning
                 (-1 disables).
+            save_final_model: Whether to save the final model to 'final_model.pkl'.
+                Default is True.
+            save_report: Whether to save the analysis report to 'output_classifier_dt.txt'.
+                Default is True.
         """
         clf = self.classifier
         print(f"Testing Decision Tree Rules on {os.path.basename(file_path)}...")
@@ -181,14 +187,16 @@ class DTAnalyzer:
             clf.update_native_model(clf.final_rules)
 
         # 6. Generate Report
-        clf._write_report(
-            "examples/files/output_classifier_dt.txt",
-            file_path, correct, total_samples,
-            remove_below_n_classifications,
-        )
+        if save_report:
+            clf._write_report(
+                "files/output_classifier_dt.txt",
+                file_path, correct, total_samples,
+                remove_below_n_classifications,
+            )
 
         print(f"Analysis Time: {time.time() - start_time:.3f}s")
-        clf._save_final_model()
+        if save_final_model:
+            clf._save_final_model()
 
         # 7. Print redundancy summary
         self.print_redundancy_summary()
@@ -247,14 +255,14 @@ class DTAnalyzer:
         feature_names_list = list(feature_cols)
         total_samples = len(y_true)
 
-        with open('examples/files/output_final_classifier_dt.txt', 'w') as f:
+        with open('files/output_final_classifier_dt.txt', 'w') as f:
             f.write("******************** INITIAL VS FINAL DECISION TREE CLASSIFICATION REPORT ********************\n\n")
 
             # 1. Scikit-Learn Model
             print("Evaluated Scikit-Learn Model (Benchmark)...")
             f.write("\n******************************* SCIKIT-LEARN MODEL *******************************\n")
             try:
-                with open('examples/files/sklearn_model.pkl', 'rb') as mf:
+                with open('files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
                 y_pred_sk = sk_model.predict(X_test_np)
                 correct_sk = np.sum(y_pred_sk == y_true)

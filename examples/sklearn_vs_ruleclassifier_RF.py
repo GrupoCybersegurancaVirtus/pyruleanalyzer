@@ -59,8 +59,14 @@ X_train, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
 )
 sample_dicts = pd.DataFrame(X_test, columns=feature_names).to_dict("records")
 
-export_file = "examples/files/rf_classifier.py"
-classifier.export_to_native_python(feature_names, filename=export_file)
+export_file = "files/rf_classifier.py"
+classifier.export_all(
+    base_name="files/rf_model",
+    feature_names=feature_names,
+    export_python=True,
+    export_binary=True,
+    export_c=True
+)
 
 # Compile tree arrays for predict_batch
 classifier.compile_tree_arrays(feature_names=feature_names)
@@ -75,7 +81,7 @@ backend = "C" if HAS_C_EXTENSION else "NumPy"
 print(f"C extension available: {HAS_C_EXTENSION}")
 
 # A. Load original Sklearn model
-with open("examples/files/sklearn_model.pkl", "rb") as f:
+with open("files/sklearn_model.pkl", "rb") as f:
     sk_orig = pickle.load(f)
 
 # B. Dynamic import of exported classifier
@@ -198,18 +204,15 @@ if t_orig > 0:
 # --- FILE SIZE COMPARISON (DISK) ---
 print("\nFILE SIZE COMPARISON (DISK)")
 
-export_bin = "examples/files/rf_model.bin"
-classifier.export_to_binary(export_bin)
-
-export_h = "examples/files/rf_model.h"
-classifier.export_to_c_header(export_h)
+export_bin = "files/rf_model.bin"
+export_h = "files/rf_model.h"
 
 files = {
-    "Sklearn Original (.pkl)":              "examples/files/sklearn_model.pkl",
+    "Sklearn Original (.pkl)":              "files/sklearn_model.pkl",
     "Binary (.bin) [Vectorized]":           export_bin,
     "Exported (.py) [Exported]":            export_file,
     "C Header (.h) [Embedded]":             export_h,
-    "pyRuleAnalyzer Full (.pkl)":           "examples/files/final_model.pkl",
+    "pyRuleAnalyzer Full (.pkl)":           "files/final_model.pkl",
 }
 
 orig_size = (

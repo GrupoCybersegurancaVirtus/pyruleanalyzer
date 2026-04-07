@@ -176,9 +176,14 @@ cython_debug/
 
 # Editors:
 .vscode
-/examples/files/
 /examples/data/
 AGENTS.md
 start_opencode.bat
+
+# Generated files (models, exports, reports)
+/files/
 *.pkl
+*.bin
+*.h
+*.txt
 nul

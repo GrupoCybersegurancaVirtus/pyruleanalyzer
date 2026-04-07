@@ -9,10 +9,10 @@ from pyruleanalyzer.rule_classifier import RuleClassifier
 test_path = "examples/data/covid_test.csv"
 
 # # Carregando o modelo já existente
-classifier = RuleClassifier.load("examples/files/final_model.pkl")
+classifier = RuleClassifier.load("files/final_model.pkl")
 
 # Carregando o modelo já existente
-# classifier = RuleClassifier.load("examples/files/edited_model.pkl")
+# classifier = RuleClassifier.load("files/edited_model.pkl")
 
 # Comparando resultados iniciais e finais
 classifier.compare_initial_final_results(test_path)

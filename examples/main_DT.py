@@ -73,34 +73,40 @@ y_proba = classifier.predict_batch_proba(X_test, feature_names=feature_names)
 print(f"  Proba shape: {y_proba.shape}")
 
 # ==============================================================================
-# 3. EXPORT FORMATS
+# 3. EXPORT FORMATS (Using export_all for selective export)
 # ==============================================================================
 print("\n" + "=" * 80)
 print("EXPORT FORMATS")
 print("=" * 80)
 
-# Native Python export (standalone .py file)
-export_py = "examples/files/dt_classifier.py"
-classifier.export_to_native_python(feature_names, filename=export_py)
+# Export to all formats (Python, Binary, C)
+classifier.export_all(
+    base_name="files/dt_model",
+    feature_names=feature_names,
+    export_python=True,   # Export to .py
+    export_binary=True,   # Export to .bin
+    export_c=True         # Export to .h
+)
 
-# Binary export (compact .bin file for fast loading)
-export_bin = "examples/files/dt_model.bin"
-classifier.export_to_binary(export_bin)
-
-# C header export (for Arduino / embedded targets)
-export_h = "examples/files/dt_model.h"
-classifier.export_to_c_header(export_h)
+# Alternative: Export only specific formats
+# classifier.export_all("files/dt_model", export_python=False, export_binary=True, export_c=False)
 
 # Size comparison
-print(f"\n{'FORMAT':<30} | {'SIZE':>12}")
+export_files = [
+    ("Python (.py)", "files/dt_model.py"),
+    ("Binary (.bin)", "files/dt_model.bin"),
+    ("C Header (.h)", "files/dt_model.h")
+]
+
+print(f"{'FORMAT':<30} | {'SIZE':>12}")
 print("-" * 48)
-for label, path in [("Python (.py)", export_py), ("Binary (.bin)", export_bin), ("C Header (.h)", export_h)]:
+for label, path in export_files:
     if os.path.exists(path):
         size = os.path.getsize(path)
         print(f"{label:<30} | {size / 1024:>10.2f} KB")
 
 # Verify binary round-trip
-clf_loaded = RuleClassifier.load_binary(export_bin)
+clf_loaded = RuleClassifier.load_binary("files/dt_model.bin")
 y_loaded = clf_loaded.predict_batch(X_test, feature_names=feature_names)
 match = np.mean(y_loaded == y_batch) == 1.0
 print(f"\nBinary round-trip match: {'OK' if match else 'MISMATCH'}")

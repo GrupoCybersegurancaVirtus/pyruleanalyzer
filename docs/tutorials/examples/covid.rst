@@ -94,7 +94,7 @@ You'll be able to:
 - Save your edits, which will:
     - Re-parse the conditions to keep them consistent,
     - Append an _edited suffix to the rule's name,
-    - Persist the entire classifier to examples/files/edited_model.pkl.
+    - Persist the entire classifier to files/edited_model.pkl.
 
 .. code-block:: python
 

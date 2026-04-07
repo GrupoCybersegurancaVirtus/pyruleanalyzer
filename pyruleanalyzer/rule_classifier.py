@@ -2560,7 +2560,7 @@ class RuleClassifier:
         return working_rules
 
     # Exports the rule set to a standalone native Python classifier file
-    def export_to_native_python(self, feature_names=None, filename="examples/files/fast_classifier.py"):
+    def export_to_native_python(self, feature_names=None, filename="files/fast_classifier.py"):
         """
         Generates a standalone Python file with the decision logic.
         
@@ -2830,6 +2830,60 @@ class RuleClassifier:
         
         print(f"[EXPORT] File '{filename}' generated.")
         
+    # Method to export to multiple formats at once
+    def export_all(self, base_name="model", feature_names=None, export_python=True, export_binary=True, export_c=False):
+        """
+        Exports the classifier to multiple formats in one call.
+        
+        This convenience method allows selective export to different formats:
+        - Python (.py): Standalone classifier without dependencies
+        - Binary (.bin): Compact format for fast loading
+        - C Header (.h): For embedded systems integration
+        
+        Args:
+            base_name (str): Base filename without extension. Default is 'model'.
+            feature_names (List[str], optional): Feature names for export. Default is None.
+            export_python (bool): Whether to export to Python format. Default is True.
+            export_binary (bool): Whether to export to binary format. Default is True.
+            export_c (bool): Whether to export to C header format. Default is False.
+            
+        Example:
+            # Export only to binary (no Python or C)
+            classifier.export_all("my_model", export_python=False, export_c=False)
+            
+            # Export to Python and C only
+            classifier.export_all("my_model", export_binary=False, export_c=True)
+        """
+        print("\n" + "=" * 60)
+        print("EXPORTING CLASSIFIER")
+        print("=" * 60)
+        
+        # Determine full base path
+        if '/' not in base_name and '\\' not in base_name:
+            base_path = f"files/{base_name}"
+        else:
+            base_path = base_name
+        
+        # Export to Python
+        if export_python:
+            py_filename = f"{base_path}.py"
+            self.export_to_native_python(feature_names=feature_names, filename=py_filename)
+            print(f"  [OK] Python export: {py_filename}")
+        
+        # Export to Binary
+        if export_binary:
+            bin_filename = f"{base_path}.bin"
+            self.export_to_binary(filepath=bin_filename)
+            print(f"  [OK] Binary export: {bin_filename}")
+        
+        # Export to C Header
+        if export_c:
+            c_filename = f"{base_path}.h"
+            self.export_to_c_header(filepath=c_filename)
+            print(f"  [OK] C Header export: {c_filename}")
+        
+        print("=" * 60 + "\n")
+    
     # Method to execute the rule analysis and identify duplicated rules
     def execute_rule_analysis(self, file_path, remove_duplicates="none", remove_below_n_classifications=-1):
         """
@@ -2943,18 +2997,32 @@ class RuleClassifier:
         analyzer.execute_rule_analysis(file_path, remove_below_n_classifications)
 
     # Helper to save the final model state
-    def _save_final_model(self):
-        """Helper to save the current state of the classifier."""
+    def _save_final_model(self, path=None):
+        """Helper to save the current state of the classifier.
+        
+        Args:
+            path (str, optional): Path to save the model. Defaults to 'files/final_model.pkl'.
+        """
+        if path is None:
+            path = 'files/final_model.pkl'
         try:
-            with open('examples/files/final_model.pkl', 'wb') as model_file:
+            with open(path, 'wb') as model_file:
                 pickle.dump(self, model_file)
-            print("Final classifier saved to 'examples/files/final_model.pkl'.")
+            print(f"Final classifier saved to '{path}'.")
         except Exception as e:
             print(f"Error saving model: {e}")
 
     # Helper to write the analysis report
     def _write_report(self, filename, file_path, correct, total, prune_thresh):
-        """Helper to write the consolidated text report."""
+        """Helper to write the consolidated text report.
+        
+        Args:
+            filename (str): Path to the output report file.
+            file_path (str): Path to the dataset used.
+            correct (int): Number of correct predictions.
+            total (int): Total number of samples.
+            prune_thresh (int): Pruning threshold used.
+        """
         with open(filename, 'w') as f:
             f.write(f"Results for dataset: {file_path}\n")
             f.write(f"Accuracy: {correct/total:.5f}\n")
@@ -3369,7 +3437,7 @@ class RuleClassifier:
                     
                     # Save to disk
                     try:
-                        with open('examples/files/edited_model.pkl', 'wb') as f_out:
+                        with open('files/edited_model.pkl', 'wb') as f_out:
                             pickle.dump(self, f_out)
                         print("Changes saved. Native model recompiled.")
                     except Exception as e:
@@ -3799,9 +3867,9 @@ class RuleClassifier:
 
     # Method to generate a classifier model based on rules
     @staticmethod
-    def generate_classifier_model(rules, class_names_map, algorithm_type='Random Forest'):
+    def generate_classifier_model(rules, class_names_map, algorithm_type='Random Forest', save_initial_model=True):
         """
-        Instantiates a RuleClassifier from extracted rules and saves it.
+        Instantiates a RuleClassifier from extracted rules and optionally saves it.
 
         Optimization: 
         This method now passes the Rule objects directly to the constructor, avoiding 
@@ -3811,6 +3879,7 @@ class RuleClassifier:
             rules (Union[List[Rule], List[List[Rule]]]): The extracted rules.
             class_names_map (Dict[str, int]): Map of class names to indices (kept for compatibility).
             algorithm_type (str): 'Random Forest' or 'Decision Tree'.
+            save_initial_model (bool): Whether to save the initial model to 'initial_model.pkl'. Default is True.
 
         Returns:
             RuleClassifier: The initialized classifier.
@@ -3821,19 +3890,129 @@ class RuleClassifier:
         
         print(f"Algorithm Type: {classifier.algorithm_type}")
 
-        path = 'examples/files/initial_model.pkl'
-        try:
-            with open(path, 'wb') as model_file:
-                pickle.dump(classifier, model_file)
-            print(f"Classifier file saved: {path}")
-        except Exception as e:
-            print(f"Warning: Could not save classifier to {path}. Error: {e}")
+        if save_initial_model:
+            path = 'files/initial_model.pkl'
+            try:
+                with open(path, 'wb') as model_file:
+                    pickle.dump(classifier, model_file)
+                print(f"Classifier file saved: {path}")
+            except Exception as e:
+                print(f"Warning: Could not save classifier to {path}. Error: {e}")
 
         return classifier
     
+    @staticmethod
+    def create(train, test, model="Decision Tree", parameters=None, algorithm_type=None):
+        """
+        Creates a new rule-based classifier from CSV data files.
+
+        Args:
+            train (str): Path to training CSV file.
+            test (str): Path to test CSV file.
+            model (str): Model type - 'Decision Tree', 'Random Forest', or 
+                        'Gradient Boosting Decision Trees'. Default is 'Decision Tree'.
+            parameters (dict, optional): Model hyperparameters. Default is None.
+            algorithm_type (str, optional): Deprecated. Use 'model' instead.
+
+        Returns:
+            RuleClassifier: The created classifier.
+        """
+        if algorithm_type is not None:
+            import warnings
+            warnings.warn(
+                "algorithm_type is deprecated, use 'model' instead",
+                DeprecationWarning, stacklevel=2
+            )
+            model = algorithm_type
+        
+        if parameters is None:
+            parameters = {"random_state": 42}
+        
+        return RuleClassifier.new_classifier(
+            train_path=train,
+            test_path=test,
+            model_parameters=parameters,
+            algorithm_type=model,
+            save_initial_model=False,
+            save_sklearn_model=False
+        )
+    
+    def refine(self, test_data, remove_duplicates="none", remove_low_usage=-1):
+        """
+        Refines the classifier by removing redundant and low-usage rules.
+
+        Args:
+            test_data (str): Path to CSV file for evaluating rule usage.
+            remove_duplicates (str): Duplicate removal strategy.
+                                   Options: "soft", "hard", "custom", or "none".
+            remove_low_usage (int): Minimum usage threshold for rules.
+                                   Use -1 to disable. Default is -1.
+        """
+        self.execute_rule_analysis(
+            file_path=test_data,
+            remove_duplicates=remove_duplicates,
+            remove_below_n_classifications=remove_low_usage
+        )
+    
+    def export(self, base_name="model", formats=None, feature_names=None):
+        """
+        Exports the classifier to one or more file formats.
+
+        Args:
+            base_name (str): Base name for exported files (without extension).
+            formats (list, optional): List of formats to export to.
+                                    Options: "python", "binary", "c".
+                                    If None, exports to python and binary only.
+            feature_names (list, optional): Feature names for export.
+
+        Returns:
+            dict: Dictionary with export results for each format.
+        """
+        if formats is None:
+            formats = ["python", "binary"]
+        
+        formats = [f.lower() for f in formats]
+        
+        export_python = "python" in formats
+        export_binary = "binary" in formats or "bin" in formats
+        export_c = "c" in formats or "header" in formats
+        
+        print("\n" + "=" * 60)
+        print("EXPORTING CLASSIFIER")
+        print("=" * 60)
+        
+        if '/' not in base_name and '\\' not in base_name:
+            base_path = f"files/{base_name}"
+        else:
+            base_path = base_name
+        
+        results = {}
+        
+        if export_python:
+            py_filename = f"{base_path}.py"
+            self.export_to_native_python(feature_names=feature_names, filename=py_filename)
+            results["python"] = py_filename
+            print(f"  [OK] Python export: {py_filename}")
+        
+        if export_binary:
+            bin_filename = f"{base_path}.bin"
+            self.export_to_binary(filepath=bin_filename)
+            results["binary"] = bin_filename
+            print(f"  [OK] Binary export: {bin_filename}")
+        
+        if export_c:
+            c_filename = f"{base_path}.h"
+            self.export_to_c_header(filepath=c_filename)
+            results["c"] = c_filename
+            print(f"  [OK] C Header export: {c_filename}")
+        
+        print("=" * 60 + "\n")
+        
+        return results
+    
     # Method to create a new classifier
     @staticmethod
-    def new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest'):
+    def new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest', save_initial_model=True, save_sklearn_model=True):
         """
         Orchestrates the creation of a new classifier from scratch.
 
@@ -3850,6 +4029,8 @@ class RuleClassifier:
             model_parameters (dict): Arguments for the sklearn classifier.
             model_path (Optional[str]): Path to existing .pkl model to skip training.
             algorithm_type (str): 'Random Forest', 'Decision Tree', or 'Gradient Boosting Decision Trees'.
+            save_initial_model (bool): Whether to save the initial model to 'initial_model.pkl'. Default is True.
+            save_sklearn_model (bool): Whether to save the sklearn model to 'sklearn_model.pkl'. Default is True.
 
         Returns:
             RuleClassifier: The final rule-based model.
@@ -3896,10 +4077,11 @@ class RuleClassifier:
                 model.fit(X_train, np.asarray(y_train))
 
             # Save Sklearn model
-            model_save_path = 'examples/files/sklearn_model.pkl'
-            with open(model_save_path, 'wb') as model_file: 
-                pickle.dump(model, model_file)
-            print(f"Trained model saved at: {model_save_path}")
+            if save_sklearn_model:
+                model_save_path = 'files/sklearn_model.pkl'
+                with open(model_save_path, 'wb') as model_file: 
+                    pickle.dump(model, model_file)
+                print(f"Trained model saved at: {model_save_path}")
 
         # 3. Test Scikit-Learn Model (Benchmark)
         print("\nTesting Scikit-Learn Model (Benchmark):")
@@ -3937,13 +4119,14 @@ class RuleClassifier:
             classifier.update_native_model(classifier.initial_rules)
 
             # Save initial model (after metadata is set)
-            path = 'examples/files/initial_model.pkl'
-            try:
-                with open(path, 'wb') as model_file:
-                    pickle.dump(classifier, model_file)
-                print(f"Classifier file saved: {path}")
-            except Exception as e:
-                print(f"Warning: Could not save classifier to {path}. Error: {e}")
+            if save_initial_model:
+                path = 'files/initial_model.pkl'
+                try:
+                    with open(path, 'wb') as model_file:
+                        pickle.dump(classifier, model_file)
+                    print(f"Classifier file saved: {path}")
+                except Exception as e:
+                    print(f"Warning: Could not save classifier to {path}. Error: {e}")
 
             print(f"Algorithm Type: {classifier.algorithm_type}")
             return classifier
@@ -3958,6 +4141,6 @@ class RuleClassifier:
         class_names_map = {str(name): i for i, name in enumerate(class_names)}
         
         print("Initializing RuleClassifier...")
-        classifier = RuleClassifier.generate_classifier_model(rules, class_names_map, algorithm_type)
+        classifier = RuleClassifier.generate_classifier_model(rules, class_names_map, algorithm_type, save_initial_model=save_initial_model)
 
         return classifier

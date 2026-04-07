@@ -445,7 +445,7 @@ After analysis, you can manually edit rules through an interactive terminal inte
 
 ```python
 # Load a previously saved model
-classifier = RuleClassifier.load("examples/files/final_model.pkl")
+classifier = RuleClassifier.load("files/final_model.pkl")
 
 # Open the interactive editor
 classifier.edit_rules()
@@ -481,6 +481,63 @@ prediction = my_classifier.predict({
 })
 ```
 
+### Selective Multi-Format Export
+
+Use `export_all()` to export to multiple formats with fine-grained control:
+
+```python
+# Export to Python and Binary (skip C)
+classifier.export_all(
+    base_name="files/my_model",
+    feature_names=feature_names,
+    export_python=True,
+    export_binary=True,
+    export_c=False
+)
+
+# Alternative: Export only C header for embedded systems
+classifier.export_all(
+    base_name="embedded/model",
+    feature_names=feature_names,
+    export_python=False,
+    export_binary=False,
+    export_c=True
+)
+```
+
+**Generated files:**
+- `my_model.py` - Standalone Python classifier
+- `my_model.bin` - Compact binary format (fast loading)
+- `my_model.h` - C header for embedded systems
+
+### File Output Control
+
+Control which files are automatically saved during the pipeline:
+
+```python
+# Create classifier without saving intermediate files
+classifier = RuleClassifier.new_classifier(
+    train_path, test_path, model_parameters,
+    algorithm_type='Decision Tree',
+    save_initial_model=False,   # Don't save initial_model.pkl
+    save_sklearn_model=False    # Don't save sklearn_model.pkl
+)
+
+# Execute analysis without saving final model and reports
+classifier.execute_rule_analysis(
+    test_path,
+    remove_duplicates="soft",
+    remove_below_n_classifications=-1,
+    save_final_model=False,  # Don't save final_model.pkl
+    save_report=False        # Don't save output_classifier_*.txt
+)
+```
+
+**Default output location:** `files/` (project root)
+- Models: `initial_model.pkl`, `sklearn_model.pkl`, `final_model.pkl`
+- Reports: `output_classifier_*.txt`, `output_final_classifier_*.txt`
+- Exports: `*.py`, `*.bin`, `*.h`
+
 ### Custom Rule Removal
 
 ```python
@@ -506,7 +563,7 @@ The main class that handles the entire pipeline.
 
 | Method | Description |
 |---|---|
-| `RuleClassifier.new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest')` | Train a sklearn model, extract rules, and build a RuleClassifier |
+| `RuleClassifier.new_classifier(train_path, test_path, model_parameters, model_path=None, algorithm_type='Random Forest', save_initial_model=True, save_sklearn_model=True)` | Train a sklearn model, extract rules, and build a RuleClassifier |
 | `RuleClassifier.load(path)` | Load a pickled RuleClassifier (auto-recompiles native model) |
 | `RuleClassifier.load_binary(filepath)` | Load a RuleClassifier from a compact `.bin` file (arrays only, no Rule objects) |
 | `RuleClassifier.process_data(train_path, test_path)` | Load CSV data, apply LabelEncoding, return arrays and feature names |
@@ -546,6 +603,8 @@ The main class that handles the entire pipeline.
 
 | Method | Description |
 |---|---|
+| `export(base_name, formats, feature_names)` | Export to multiple formats via list (e.g., `['python', 'binary']`) |
+| `export_all(base_name, feature_names, export_python=True, export_binary=True, export_c=False)` | Export to multiple formats with selective boolean flags |
 | `export_to_native_python(feature_names, filename)` | Write a standalone `.py` classifier file |
 | `export_to_binary(filepath='model.bin')` | Export compiled tree arrays to a compact binary file |
 | `export_to_c_header(filepath='model.h', guard_name='PYRULEANALYZER_MODEL_H')` | Export a standalone C header for embedded targets |
