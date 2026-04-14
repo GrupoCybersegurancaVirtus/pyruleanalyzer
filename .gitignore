@@ -187,3 +187,7 @@ start_opencode.bat
 *.h
 *.txt
 nul
+formalization/hcpn_dt_interactive.html
+formalization/hcpn_dt_model.png
+formalization/dt_module.json
+/formalization
