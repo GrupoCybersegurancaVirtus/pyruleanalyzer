@@ -146,6 +146,104 @@ class PyRuleAnalyzer:
         return analyzer
     
     @staticmethod
+    def new_model(
+        model: str = "Decision Tree",
+        params: Optional[Dict] = None
+    ) -> "PyRuleAnalyzer":
+        """
+        Create a new, empty PyRuleAnalyzer ready to be trained.
+        
+        Args:
+            model: Model type - "Decision Tree", "Random Forest", or
+                  "Gradient Boosting Decision Trees". Default is "Decision Tree".
+            params: Model hyperparameters. Default is None (uses sensible defaults).
+        
+        Returns:
+            PyRuleAnalyzer: A configured but untrained PyRuleAnalyzer instance.
+            
+        Example:
+            >>> analyzer = PyRuleAnalyzer.new_model(model="Decision Tree")
+            >>> analyzer.fit(X_train, y_train)
+        """
+        # Set default parameters if not provided
+        if params is None:
+            params = PyRuleAnalyzer._get_default_params(model)
+            
+        # Create empty RuleClassifier
+        classifier = RuleClassifier([], algorithm_type=model)
+        
+        # We need to monkey-patch the model parameters into the classifier
+        # so it knows how to initialize the underlying sklearn model when fit() is called
+        classifier.model_parameters = params
+        
+        return PyRuleAnalyzer(classifier, [], [])
+        
+    def fit(self, X, y) -> "PyRuleAnalyzer":
+        """
+        Fit the model according to the given training data.
+        
+        Args:
+            X: Training vectors (e.g. pandas DataFrame or numpy array).
+            y: Target values.
+            
+        Returns:
+            self
+        """
+        import pandas as pd
+        import numpy as np
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+        from sklearn.tree import DecisionTreeClassifier
+        from .rule_classifier import RuleClassifier
+        
+        params = getattr(self.classifier, 'model_parameters', self._get_default_params(self.classifier.algorithm_type))
+        algorithm_type = self.classifier.algorithm_type
+        
+        # Train a new Scikit-Learn model
+        if algorithm_type == 'Random Forest':
+            model = RandomForestClassifier(**params)
+        elif algorithm_type == 'Decision Tree':
+            model = DecisionTreeClassifier(**params)
+        elif algorithm_type == 'Gradient Boosting Decision Trees':
+            model = GradientBoostingClassifier(**params)
+        else:
+            raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
+            
+        model.fit(X, y)
+        
+        # Determine feature names and class names
+        if hasattr(X, 'columns'):
+            self.feature_names = list(X.columns)
+        else:
+            self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+            
+        # Get class names from y
+        self.class_names = [str(c) for c in sorted(np.unique(np.asarray(y)))]
+        
+        # Extract rules
+        if algorithm_type == 'Gradient Boosting Decision Trees':
+            rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
+                model, self.feature_names, self.class_names
+            )
+            # Create new classifier with the rules
+            self.classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+            self.classifier._gbdt_init_scores = init_scores
+            self.classifier._gbdt_is_binary = is_binary
+            self.classifier._gbdt_classes = gbdt_classes
+        else:
+            rules = RuleClassifier.get_tree_rules(
+                model, self.feature_names, self.class_names, algorithm_type=algorithm_type
+            )
+            # Create new classifier with the rules
+            self.classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+            
+        # Update class properties
+        self.classifier.class_labels = self.class_names
+        self.classifier.num_classes = len(self.class_names)
+        self.classifier._array_feature_names = self.feature_names
+        
+        return self
+    
+    @staticmethod
     def load(path: str) -> "PyRuleAnalyzer":
         """
         Load a PyRuleAnalyzer from a saved file.
@@ -274,8 +372,29 @@ class PyRuleAnalyzer:
         Returns:
             Predicted class label(s).
         """
-        return self.classifier.predict(
-            X=X,
+        import pandas as pd
+        import numpy as np
+        
+        # Single sample prediction (dict)
+        if isinstance(X, dict):
+            predicted_class, _, _ = self.classifier.classify(X, final=use_refined)
+            return predicted_class
+            
+        # Single sample prediction (Pandas Series)
+        if isinstance(X, pd.Series):
+            predicted_class, _, _ = self.classifier.classify(X.to_dict(), final=use_refined)
+            return predicted_class
+            
+        # Batch prediction
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+            
+        # Compile arrays if not done yet
+        if not getattr(self.classifier, '_arrays_compiled', False):
+            self.classifier.compile_tree_arrays(feature_names=self.feature_names)
+            
+        return self.classifier.predict_batch(
+            X,
             feature_names=self.feature_names,
             use_final=use_refined
         )
@@ -295,10 +414,17 @@ class PyRuleAnalyzer:
         Returns:
             Class probabilities.
         """
-        return self.classifier.predict_proba(
-            X=X,
-            feature_names=self.feature_names,
-            use_final=use_refined
+        import pandas as pd
+        
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+            
+        if not getattr(self.classifier, '_arrays_compiled', False):
+            self.classifier.compile_tree_arrays(feature_names=self.feature_names)
+            
+        return self.classifier.predict_batch_proba(
+            X,
+            feature_names=self.feature_names
         )
     
     # ==========================================================================
@@ -395,6 +521,48 @@ class PyRuleAnalyzer:
             "feature_names": self.feature_names,
             "class_names": self.class_names
         }
+
+    def summary_report(self):
+        """Generate a summary report dictionary for interactive use."""
+        rules = self.classifier.final_rules if self.classifier.final_rules else self.classifier.initial_rules
+        rules_list = []
+        for r in rules:
+            rules_list.append({
+                'name': r.name,
+                'conditions': r.conditions,
+                'class': r.class_
+            })
+            
+        return {
+            "model_type": self.classifier.algorithm_type,
+            "total_rules": len(rules),
+            "classes": self.class_names,
+            "rules": rules_list
+        }
+
+    def to_python(self, file_path: str, **kwargs):
+        """Proxy to RuleClassifier.to_python()"""
+        return self.classifier.to_python(file_path, **kwargs)
+
+    def to_c_header(self, file_path: str, **kwargs):
+        """Proxy to RuleClassifier.to_c_header()"""
+        return self.classifier.to_c_header(file_path, **kwargs)
+
+    def to_binary(self, file_path: str, **kwargs):
+        """Proxy to RuleClassifier.to_binary()"""
+        return self.classifier.to_binary(file_path, **kwargs)
+
+    @classmethod
+    def load_binary(cls, file_path: str):
+        """Proxy to RuleClassifier.load_binary() wrapped in PyRuleAnalyzer"""
+        classifier = RuleClassifier.load_binary(file_path)
+        feature_names = classifier._array_feature_names if hasattr(classifier, '_array_feature_names') else []
+        class_names = classifier.class_labels
+        return cls(classifier, feature_names, class_names)
+
+    def edit_rules(self):
+        """Proxy to RuleClassifier.edit_rules()"""
+        return self.classifier.edit_rules()
     
     def __repr__(self) -> str:
         summary = self.summary()

@@ -45,10 +45,10 @@ The :ref:`RuleClassifier<rule_classifier>` behaves as a standard scikit-learn mo
 
 .. code-block:: python
 
-    from pyruleanalyzer import RuleClassifier
+    from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 
     # Create a RuleClassifier instance
-    classifier = RuleClassifier(algorithm_type="Decision Tree")
+    classifier = PyRuleAnalyzer.new_model(model="Decision Tree")
     
     # Method 1: Train the internal model with in-memory DataFrames
     classifier.fit(X_train, y_train)
@@ -63,7 +63,7 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 
 .. code-block:: python
 
-    from pyruleanalyzer import DTAnalyzer
+    from pyruleanalyzer import PyRuleAnalyzer, DTAnalyzer
 
     analyzer = DTAnalyzer(classifier)
     

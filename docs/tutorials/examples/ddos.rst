@@ -60,10 +60,10 @@ The :ref:`RuleClassifier<rule_classifier>` works exactly like a Scikit-Learn est
 
 .. code-block:: python
 
-    from pyruleanalyzer import RuleClassifier
+    from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 
     # Create a RuleClassifier instance
-    classifier = RuleClassifier(algorithm_type="Random Forest")
+    classifier = PyRuleAnalyzer.new_model(model="Random Forest")
     
     # Train the model
     classifier.fit(X_train, y_train)
@@ -75,7 +75,7 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 
 .. code-block:: python
 
-    from pyruleanalyzer import RFAnalyzer
+    from pyruleanalyzer import PyRuleAnalyzer, RFAnalyzer
 
     analyzer = RFAnalyzer(classifier)
     

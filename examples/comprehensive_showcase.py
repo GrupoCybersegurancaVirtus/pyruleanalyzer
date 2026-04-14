@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 # Ensure pyruleanalyzer can be imported from the parent directory
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from pyruleanalyzer import RuleClassifier
+from pyruleanalyzer import PyRuleAnalyzer
 from pyruleanalyzer import DTAnalyzer
 
 def main():
@@ -49,7 +49,7 @@ def main():
     print("\n[2] Training the Model...")
     
     # Instantiate the classifier (Supports: 'Decision Tree', 'Random Forest', 'Gradient Boosting Decision Trees')
-    model = RuleClassifier(algorithm_type="Decision Tree")
+    model = PyRuleAnalyzer.new_model(model="Decision Tree")
     
     # METHOD A: Train using in-memory DataFrames (Modern approach)
     print(" -> Fitting model using Pandas DataFrames (X_train, y_train)...")
@@ -60,12 +60,12 @@ def main():
     # model.fit(train_csv_path, test_csv_path)
 
     # =========================================================================
-    # 3. RULE ANALYSIS & PRUNING
+    # 3. RULE ANALYSIS
     # =========================================================================
     print("\n[3] Analyzing and Refining Rules...")
     
     # Create an analyzer specific to the model type
-    analyzer = DTAnalyzer(model)
+    analyzer = DTAnalyzer(model.classifier)
     
     # Execute analysis to remove duplicate and low-usage rules
     # It uses the test dataset to evaluate which rules are actually useful
@@ -145,7 +145,7 @@ def main():
     print("\n[8] Loading Binary Model...")
     
     # Load the binary model without needing Scikit-Learn
-    loaded_model = RuleClassifier.load_binary(bin_path)
+    loaded_model = PyRuleAnalyzer.load_binary(bin_path)
     loaded_preds = loaded_model.predict(X_test)
     
     match = (loaded_preds == batch_preds).all()

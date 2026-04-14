@@ -282,7 +282,7 @@ The API is fully compatible with Scikit-Learn.
 ```python
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from pyruleanalyzer import RuleClassifier, DTAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier, DTAnalyzer
 
 # 1. Load data
 df = pd.read_csv("dataset.csv")
@@ -291,7 +291,7 @@ y = df.iloc[:, -1]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
 # 2. Create and Train (extracts rules automatically)
-model = RuleClassifier(algorithm_type='Decision Tree')
+model = PyRuleAnalyzer.new_model(model='Decision Tree')
 model.fit(X_train, y_train)
 
 # 3. Optimize rules (removes redundancies + refines low-usage)
@@ -320,7 +320,7 @@ print(f"Total Active Rules: {report['total_rules']}")
 ```python
 from pyruleanalyzer import RuleClassifier, DTAnalyzer
 
-model = RuleClassifier(algorithm_type='Decision Tree')
+model = PyRuleAnalyzer.new_model(model='Decision Tree')
 model.fit(X_train, y_train)
 
 analyzer = DTAnalyzer(model)
@@ -333,7 +333,7 @@ analyzer.compare_initial_final_results("test.csv")
 ```python
 from pyruleanalyzer import RuleClassifier, RFAnalyzer
 
-model = RuleClassifier(algorithm_type='Random Forest')
+model = PyRuleAnalyzer.new_model(model='Random Forest')
 model.fit(X_train, y_train)
 
 # Safe to remove low-usage rules in ensemble models
@@ -347,7 +347,7 @@ analyzer.compare_initial_final_results("test.csv")
 ```python
 from pyruleanalyzer import RuleClassifier, GBDTAnalyzer
 
-model = RuleClassifier(algorithm_type='Gradient Boosting Decision Trees')
+model = PyRuleAnalyzer.new_model(model='Gradient Boosting Decision Trees')
 model.fit(X_train, y_train)
 
 analyzer = GBDTAnalyzer(model)

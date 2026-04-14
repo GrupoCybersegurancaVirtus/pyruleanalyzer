@@ -63,10 +63,10 @@ Example with Decision Tree (Arrays):
 
 .. code-block:: python
 
-    from pyruleanalyzer import RuleClassifier
+    from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 
     # Create a RuleClassifier instance
-    model = RuleClassifier(algorithm_type="Decision Tree")
+    model = PyRuleAnalyzer.new_model(model="Decision Tree")
     
     # Train the model and extract rules automatically
     model.fit(X_train, y_train)
@@ -75,21 +75,21 @@ Example with Decision Tree (CSV paths):
 
 .. code-block:: python
 
-    model = RuleClassifier(algorithm_type="Decision Tree")
+    model = PyRuleAnalyzer.new_model(model="Decision Tree")
     model.fit("train.csv", "test.csv")
 
 Example with Random Forest:
 
 .. code-block:: python
 
-    model = RuleClassifier(algorithm_type="Random Forest")
+    model = PyRuleAnalyzer.new_model(model="Random Forest")
     model.fit(X_train, y_train)
 
 Example with Gradient Boosting Decision Trees:
 
 .. code-block:: python
 
-    model = RuleClassifier(algorithm_type="Gradient Boosting Decision Trees")
+    model = PyRuleAnalyzer.new_model(model="Gradient Boosting Decision Trees")
     model.fit(X_train, y_train)
 
 Analyze and Refine the Rules
@@ -99,7 +99,7 @@ After fitting the model, you can analyze and refine the extracted rules using th
 
 .. code-block:: python
 
-    from pyruleanalyzer import DTAnalyzer
+    from pyruleanalyzer import PyRuleAnalyzer, DTAnalyzer
 
     # For a Decision Tree classifier
     analyzer = DTAnalyzer(model)
