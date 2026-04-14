@@ -282,7 +282,7 @@ The API is fully compatible with Scikit-Learn.
 ```python
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier, DTAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 # 1. Load data
 df = pd.read_csv("dataset.csv")
@@ -295,9 +295,8 @@ model = PyRuleAnalyzer.new_model(model='Decision Tree')
 model.fit(X_train, y_train)
 
 # 3. Optimize rules (removes redundancies + refines low-usage)
-analyzer = DTAnalyzer(model)
-analyzer.execute_rule_analysis(
-    "dataset.csv", # Used for evaluating rule usage
+model.execute_rule_refinement(
+    X=X_test, y=y_test, # Used for evaluating rule usage
     remove_below_n_classifications=-1
 )
 
@@ -318,41 +317,39 @@ print(f"Total Active Rules: {report['total_rules']}")
 ### Decision Tree
 
 ```python
-from pyruleanalyzer import RuleClassifier, DTAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 model = PyRuleAnalyzer.new_model(model='Decision Tree')
 model.fit(X_train, y_train)
 
-analyzer = DTAnalyzer(model)
-analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=-1)
-analyzer.compare_initial_final_results("test.csv")
+# Analyze and compare
+model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=-1)
+model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 
 ### Random Forest
 
 ```python
-from pyruleanalyzer import RuleClassifier, RFAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 model = PyRuleAnalyzer.new_model(model='Random Forest')
 model.fit(X_train, y_train)
 
 # Safe to remove low-usage rules in ensemble models
-analyzer = RFAnalyzer(model)
-analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=1)
-analyzer.compare_initial_final_results("test.csv")
+model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1)
+model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 
 ### Gradient Boosting (GBDT)
 
 ```python
-from pyruleanalyzer import RuleClassifier, GBDTAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 model = PyRuleAnalyzer.new_model(model='Gradient Boosting Decision Trees')
 model.fit(X_train, y_train)
 
-analyzer = GBDTAnalyzer(model)
-analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=1)
-analyzer.compare_initial_final_results("test.csv")
+model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1)
+model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 
 ### Batch Prediction & Probabilities
@@ -495,7 +492,7 @@ classifier = RuleClassifier.new_classifier(
 )
 
 # Execute analysis without saving final model and reports
-classifier.execute_rule_analysis(
+classifier.execute_rule_refinement(
     test_path,
     remove_low_usage=-1,
     save_final_model=False,  # Don't save final_model.pkl
@@ -518,7 +515,7 @@ def remove_short_rules(rules):
     return kept, removed
 
 classifier.set_custom_rule_removal(remove_short_rules)
-classifier.execute_rule_analysis("test.csv", remove_duplicates="custom")
+classifier.execute_rule_refinement("test.csv", remove_duplicates="custom")
 ```
 
 ---
@@ -542,8 +539,8 @@ The main class that handles the entire pipeline.
 
 | Method | Description |
 |---|---|
-| `execute_rule_analysis(file_path, remove_duplicates="none", remove_below_n_classifications=-1)` | Run the full optimization pipeline |
-| `compare_initial_final_results(file_path)` | Compare initial vs. final model with metrics and divergence analysis |
+| `execute_rule_refinement(X, y, file_path, remove_below_n_classifications=-1)` | Run the full optimization pipeline |
+| `compare_initial_final_results(X, y, file_path)` | Compare initial vs. final model with metrics and divergence analysis |
 
 **`remove_duplicates` options:**
 - `"none"` -- No redundancy removal
@@ -621,7 +618,7 @@ Specialized wrappers for algorithm-specific analysis:
 | `RFAnalyzer` | Random Forest | Intra-tree, inter-tree, low-usage |
 | `GBDTAnalyzer` | GBDT | Intra-tree, low-impact, low-usage |
 
-Each provides `execute_rule_analysis()` and `compare_initial_final_results()` with algorithm-specific progress tracking and redundancy breakdowns.
+Each provides `execute_rule_refinement()` and `compare_initial_final_results()` with algorithm-specific progress tracking and redundancy breakdowns.
 
 ---
 

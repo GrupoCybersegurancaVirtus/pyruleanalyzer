@@ -3136,30 +3136,29 @@ class RuleClassifier(RuleExporterMixin):
             file.write(full_report)
 
     # Method to compare initial and final results
-    def compare_initial_final_results(self, file_path):
+    def compare_initial_final_results(self, file_path: str = None, X = None, y = None):
         """
-        Compares the classification performance of the initial and final rule sets.
-
-        Delegates to DTAnalyzer, RFAnalyzer, or GBDTAnalyzer.  If ``execute_rule_analysis``
-        was called earlier in the same session, the cached ``_analyzer`` is
-        reused; otherwise a fresh one is created.
+        Delegates to DTAnalyzer, RFAnalyzer, or GBDTAnalyzer.  If ``execute_rule_refinement``
+        was called, uses the cached analyzer. Otherwise creates one.
 
         Args:
-            file_path (str): Path to the CSV file used for evaluation.
+            file_path: Path to the CSV test file.
+            X: Dataframe or array for test data.
+            y: True labels.
         """
         from .dt_analyzer import DTAnalyzer
         from .rf_analyzer import RFAnalyzer
         from .gbdt_analyzer import GBDTAnalyzer
 
-        # Reuse the analyzer created during execute_rule_analysis when possible
+        # Reuse the analyzer created during execute_rule_refinement when possible
         if hasattr(self, '_analyzer') and self._analyzer is not None:
-            self._analyzer.compare_initial_final_results(file_path)
+            self._analyzer.compare_initial_final_results(file_path, X, y)
         elif self.algorithm_type == 'Random Forest':
-            RFAnalyzer(self).compare_initial_final_results(file_path)
+            RFAnalyzer(self).compare_initial_final_results(file_path, X, y)
         elif self.algorithm_type == 'Decision Tree':
-            DTAnalyzer(self).compare_initial_final_results(file_path)
+            DTAnalyzer(self).compare_initial_final_results(file_path, X, y)
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
-            GBDTAnalyzer(self).compare_initial_final_results(file_path)
+            GBDTAnalyzer(self).compare_initial_final_results(file_path, X, y)
         else:
             raise ValueError(f"Unsupported algorithm type: {self.algorithm_type}")
 
@@ -3384,6 +3383,35 @@ class RuleClassifier(RuleExporterMixin):
             return pickle.load(f)
 
     # Method to process data
+    @staticmethod
+    def _prepare_test_data(file_path=None, X=None, y=None, clf=None):
+        """
+        Helper method to prepare test data either from a CSV file or direct arrays/DataFrames.
+        Returns:
+            X_test (list or array), y_test (list or array), feature_names (list)
+        """
+        import pandas as pd
+        import numpy as np
+
+        if X is not None and y is not None:
+            if isinstance(X, pd.DataFrame):
+                feature_names = X.columns.tolist()
+                X_test = X.values.tolist()
+            else:
+                feature_names = clf._array_feature_names if clf and hasattr(clf, '_array_feature_names') else [f"Feature_{i}" for i in range(len(X[0]))]
+                X_test = X.tolist() if hasattr(X, 'tolist') else list(X)
+            y_test = y.tolist() if hasattr(y, 'tolist') else list(y)
+            return X_test, y_test, feature_names
+        
+        if file_path:
+            from .rule_classifier import RuleClassifier # To handle potential circularity or direct calls
+            _, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
+                '.', file_path, is_test_only=True
+            )
+            return X_test, y_test, feature_names
+            
+        raise ValueError("Must provide either 'file_path' or both 'X' and 'y'.")
+
     @staticmethod
     def process_data(train_path, test_path, is_test_only=False):
         """

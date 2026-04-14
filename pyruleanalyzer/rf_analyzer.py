@@ -11,7 +11,7 @@ Typical usage::
 
     clf = RuleClassifier.new_classifier(train, test, params, algorithm_type='Random Forest')
     analyzer = RFAnalyzer(clf)
-    analyzer.execute_rule_analysis(test_path, remove_below_n_classifications=1)
+    analyzer.execute_rule_refinement(test_path, remove_below_n_classifications=1)
     analyzer.compare_initial_final_results(test_path)
 """
 
@@ -88,7 +88,7 @@ class RFAnalyzer:
     ) -> None:
         """Updates redundancy counters after an adjust_and_remove cycle.
 
-        Called by :meth:`RuleClassifier.execute_rule_analysis` after the
+        Called by :meth:`RuleClassifier.execute_rule_refinement` after the
         duplicate-removal loop finishes for RF.
 
         Args:
@@ -108,9 +108,11 @@ class RFAnalyzer:
     # Main analysis pipeline
     # ------------------------------------------------------------------
 
-    def execute_rule_analysis(
+    def execute_rule_refinement(
         self,
-        file_path: str,
+        file_path: str = None,
+        X=None,
+        y=None,
         remove_below_n_classifications: int = -1,
         save_final_model: bool = True,
         save_report: bool = True,
@@ -125,6 +127,8 @@ class RFAnalyzer:
 
         Args:
             file_path: Path to the CSV test file.
+            X: Dataframe or array for test data.
+            y: True labels.
             remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
             save_final_model: Whether to save the final model to 'final_model.pkl'.
@@ -133,12 +137,11 @@ class RFAnalyzer:
                 Default is True.
         """
         clf = self.classifier
-        print(f"Testing Random Forest Rules on {os.path.basename(file_path)}...")
+        data_name = os.path.basename(file_path) if file_path else "DataFrames/Arrays"
+        print(f"Testing Random Forest Rules on {data_name}...")
         start_time = time.time()
 
-        _, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
-            ".", file_path, is_test_only=True
-        )
+        X_test, y_test, feature_names = RuleClassifier._prepare_test_data(file_path, X, y, clf)
         sample_dicts = [dict(zip(feature_names, row)) for row in X_test]
         total_samples = len(y_test)
 
@@ -334,7 +337,7 @@ class RFAnalyzer:
     # Initial vs Final comparison
     # ------------------------------------------------------------------
 
-    def compare_initial_final_results(self, file_path: str) -> None:
+    def compare_initial_final_results(self, file_path: str = None, X = None, y = None) -> None:
         """Compares performance of initial vs final rules for a Random Forest.
 
         Evaluates both rule sets on the test data, displays metrics, logs
@@ -342,10 +345,11 @@ class RFAnalyzer:
 
         Args:
             file_path: Path to the CSV test file.
+            X: Dataframe or array for test data.
+            y: True labels.
         """
-        _, _, X_test, y_test, _, target_column_name, feature_names = (
-            RuleClassifier.process_data(".", file_path, is_test_only=True)
-        )
+        X_test, y_test, feature_names = RuleClassifier._prepare_test_data(file_path, X, y, self.classifier)
+        target_column_name = "Class"
         df_test = pd.DataFrame(X_test, columns=feature_names)
         df_test[target_column_name] = y_test
 

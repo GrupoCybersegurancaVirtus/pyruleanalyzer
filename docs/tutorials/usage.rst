@@ -63,7 +63,7 @@ Example with Decision Tree (Arrays):
 
 .. code-block:: python
 
-    from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
+    from pyruleanalyzer import PyRuleAnalyzer
 
     # Create a RuleClassifier instance
     model = PyRuleAnalyzer.new_model(model="Decision Tree")
@@ -95,19 +95,20 @@ Example with Gradient Boosting Decision Trees:
 Analyze and Refine the Rules
 ----------------------------
 
-After fitting the model, you can analyze and refine the extracted rules using the appropriate analyzer class (:ref:`DTAnalyzer<dt_analyzer>`, :ref:`RFAnalyzer<rf_analyzer>`, or :ref:`GBDTAnalyzer<gbdt_analyzer>`) based on the algorithm type.
+After fitting the model, you can analyze and refine the extracted rules using the :class:`PyRuleAnalyzer<pyruleanalyzer.PyRuleAnalyzer>` directly, which automatically handles the logic for Decision Trees, Random Forests, and GBDT.
 
 .. code-block:: python
 
-    from pyruleanalyzer import PyRuleAnalyzer, DTAnalyzer
+    from pyruleanalyzer import PyRuleAnalyzer
 
     # For a Decision Tree classifier
-    analyzer = DTAnalyzer(model)
+    model = PyRuleAnalyzer.new_model(model="Decision Tree")
+    model.fit(X_train, y_train)
     
-    # Remove redundant rules by evaluating on a test set (can be a CSV path)
-    analyzer.execute_rule_analysis(
-        file_path="test.csv",
-        remove_low_usage=-1,
+    # Remove redundant rules by evaluating on a test set (can be memory arrays or CSV path)
+    model.execute_rule_refinement(
+        X=X_test, y=y_test,
+        remove_below_n_classifications=-1,
         save_final_model=False,
         save_report=False
     )

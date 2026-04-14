@@ -276,10 +276,12 @@ class PyRuleAnalyzer:
     # REFINEMENT
     # ==========================================================================
     
-    def refine(
+    def execute_rule_refinement(
         self,
-        test_path: str,
-        remove_low_usage: int = -1,
+        test_path: str = None,
+        X=None,
+        y=None,
+        remove_below_n_classifications: int = -1,
         save_final_model: bool = False,
         save_report: bool = False
     ) -> Dict[str, Any]:
@@ -288,7 +290,9 @@ class PyRuleAnalyzer:
         
         Args:
             test_path: Path to CSV file for evaluating rule usage.
-            remove_low_usage: Minimum usage threshold for rules.
+            X: Input data for evaluating rule usage (DataFrame or ndarray).
+            y: Target labels for evaluating rule usage.
+            remove_below_n_classifications: Minimum usage threshold for rules.
                             Rules used fewer times than this value will be removed.
                             Use -1 to disable. Default is -1.
             save_final_model: If True, save refined model to files/final_model.pkl.
@@ -304,9 +308,9 @@ class PyRuleAnalyzer:
             - reduction_percent: Percentage reduction
         
         Example:
-            >>> stats = analyzer.refine(
-            ...     test_path="data/test.csv",
-            ...     remove_low_usage=5
+            >>> stats = analyzer.execute_rule_refinement(
+            ...     X=X_test, y=y_test,
+            ...     remove_below_n_classifications=5
             ... )
             >>> print(f"Removed {stats['rules_removed']} rules ({stats['reduction_percent']:.1f}%)")
         """
@@ -317,27 +321,30 @@ class PyRuleAnalyzer:
         if self.classifier.algorithm_type == 'Decision Tree':
             from .dt_analyzer import DTAnalyzer
             analyzer = DTAnalyzer(self.classifier)
-            analyzer.execute_rule_analysis(
+            analyzer.execute_rule_refinement(
                 file_path=test_path,
-                remove_below_n_classifications=remove_low_usage,
+                X=X, y=y,
+                remove_below_n_classifications=remove_below_n_classifications,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
         elif self.classifier.algorithm_type == 'Random Forest':
             from .rf_analyzer import RFAnalyzer
             analyzer = RFAnalyzer(self.classifier)
-            analyzer.execute_rule_analysis(
+            analyzer.execute_rule_refinement(
                 file_path=test_path,
-                remove_below_n_classifications=remove_low_usage,
+                X=X, y=y,
+                remove_below_n_classifications=remove_below_n_classifications,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
         elif self.classifier.algorithm_type == 'Gradient Boosting Decision Trees':
             from .gbdt_analyzer import GBDTAnalyzer
             analyzer = GBDTAnalyzer(self.classifier)
-            analyzer.execute_rule_analysis(
+            analyzer.execute_rule_refinement(
                 file_path=test_path,
-                remove_below_n_classifications=remove_low_usage,
+                X=X, y=y,
+                remove_below_n_classifications=remove_below_n_classifications,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -352,6 +359,21 @@ class PyRuleAnalyzer:
             "rules_removed": rules_before - rules_after,
             "reduction_percent": ((rules_before - rules_after) / rules_before * 100) if rules_before > 0 else 0
         }
+    
+    def compare_initial_final_results(self, test_path: str = None, X = None, y = None) -> None:
+        """
+        Compare the initial and final (refined) models on the test dataset.
+        Prints out performance metrics and complexity scores.
+        
+        Args:
+            test_path: Path to the CSV test file.
+            X: Input data for test (DataFrame or ndarray).
+            y: Target labels for test.
+            
+        Example:
+            >>> analyzer.compare_initial_final_results(X=X_test, y=y_test)
+        """
+        return self.classifier.compare_initial_final_results(test_path, X=X, y=y)
     
     # ==========================================================================
     # PREDICTION

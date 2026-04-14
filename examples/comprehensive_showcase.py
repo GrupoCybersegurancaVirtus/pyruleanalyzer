@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pyruleanalyzer import PyRuleAnalyzer
-from pyruleanalyzer import DTAnalyzer
+
 
 def main():
     print("="*80)
@@ -64,20 +64,19 @@ def main():
     # =========================================================================
     print("\n[3] Analyzing and Refining Rules...")
     
-    # Create an analyzer specific to the model type
-    analyzer = DTAnalyzer(model.classifier)
-    
     # Execute analysis to remove duplicate and low-usage rules
     # It uses the test dataset to evaluate which rules are actually useful
-    analyzer.execute_rule_analysis(
-        file_path=test_csv_path,          # Test data to evaluate rule usage
+    # The appropriate analyzer is automatically instantiated under the hood
+    stats = model.execute_rule_refinement(
+        X=X_test, y=y_test,               # Test data to evaluate rule usage
         remove_below_n_classifications=0, # Refine rules that are never used (0 classifications)
         save_final_model=False,           # We won't save the pkl here
         save_report=False                 # We won't generate the .txt report
     )
+    print(f" -> Removed {stats['rules_removed']} rules ({stats['reduction_percent']:.1f}%)")
 
     # =========================================================================
-    # 4. INTERACTIVE REPORTING (Jupyter Friendly)
+    # 4. INTERACTIVE REPORTING
     # =========================================================================
     print("\n[4] Generating Summary Report...")
     
@@ -117,7 +116,7 @@ def main():
     # =========================================================================
     print("\n[6] Comparing Initial vs Final (Refined) Metrics...")
     # This prints out a full comparison including confusion matrices and complexity scores
-    analyzer.compare_initial_final_results(test_csv_path)
+    model.compare_initial_final_results(X=X_test, y=y_test)
 
     # =========================================================================
     # 7. EXPORTING THE MODEL

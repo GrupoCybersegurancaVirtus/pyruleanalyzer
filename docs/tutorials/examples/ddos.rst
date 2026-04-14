@@ -60,7 +60,7 @@ The :ref:`RuleClassifier<rule_classifier>` works exactly like a Scikit-Learn est
 
 .. code-block:: python
 
-    from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
+    from pyruleanalyzer import PyRuleAnalyzer
 
     # Create a RuleClassifier instance
     classifier = PyRuleAnalyzer.new_model(model="Random Forest")
@@ -69,23 +69,19 @@ The :ref:`RuleClassifier<rule_classifier>` works exactly like a Scikit-Learn est
     classifier.fit(X_train, y_train)
 
 Refinement
--------
+----------
 
-With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis using the :ref:`RFAnalyzer<rf_analyzer>` class, which will refine the forest by removing duplicate rules.
+With the :class:`PyRuleAnalyzer<pyruleanalyzer.PyRuleAnalyzer>` instance in hands, we can now execute a rule refinement, which will refine the forest by removing duplicate rules.
 
 .. code-block:: python
 
-    from pyruleanalyzer import PyRuleAnalyzer, RFAnalyzer
+    from pyruleanalyzer import PyRuleAnalyzer
 
-    analyzer = RFAnalyzer(classifier)
+    classifier = PyRuleAnalyzer.new_model(model="Random Forest")
+    classifier.fit(X_train, y_train)
     
-    # To evaluate rules, we need the validation set data
-    # (Let's save it temporarily for the analyzer to use)
-    test_df = pd.concat([X_test, y_test], axis=1)
-    test_df.to_csv("test.csv", index=False)
-    
-    analyzer.execute_rule_analysis(
-        file_path="test.csv",
+    classifier.execute_rule_refinement(
+        X=X_test, y=y_test,
         remove_below_n_classifications=-1,
         save_final_model=True,
         save_report=True
@@ -93,7 +89,8 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 
 Parameters:
 
-- ``file_path``: Path to the test dataset CSV file.
+- ``X``: Dataframe/Array for testing data.
+- ``y``: True labels.
 - ``remove_below_n_classifications``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
 - ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
 - ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
@@ -178,7 +175,7 @@ Use the ``compare_initial_final_results`` method to evaluate both the original a
 
 .. code-block:: python
 
-    analyzer.compare_initial_final_results("test.csv")
+    classifier.compare_initial_final_results(X=X_test, y=y_test)
 
 Exporting
 ^^^^^^^^^

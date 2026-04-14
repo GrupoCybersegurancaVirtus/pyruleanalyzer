@@ -25,7 +25,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Ensure pyruleanalyzer is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pyruleanalyzer.rule_classifier import RuleClassifier
-from pyruleanalyzer.rf_analyzer import RFAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 
 # ============================================================================
@@ -408,8 +408,8 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 ),
                 class_names_map, 'Random Forest'
             )
-            analyzer_soft = RFAnalyzer(classifier_soft)
-            analyzer_soft.execute_rule_analysis(
+            py_analyzer_soft = PyRuleAnalyzer(classifier_soft, feature_names, class_names)
+            py_analyzer_soft.execute_rule_refinement(
                 test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
@@ -460,8 +460,8 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 ),
                 class_names_map, 'Random Forest'
             )
-            analyzer_hard = RFAnalyzer(classifier_hard)
-            analyzer_hard.execute_rule_analysis(
+            py_analyzer_hard = PyRuleAnalyzer(classifier_hard, feature_names, class_names)
+            py_analyzer_hard.execute_rule_refinement(
                 test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
@@ -506,8 +506,8 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                     ),
                     class_names_map, 'Random Forest'
                 )
-                analyzer_t = RFAnalyzer(clf_t)
-                analyzer_t.execute_rule_analysis(
+                py_analyzer_t = PyRuleAnalyzer(clf_t, feature_names, class_names)
+                py_analyzer_t.execute_rule_refinement(
                     test_path, remove_below_n_classifications=threshold, save_final_model=False, save_report=False
                 )
             finally:
@@ -632,6 +632,14 @@ def print_results(results):
 # ============================================================================
 # ENTRY POINT
 # ============================================================================
+
+import pytest
+
+@pytest.mark.parametrize("name, dataset_kwargs, model_params", TEST_CONFIGS)
+def test_rf_invariants(name, dataset_kwargs, model_params):
+    result = run_test_config(name, dataset_kwargs, model_params)
+    if not result['passed']:
+        pytest.fail("\n".join(result['failures']))
 
 if __name__ == '__main__':
     print('=' * 80)

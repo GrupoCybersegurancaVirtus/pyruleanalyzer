@@ -305,7 +305,7 @@ predictions = analyzer.predict(X_test)
 ### Old API (Complex)
 
 ```python
-from pyruleanalyzer import RuleClassifier, DTAnalyzer
+from pyruleanalyzer import PyRuleAnalyzer
 
 # Step 1: Create classifier
 classifier = RuleClassifier.new_classifier(
@@ -318,8 +318,8 @@ classifier = RuleClassifier.new_classifier(
 )
 
 # Step 2: Analyze and refine
-analyzer = DTAnalyzer(classifier)
-analyzer.execute_rule_analysis(
+# analyzer = DTAnalyzer(classifier) -> we now just call it from classifier
+classifier.execute_rule_refinement(
     file_path="data/test.csv",
     remove_low_usage=-1,
     save_final_model=True,
@@ -390,7 +390,7 @@ files/
 **Old code:**
 ```python
 classifier = RuleClassifier.new_classifier(...)
-classifier.execute_rule_analysis(...)
+classifier.execute_rule_refinement(...)
 classifier.compile_tree_arrays()
 predictions = classifier.predict_batch(X_test)
 classifier.export_to_native_python()
@@ -409,15 +409,14 @@ analyzer.export()
 ```python
 classifier = RuleClassifier.new_classifier(...)
 analyzer = DTAnalyzer(classifier)  # or RFAnalyzer, GBDTAnalyzer
-analyzer.execute_rule_analysis(...)
+analyzer.execute_rule_refinement(...)
 ```
 
 **New code:**
 ```python
-analyzer = PyRuleAnalyzer.create(..., refine=True)
-# Or manually:
-analyzer = PyRuleAnalyzer.create(...)
-analyzer.refine(...)
+model = PyRuleAnalyzer.new_model(model='Decision Tree')
+model.fit(X_train, y_train)
+model.execute_rule_refinement(X=X_test, y=y_test)
 ```
 
 ## Troubleshooting
