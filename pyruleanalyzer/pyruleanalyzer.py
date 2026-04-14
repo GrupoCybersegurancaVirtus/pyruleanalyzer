@@ -261,32 +261,20 @@ class PyRuleAnalyzer:
     
     def predict(
         self,
-        X: Union[np.ndarray, pd.DataFrame],
+        X,
         use_refined: bool = True
-    ) -> np.ndarray:
+    ):
         """
         Predict class labels for input data.
         
         Args:
-            X: Input data as numpy array or pandas DataFrame.
-               Shape: (n_samples, n_features).
-            use_refined: If True, use refined rules (if available).
-                       If False, use original rules.
-                       Default is True.
+            X: Input data (dict, series, list for single; DataFrame, ndarray for batch).
+            use_refined: If True, use refined rules (if available). Default is True.
         
         Returns:
-            np.ndarray: Predicted class labels. Shape: (n_samples,).
-        
-        Example:
-            >>> predictions = analyzer.predict(X_test)
-            >>> print(f"Predicted classes: {predictions}")
+            Predicted class label(s).
         """
-        # Convert DataFrame to numpy if needed
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-        
-        # Use vectorized batch prediction
-        return self.classifier.predict_batch(
+        return self.classifier.predict(
             X=X,
             feature_names=self.feature_names,
             use_final=use_refined
@@ -294,29 +282,20 @@ class PyRuleAnalyzer:
     
     def predict_proba(
         self,
-        X: Union[np.ndarray, pd.DataFrame],
+        X,
         use_refined: bool = True
-    ) -> np.ndarray:
+    ):
         """
-        Predict class probabilities for input data (Random Forest only).
+        Predict class probabilities for input data.
         
         Args:
-            X: Input data as numpy array or pandas DataFrame.
-               Shape: (n_samples, n_features).
-            use_refined: If True, use refined rules (if available).
-                       Default is True.
+            X: Input data (dict, series, list for single; DataFrame, ndarray for batch).
+            use_refined: If True, use refined rules (if available). Default is True.
         
         Returns:
-            np.ndarray: Class probabilities. Shape: (n_samples, n_classes).
-        
-        Note:
-            This method is only available for Random Forest models.
-            For Decision Tree and GBDT, use predict() instead.
+            Class probabilities.
         """
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-        
-        return self.classifier.predict_batch_proba(
+        return self.classifier.predict_proba(
             X=X,
             feature_names=self.feature_names,
             use_final=use_refined

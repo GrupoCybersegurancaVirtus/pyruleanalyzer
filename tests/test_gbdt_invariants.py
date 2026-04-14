@@ -26,6 +26,7 @@ from sklearn.ensemble import GradientBoostingClassifier
 # Ensure pyruleanalyzer is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pyruleanalyzer.rule_classifier import RuleClassifier
+from pyruleanalyzer.gbdt_analyzer import GBDTAnalyzer
 
 
 # ============================================================================
@@ -455,8 +456,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
         sys.stdout = open(os.devnull, 'w')
         try:
             classifier_soft = build_gbdt_classifier(sk_model, feature_names, class_names)
-            classifier_soft.execute_rule_analysis(
-                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
+            analyzer_soft = GBDTAnalyzer(classifier_soft)
+            analyzer_soft.execute_rule_analysis(
+                test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -502,8 +504,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
         sys.stdout = open(os.devnull, 'w')
         try:
             classifier_hard = build_gbdt_classifier(sk_model, feature_names, class_names)
-            classifier_hard.execute_rule_analysis(
-                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
+            analyzer_hard = GBDTAnalyzer(classifier_hard)
+            analyzer_hard.execute_rule_analysis(
+                test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -542,8 +545,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
             sys.stdout = open(os.devnull, 'w')
             try:
                 clf_t = build_gbdt_classifier(sk_model, feature_names, class_names)
-                clf_t.execute_rule_analysis(
-                    test_path, remove_low_usage=threshold, save_final_model=False, save_report=False
+                analyzer_t = GBDTAnalyzer(clf_t)
+                analyzer_t.execute_rule_analysis(
+                    test_path, remove_below_n_classifications=threshold, save_final_model=False, save_report=False
                 )
             finally:
                 sys.stdout.close()

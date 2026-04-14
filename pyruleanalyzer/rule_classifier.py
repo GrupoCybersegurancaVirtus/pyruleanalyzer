@@ -82,7 +82,8 @@ class Rule:
         return f"Rule(name={self.name}, class={self.class_}, conditions={self.conditions})"
 
 # Class to handle the rule classification process
-class RuleClassifier:
+from .exporters import RuleExporterMixin
+class RuleClassifier(RuleExporterMixin):
     # Represents a rule-based classifier built from decision paths in tree models.
     
     def __init__(self, rules, algorithm_type='Decision Tree'):

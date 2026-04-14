@@ -1,26 +1,25 @@
 COVID-19
 ========
 
-This tutorial will guide you as we train and prune a decision tree model using the `Brazilian dataset of symptomatic patients for screening the risk of COVID-19 <https://data.mendeley.com/datasets/b7zcgmmwx4/5>`_ repository.
+This tutorial will guide you as we train and refine a decision tree model using the `Brazilian dataset of symptomatic patients for screening the risk of COVID-19 <https://data.mendeley.com/datasets/b7zcgmmwx4/5>`_ repository.
 
 Prerequisites
 -------------
 
 For this example we will be using the ``rapid_balanced.csv`` dataset, so make sure to download it from the repository above before continuing.
 
-Next, install the required packages and create the folder structure, as described in the :ref:`prerequisites section<tutorials/usage#prerequisites>` of the :doc:`usage guide<../usage>`.
+Next, install the required packages.
+
+.. code-block:: bash
+
+    pip install pyruleanalyzer pandas scikit-learn
 
 Prepare Your Dataset
 --------------------
 
-As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` ``new_classifier`` method expects a dataset split into two files: ``train.csv`` and ``test.csv``. The dataset must also be formatted with the following characteristics:
+As specified in the :doc:`usage guide<../usage>`, the :ref:`RuleClassifier<rule_classifier>` integrates directly with Scikit-Learn pipelines.
 
-- Each row represents a single sample.
-- The last column is the target class label.
-- All other columns are feature values.
-- All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
-
-We can use the following script to split the data, be sure to adapt it to your current pipeline as needed:
+We can use the following script to load and split the data. Be sure to adapt it to your current pipeline as needed:
 
 .. code-block:: python
 
@@ -39,34 +38,25 @@ We can use the following script to split the data, be sure to adapt it to your c
         X, y, test_size=0.25, stratify=y
     )
 
-    # Save to CSV files without index
-    train_df = pd.concat([X_train, y_train], axis=1)
-    test_df = pd.concat([X_test, y_test], axis=1)
-
-    train_df.to_csv("train.csv", index=False)
-    test_df.to_csv("test.csv", index=False)
-
 Training the Tree and Extracting Its Rules
 ---------------------------------------------------
 
-The ``new_classifier`` method from :ref:`RuleClassifier<rule_classifier>` will train a ``scikit-learn`` model, extract its rules and create a new :ref:`RuleClassifier<rule_classifier>` instance. It expects the path to the newly created CSV files, an algorithm type (can be ``"Decision Tree"``, ``"Random Forest"``, or ``"Gradient Boosting Decision Trees"``) and the model parameters to be used in the respective ``scikit-learn`` model.
+The :ref:`RuleClassifier<rule_classifier>` behaves as a standard scikit-learn model, but with built-in method overloading that lets you use either standard DataFrames/NumPy arrays or strings representing CSV file paths.
 
 .. code-block:: python
 
     from pyruleanalyzer import RuleClassifier
 
-    # Define the model parameters
-    model_params = {"max_depth": 5}
-
     # Create a RuleClassifier instance
-    classifier = RuleClassifier.new_classifier(
-        train_path="train.csv",
-        test_path="test.csv",
-        model_parameters=model_params,
-        algorithm_type="Decision Tree"
-    )
+    classifier = RuleClassifier(algorithm_type="Decision Tree")
+    
+    # Method 1: Train the internal model with in-memory DataFrames
+    classifier.fit(X_train, y_train)
 
-Pruning
+    # Method 2: Train using the CSV paths directly
+    classifier.fit("train.csv", "test.csv")
+
+Refinement
 -------
 
 With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now execute a rule analysis using the :ref:`DTAnalyzer<dt_analyzer>` class, which will refine the tree by removing duplicate rules.
@@ -76,9 +66,14 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
     from pyruleanalyzer import DTAnalyzer
 
     analyzer = DTAnalyzer(classifier)
+    
+    # We can pass the validation dataframe directly or pass a test.csv path
+    # To use our split data: 
+    # pd.concat([X_test, y_test], axis=1).to_csv("test.csv", index=False)
+    
     analyzer.execute_rule_analysis(
-        file_path="test.csv",
-        remove_low_usage=-1,
+        file_path="test.csv", # Or use validation dataframe if adapted
+        remove_below_n_classifications=-1,
         save_final_model=True,
         save_report=True
     )
@@ -86,14 +81,14 @@ With the :ref:`RuleClassifier<rule_classifier>` instance in hands, we can now ex
 Parameters:
 
 - ``file_path``: Path to the test dataset CSV file.
-- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+- ``remove_below_n_classifications``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
 - ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
 - ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
 
 Editing
 -------
 
-After pruning, you may also want to manually inspect and adjust the final rules before deploying the model.
+After refining, you may also want to manually inspect and adjust the final rules before deploying the model.
 The :ref:`RuleClassifier<rule_classifier>` class provides an ``edit_rules()`` method that starts an interactive terminal session to perform these edits.
 
 You'll be able to:
@@ -132,50 +127,49 @@ Using the model
 Single-sample prediction
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-To use the refined model to classify new entries we can use the ``classify`` method with the ``final`` parameter set to ``True``, this will force the :ref:`RuleClassifier<rule_classifier>` instance we just trained to use the rule set generated after pruning. If your dataset didn't include a header row you must name your features as ``"v{column}"`` where ``column`` is the column index in the csv.
+To use the refined model to classify new entries we can use the ``predict`` method. It accepts dictionaries, DataFrames or NumPy arrays directly:
 
 .. code-block:: python
 
     # Replace with actual values of your dataset
     sample = {"Symptom- Throat Pain": 0, "Symptom- Dyspnea": 1, "Symptom- Fever": 0, "Are you a health professional?": 0}
-    predicted_class, votes, probabilities = classifier.classify(sample, final=True)
+    predicted_class = classifier.predict(sample)
+    print(f"Predicted class: {predicted_class}")
 
 Batch prediction
 ^^^^^^^^^^^^^^^^^
 
-For high-performance inference on the entire test set, use ``predict_batch``:
+For high-performance inference on the entire test set, use ``predict`` with a DataFrame or ndarray:
 
 .. code-block:: python
 
     import numpy as np
 
-    df_test = pd.read_csv("test.csv")
-    X_test = df_test.iloc[:, :-1].values.astype(np.float32)
-    feature_names = list(df_test.columns[:-1])
-
-    predictions = classifier.predict_batch(X_test, feature_names=feature_names, use_final=True)
+    predictions = classifier.predict(X_test)
+    accuracy = np.mean(predictions == y_test)
+    print(f"Batch Accuracy: {accuracy:.4f}")
 
 Comparing Metrics
 ^^^^^^^^^^^^^^^^^
 
-Use the ``compare_initial_final_results`` method to evaluate both the original and pruned rule sets, including accuracy, confusion matrices, divergent predictions, and interpretability scores:
+Use the ``compare_initial_final_results`` method to evaluate both the original and refined rule sets, including accuracy, confusion matrices, divergent predictions, and interpretability scores:
 
 .. code-block:: python
 
-    classifier.compare_initial_final_results("test.csv")
+    analyzer.compare_initial_final_results("test.csv")
 
 Exporting
 ^^^^^^^^^
 
-You can export the trained classifier to different formats:
+You can export the trained classifier to different formats for deployment:
 
 .. code-block:: python
 
     # Standalone Python file
-    classifier.export_to_native_python(feature_names=feature_names, filename="covid_classifier.py")
+    classifier.to_python("covid_classifier.py")
 
     # Binary format (PYRA)
-    classifier.export_to_binary(filepath="covid_model.bin")
+    classifier.to_binary("covid_model.bin")
 
     # C header for embedded systems
-    classifier.export_to_c_header(filepath="covid_model.h")
+    classifier.to_c_header("covid_model.h")

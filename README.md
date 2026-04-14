@@ -50,8 +50,8 @@
 | **Rule Extraction** | Traverses sklearn tree structures to extract every decision path as a human-readable rule |
 | **Boundary Redundancy Removal** | Merges sibling rules that split on the same threshold but lead to the same class |
 | **Semantic Redundancy Removal** | Eliminates identical rules across different trees in ensemble models (RF) |
-| **Low-Usage Pruning** | Removes rarely-triggered rules with automatic sibling promotion |
-| **Custom Pruning** | Inject your own rule removal logic via callback functions |
+| **Low-Usage Refinement** | Removes rarely-triggered rules with automatic sibling promotion |
+| **Custom Refinement** | Inject your own rule removal logic via callback functions |
 | **Native Python Compilation** | Compiles rules into optimized `if/else` Python code (in-memory via `exec()` and file export) |
 | **Batch Prediction** | Vectorized `predict_batch()` using compiled tree arrays -- with optional C extension for **1.45x faster inference than sklearn** |
 | **Binary Export** | Compact `.bin` format for instant model loading via `load_binary()` |
@@ -145,9 +145,9 @@ In Random Forests, different trees may produce **identical rules** (same conditi
       Class: 1                   Class: 1
 ```
 
-#### c) Low-Usage Pruning with Sibling Promotion
+#### c) Low-Usage Refinement with Sibling Promotion
 
-Rules that match very few (or zero) test samples are candidates for removal. When a rule is pruned, its **sibling is promoted** by stripping its last condition (since the distinguishing split no longer exists):
+Rules that match very few (or zero) test samples are candidates for removal. When a rule is refined (removed), its **sibling is promoted** by stripping its last condition (since the distinguishing split no longer exists):
 
 ```
     BEFORE                           AFTER
@@ -166,18 +166,16 @@ Rules that match very few (or zero) test samples are candidates for removal. Whe
 
 Promotion is processed **deepest-first** to handle cascading correctly -- promoting a deep rule may make its parent eligible for further promotion.
 
-#### d) Custom Pruning
+#### d) Custom Refinement
 
-Inject domain-specific logic via `set_custom_rule_removal()`:
+You can inject custom logic to remove specific rules based on domain knowledge. Provide a callback function that takes the list of rules and returns the rules to be kept:
 
 ```python
-def my_pruner(rules):
-    filtered = [r for r in rules if some_domain_condition(r)]
-    removed = [(r, r) for r in rules if r not in filtered]
-    return filtered, removed
+def my_custom_refiner(rules):
+    # Keep only rules that predict Class 1
+    return [r for r in rules if r.class_ == 1]
 
-classifier.set_custom_rule_removal(my_pruner)
-classifier.execute_rule_analysis(test_path, remove_low_usage=-1)
+classifier.set_custom_rule_removal(my_custom_refiner)
 ```
 
 ### 3. Classification Strategies
@@ -279,32 +277,39 @@ print(f'C extension available: {HAS_C_EXTENSION}')
 
 ## Quick Start
 
+The API is fully compatible with Scikit-Learn.
+
 ```python
-from pyruleanalyzer import RuleClassifier
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from pyruleanalyzer import RuleClassifier, DTAnalyzer
 
-# 1. Create classifier (trains sklearn model + extracts rules)
-classifier = RuleClassifier.new_classifier(
-    "train.csv", "test.csv",
-    model_parameters={'random_state': 42},
-    algorithm_type='Decision Tree'
+# 1. Load data
+df = pd.read_csv("dataset.csv")
+X = df.iloc[:, :-1]
+y = df.iloc[:, -1]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# 2. Create and Train (extracts rules automatically)
+model = RuleClassifier(algorithm_type='Decision Tree')
+model.fit(X_train, y_train)
+
+# 3. Optimize rules (removes redundancies + refines low-usage)
+analyzer = DTAnalyzer(model)
+analyzer.execute_rule_analysis(
+    "dataset.csv", # Used for evaluating rule usage
+    remove_below_n_classifications=-1
 )
 
-# 2. Optimize rules (remove redundancies + prune low-usage)
-classifier.execute_rule_analysis(
-    "test.csv",
-    remove_low_usage=1
-)
+# 4. Predict using the Scikit-Learn API
+y_pred = model.predict(X_test)
+accuracy = (y_pred == y_test).mean()
+print(f"Accuracy: {accuracy:.4f}")
 
-# 3. Compare initial vs optimized model
-classifier.compare_initial_final_results("test.csv")
+# 5. Interactive Report
+report = model.summary_report()
+print(f"Total Active Rules: {report['total_rules']}")
 ```
-
-**Output includes:**
-- Number of rules before/after optimization
-- Accuracy, precision, recall, F1-score (macro)
-- Confusion matrices
-- Interpretability metrics (depth, complexity, feature coverage)
-- Divergence report (cases where initial and final models disagree)
 
 ---
 
@@ -313,92 +318,62 @@ classifier.compare_initial_final_results("test.csv")
 ### Decision Tree
 
 ```python
-from pyruleanalyzer import RuleClassifier
+from pyruleanalyzer import RuleClassifier, DTAnalyzer
 
-classifier = RuleClassifier.new_classifier(
-    "train.csv", "test.csv",
-    model_parameters={'random_state': 42},
-    algorithm_type='Decision Tree'
-)
+model = RuleClassifier(algorithm_type='Decision Tree')
+model.fit(X_train, y_train)
 
-# Remove low-usage rules (safe, no accuracy loss)
-classifier.execute_rule_analysis("test.csv", remove_low_usage=-1)
-classifier.compare_initial_final_results("test.csv")
+analyzer = DTAnalyzer(model)
+analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=-1)
+analyzer.compare_initial_final_results("test.csv")
 ```
 
 ### Random Forest
 
 ```python
-from pyruleanalyzer import RuleClassifier
+from pyruleanalyzer import RuleClassifier, RFAnalyzer
 
-model_params = {
-    'n_estimators': 100,
-    'max_features': 'sqrt',
-    'random_state': 42
-}
+model = RuleClassifier(algorithm_type='Random Forest')
+model.fit(X_train, y_train)
 
-classifier = RuleClassifier.new_classifier(
-    "train.csv", "test.csv",
-    model_parameters=model_params,
-    algorithm_type='Random Forest'
-)
-
-# Remove low-usage rules (safe for all algorithms)
-classifier.execute_rule_analysis("test.csv", remove_low_usage=1)
-classifier.compare_initial_final_results("test.csv")
+# Safe to remove low-usage rules in ensemble models
+analyzer = RFAnalyzer(model)
+analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=1)
+analyzer.compare_initial_final_results("test.csv")
 ```
 
 ### Gradient Boosting (GBDT)
 
 ```python
-from pyruleanalyzer import RuleClassifier
+from pyruleanalyzer import RuleClassifier, GBDTAnalyzer
 
-classifier = RuleClassifier.new_classifier(
-    "train.csv", "test.csv",
-    model_parameters={},
-    algorithm_type='Gradient Boosting Decision Trees'
-)
+model = RuleClassifier(algorithm_type='Gradient Boosting Decision Trees')
+model.fit(X_train, y_train)
 
-classifier.execute_rule_analysis("test.csv", remove_low_usage=1)
-classifier.compare_initial_final_results("test.csv")
+analyzer = GBDTAnalyzer(model)
+analyzer.execute_rule_analysis("test.csv", remove_below_n_classifications=1)
+analyzer.compare_initial_final_results("test.csv")
 ```
 
-### Batch Prediction
+### Batch Prediction & Probabilities
 
-Use `predict_batch()` for high-performance vectorized inference. This is the fastest prediction method available.
+Batch predictions run automatically using our vectorized high-performance C extension (if available) or NumPy when you call `predict()` or `predict_proba()` with multiple samples (DataFrames or 2D Arrays):
 
 ```python
-import numpy as np
-from pyruleanalyzer import RuleClassifier
-
-# Load or create a classifier
-classifier = RuleClassifier.new_classifier(
-    "train.csv", "test.csv",
-    model_parameters={'random_state': 42},
-    algorithm_type='Decision Tree'
-)
-
-# Get test data
-X_train, y_train, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
-    "train.csv", "test.csv"
-)
-
-# Compile rules into flat arrays (required before predict_batch)
-classifier.compile_tree_arrays(feature_names=feature_names)
-
 # Predict all samples at once
-predictions = classifier.predict_batch(X_test, feature_names=feature_names)
-accuracy = np.mean(predictions == y_test)
-print(f'Batch accuracy: {accuracy:.4f}')
+predictions = model.predict(X_test)
+
+# Get class probabilities
+probabilities = model.predict_proba(X_test)
+print(f'Shape: {probabilities.shape}')  # (n_samples, n_classes)
 ```
 
-### Probability Prediction
+### Export to Standalone Python
+
+Generates a self-contained `.py` file with the decision logic as pure Python code:
 
 ```python
-# After compile_tree_arrays(), get class probabilities
-probabilities = classifier.predict_batch_proba(X_test, feature_names=feature_names)
-print(f'Shape: {probabilities.shape}')  # (n_samples, n_classes)
-print(f'First sample probs: {probabilities[0]}')
+model.to_python("my_classifier.py")
 ```
 
 ### Binary Export & Loading
@@ -406,12 +381,12 @@ print(f'First sample probs: {probabilities[0]}')
 Export a compiled model as a compact binary file for fast loading, without needing the original training data or sklearn:
 
 ```python
-# Export to binary (requires compile_tree_arrays() first)
-classifier.export_to_binary('model.bin')
+# Export to binary
+model.to_binary('model.bin')
 
 # Later, load the binary model (no sklearn needed)
 loaded = RuleClassifier.load_binary('model.bin')
-preds = loaded.predict_batch(X_test, feature_names=feature_names)
+preds = loaded.predict(X_test)
 ```
 
 The binary format uses a compact encoding (magic `b'PYRA'`, version 1) that stores only the tree arrays -- typically **much smaller** than pickle files.
@@ -422,7 +397,7 @@ Export a standalone C header file for use on microcontrollers or embedded system
 
 ```python
 # Export to C header
-classifier.export_to_c_header('model.h', guard_name='MY_MODEL_H')
+model.to_c_header('model.h')
 ```
 
 The generated `.h` file contains:
@@ -443,9 +418,6 @@ int predicted_class = predict(sample);
 After analysis, you can manually edit rules through an interactive terminal interface:
 
 ```python
-# Load a previously saved model
-classifier = RuleClassifier.load("files/final_model.pkl")
-
 # Open the interactive editor
 classifier.edit_rules()
 
@@ -581,7 +553,7 @@ The main class that handles the entire pipeline.
 - `"custom"` -- Use the function set via `set_custom_rule_removal()`
 
 **`remove_below_n_classifications` options:**
-- `-1` -- Disabled (no low-usage pruning)
+- `-1` -- Disabled (no low-usage refinement)
 - `0` -- Remove rules with zero matches
 - `N` -- Remove rules matching N or fewer samples
 
@@ -608,7 +580,7 @@ The main class that handles the entire pipeline.
 | `export_to_c_header(filepath='model.h', guard_name='PYRULEANALYZER_MODEL_H')` | Export a standalone C header for embedded targets |
 | `update_native_model(rules)` | Compile rules into in-memory Python function via `exec()` |
 | `edit_rules()` | Open interactive terminal rule editor |
-| `set_custom_rule_removal(func)` | Set a custom pruning callback |
+| `set_custom_rule_removal(func)` | Set a custom refinement callback |
 
 #### Metrics
 

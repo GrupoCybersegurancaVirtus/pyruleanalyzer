@@ -118,7 +118,7 @@ class GBDTAnalyzer:
 
         Args:
             file_path: Path to the CSV test file.
-            remove_below_n_classifications: Threshold for low-usage pruning
+            remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
             save_final_model: Whether to save the final model to 'final_model.pkl'.
                 Default is True.
@@ -137,6 +137,7 @@ class GBDTAnalyzer:
         total_samples = len(y_test)
 
         # 2. Reset Counters
+        clf.final_rules = list(clf.initial_rules)
         for rule in clf.final_rules:
             rule.usage_count = 0
             rule.error_count = 0
@@ -201,21 +202,31 @@ class GBDTAnalyzer:
         
         if duplicated_pairs:
             print(f'Found {intra_tree_count} duplicated rule pairs (intra-tree).')
-            # For duplicated rules, we only remove ONE rule from each pair (not both)
-            # We keep the first rule and remove the second one
-            rules_to_remove = []
+            # Create generalized rules by merging the siblings
+            rules_to_remove_ids = set()
+            new_generalized_rules = []
             for rule1, rule2 in duplicated_pairs:
-                rules_to_remove.append(rule2)  # Keep rule1, remove rule2
-            
-            # Simply filter out the duplicated rules (no promotion needed)
-            rules_to_remove_ids = {id(r) for r in rules_to_remove}
-            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids]
+                rules_to_remove_ids.add(id(rule1))
+                rules_to_remove_ids.add(id(rule2))
+                common_conditions = rule1.conditions[:-1]
+                new_rule_name = f"{rule1.name}_&_{rule2.name}"
+                new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
+                    new_rule_name, rule1.class_, common_conditions,
+                    leaf_value=getattr(rule1, 'leaf_value', 0.0),
+                    learning_rate=getattr(rule1, 'learning_rate', 0.1),
+                    class_group=getattr(rule1, 'class_group', 0)
+                )
+                if hasattr(rule1, 'parsed_conditions') and rule1.parsed_conditions:
+                    new_rule.parsed_conditions = rule1.parsed_conditions[:-1]
+                new_generalized_rules.append(new_rule)
+                
+            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
             print(f'Rules after removing duplicates: {len(clf.final_rules)}')
             clf.update_native_model(clf.final_rules)
 
-        # 7. Low-usage pruning with sibling promotion
+        # 7. Low-usage refinement with sibling promotion
         if remove_below_n_classifications > -1:
-            print(f'\nPruning rules with <= {remove_below_n_classifications} classifications...')
+            print(f'\nRefining rules with <= {remove_below_n_classifications} classifications...')
             clf.specific_rules = []
 
             for rule in clf.final_rules:

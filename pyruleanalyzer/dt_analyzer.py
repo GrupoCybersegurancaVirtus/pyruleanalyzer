@@ -94,7 +94,7 @@ class DTAnalyzer:
 
         Args:
             file_path: Path to the CSV test file.
-            remove_below_n_classifications: Threshold for low-usage pruning
+            remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
             save_final_model: Whether to save the final model to 'final_model.pkl'.
                 Default is True.
@@ -113,6 +113,7 @@ class DTAnalyzer:
         total_samples = len(y_test)
 
         # 2. Reset Counters
+        clf.final_rules = list(clf.initial_rules)
         for rule in clf.final_rules:
             rule.usage_count = 0
             rule.error_count = 0
@@ -175,22 +176,40 @@ class DTAnalyzer:
         
         if duplicated_pairs:
             print(f"Found {intra_tree_count} duplicated rule pairs (intra-tree).")
-            # For duplicated rules, we only remove ONE rule from each pair (not both)
-            # We keep the first rule and remove the second one
-            rules_to_remove = []
+            # Create generalized rules by merging the siblings
+            rules_to_remove_ids = set()
+            new_generalized_rules = []
             for rule1, rule2 in duplicated_pairs:
-                rules_to_remove.append(rule2)  # Keep rule1, remove rule2
-            
-            # Simply filter out the duplicated rules (no promotion needed)
-            # Make a copy first since final_rules may reference initial_rules
-            rules_to_remove_ids = {id(r) for r in rules_to_remove}
-            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids]
+                rules_to_remove_ids.add(id(rule1))
+                rules_to_remove_ids.add(id(rule2))
+                common_conditions = rule1.conditions[:-1]
+                new_rule_name = f"{rule1.name}_&_{rule2.name}"
+                combined_dist = None
+                merged_class = rule1.class_
+                if hasattr(rule1, 'class_distribution') and rule1.class_distribution is not None and hasattr(rule2, 'class_distribution') and rule2.class_distribution is not None:
+                    combined_dist = [a + b for a, b in zip(rule1.class_distribution, rule2.class_distribution)]
+                    best_idx = combined_dist.index(max(combined_dist))
+                    merged_class = str(best_idx)
+                elif hasattr(rule1, 'class_distribution') and rule1.class_distribution is not None:
+                    combined_dist = list(rule1.class_distribution)
+                elif hasattr(rule2, 'class_distribution') and rule2.class_distribution is not None:
+                    combined_dist = list(rule2.class_distribution)
+                
+                new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
+                    new_rule_name, merged_class, common_conditions,
+                    class_distribution=combined_dist
+                )
+                if hasattr(rule1, 'parsed_conditions') and rule1.parsed_conditions:
+                    new_rule.parsed_conditions = rule1.parsed_conditions[:-1]
+                new_generalized_rules.append(new_rule)
+                
+            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
             print(f"Rules after removing duplicates: {len(clf.final_rules)}")
             clf.update_native_model(clf.final_rules)
 
-        # 7. Low-usage pruning with sibling promotion
+        # 7. Low-usage refinement with sibling promotion
         if remove_below_n_classifications > -1:
-            print(f"\nPruning rules with <= {remove_below_n_classifications} classifications...")
+            print(f"\nRefining rules with <= {remove_below_n_classifications} classifications...")
             clf.specific_rules = []
 
             for rule in clf.final_rules:

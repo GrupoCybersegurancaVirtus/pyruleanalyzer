@@ -411,8 +411,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 ),
                 class_names_map, 'Decision Tree'
             )
-            classifier_soft.execute_rule_analysis(
-                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
+            analyzer_soft = DTAnalyzer(classifier_soft)
+            analyzer_soft.execute_rule_analysis(
+                test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -459,8 +460,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 ),
                 class_names_map, 'Decision Tree'
             )
-            classifier_hard.execute_rule_analysis(
-                test_path, remove_low_usage=-1, save_final_model=False, save_report=False
+            analyzer_hard = DTAnalyzer(classifier_hard)
+            analyzer_hard.execute_rule_analysis(
+                test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
@@ -506,8 +508,9 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                     ),
                     class_names_map, 'Decision Tree'
                 )
-                clf_t.execute_rule_analysis(
-                    test_path, remove_low_usage=threshold, save_final_model=False, save_report=False
+                analyzer_t = DTAnalyzer(clf_t)
+                analyzer_t.execute_rule_analysis(
+                    test_path, remove_below_n_classifications=threshold, save_final_model=False, save_report=False
                 )
             finally:
                 sys.stdout.close()

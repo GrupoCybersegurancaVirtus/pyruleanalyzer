@@ -1,7 +1,6 @@
 Usage
 =====
 
-
 This tutorial demonstrates how to integrate the :ref:`RuleClassifier<rule_classifier>` into your own machine learning pipeline. We'll cover data preparation, model training, rule extraction, analysis, batch prediction, and export using Decision Tree, Random Forest, and Gradient Boosting Decision Trees classifiers.
 
 .. _tutorials/usage#prerequisites:
@@ -27,34 +26,12 @@ Or simply install the package (all dependencies are included):
 
     pip install pyruleanalyzer
 
-You must also create the following folder structure in the directory you'll be executing your code:
-
-.. code-block:: text
-
-    your_project/
-    ├──examples/
-    │  └──files/
-    └──your_python_code.py
-
 Prepare Your Dataset
 --------------------
 
-Your dataset should be in CSV format with the following characteristics:
-
-- Each row represents a single sample.
-- The last column is the target class label.
-- All other columns are feature values.
-- All values and classes must be non-infinite numbers, so make sure to include an encoder in your pipeline if you have string data.
+Your dataset can be any standard format accepted by Scikit-Learn (NumPy arrays or Pandas DataFrames).
 
 Example:
-
-.. code-block:: text
-
-    5,1,0,0,1
-    1,1,2,0,0
-    9,1,1,0,1
-
-Split your dataset into training and testing sets. Here's how you can do it using pandas and scikit-learn:
 
 .. code-block:: python
 
@@ -73,200 +50,105 @@ Split your dataset into training and testing sets. Here's how you can do it usin
         X, y, test_size=0.25, stratify=y
     )
 
-    # Save to CSV files without index
-    train_df = pd.concat([X_train, y_train], axis=1)
-    test_df = pd.concat([X_test, y_test], axis=1)
-
-    train_df.to_csv("train.csv", index=False)
-    test_df.to_csv("test.csv", index=False)
-
 Train a Model and Extract Rules
 -------------------------------
 
-Use the ``new_classifier`` method from :ref:`RuleClassifier<rule_classifier>` to train a model and extract rules. You can choose between a Decision Tree, Random Forest, or Gradient Boosting Decision Trees classifier.
+The :ref:`RuleClassifier<rule_classifier>` behaves exactly like a Scikit-Learn estimator. You instantiate it with the desired ``algorithm_type`` and call ``fit(X, y)``.
 
-Example with Decision Tree:
+It supports two forms of input (overloading):
+1. **NumPy Arrays or Pandas DataFrames (Standard Scikit-Learn approach)**
+2. **Paths to CSV files (Legacy approach, using X as `train_path` and y as `test_path`)**
+
+Example with Decision Tree (Arrays):
 
 .. code-block:: python
 
     from pyruleanalyzer import RuleClassifier
 
-
-    # Define model parameters for the sklearn model
-    model_params = {"max_depth": 5}
-
     # Create a RuleClassifier instance
-    classifier = RuleClassifier.new_classifier(
-        train_path="train.csv",
-        test_path="test.csv",
-        model_parameters=model_params,
-        algorithm_type="Decision Tree"
-    )
+    model = RuleClassifier(algorithm_type="Decision Tree")
+    
+    # Train the model and extract rules automatically
+    model.fit(X_train, y_train)
+
+Example with Decision Tree (CSV paths):
+
+.. code-block:: python
+
+    model = RuleClassifier(algorithm_type="Decision Tree")
+    model.fit("train.csv", "test.csv")
 
 Example with Random Forest:
 
 .. code-block:: python
 
-    model_params = {"n_estimators": 100, "max_depth": 5}
-
-    classifier = RuleClassifier.new_classifier(
-        train_path="train.csv",
-        test_path="test.csv",
-        model_parameters=model_params,
-        algorithm_type="Random Forest"
-    )
+    model = RuleClassifier(algorithm_type="Random Forest")
+    model.fit(X_train, y_train)
 
 Example with Gradient Boosting Decision Trees:
 
 .. code-block:: python
 
-    model_params = {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1}
-
-    classifier = RuleClassifier.new_classifier(
-        train_path="train.csv",
-        test_path="test.csv",
-        model_parameters=model_params,
-        algorithm_type="Gradient Boosting Decision Trees"
-    )
-
-You can also load a previously trained sklearn model from a pickle file instead of training a new one, by providing the ``model_path`` parameter:
-
-.. code-block:: python
-
-    classifier = RuleClassifier.new_classifier(
-        train_path="train.csv",
-        test_path="test.csv",
-        model_parameters={},
-        model_path="path/to/your_model.pkl",
-        algorithm_type="Decision Tree"
-    )
-
-This process will:
-
-- Train (or load) the specified model.
-- Extract decision rules from the trained model.
-- Initialize a :ref:`RuleClassifier<rule_classifier>` instance with the extracted rules.
+    model = RuleClassifier(algorithm_type="Gradient Boosting Decision Trees")
+    model.fit(X_train, y_train)
 
 Analyze and Refine the Rules
 ----------------------------
 
-After initializing the :ref:`RuleClassifier<rule_classifier>` instance, you can analyze and refine the extracted rules using the appropriate analyzer class (:ref:`DTAnalyzer<dt_analyzer>`, :ref:`RFAnalyzer<rf_analyzer>`, or :ref:`GBDTAnalyzer<gbdt_analyzer>`) based on the algorithm type.
+After fitting the model, you can analyze and refine the extracted rules using the appropriate analyzer class (:ref:`DTAnalyzer<dt_analyzer>`, :ref:`RFAnalyzer<rf_analyzer>`, or :ref:`GBDTAnalyzer<gbdt_analyzer>`) based on the algorithm type.
 
 .. code-block:: python
 
-    from pyruleanalyzer import DTAnalyzer, RFAnalyzer, GBDTAnalyzer
+    from pyruleanalyzer import DTAnalyzer
 
     # For a Decision Tree classifier
-    analyzer = DTAnalyzer(classifier)
+    analyzer = DTAnalyzer(model)
+    
+    # Remove redundant rules by evaluating on a test set (can be a CSV path)
     analyzer.execute_rule_analysis(
         file_path="test.csv",
         remove_low_usage=-1,
-        save_final_model=True,
-        save_report=True
+        save_final_model=False,
+        save_report=False
     )
 
-Parameters:
+Interactive Reporting
+---------------------
 
-- ``file_path``: Path to the test dataset CSV file.
-- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
-- ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
-- ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
-
-This method will:
-
-- Evaluate the rules on the test dataset.
-- Iteratively remove duplicate rules until convergence.
-- Optionally prune infrequently used rules (with sibling promotion to maintain coverage).
-- Update the :ref:`RuleClassifier<rule_classifier>` instance with the refined rule set.
-
-Parameters:
-
-- ``file_path``: Path to the test dataset CSV file.
-- ``remove_low_usage``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
-- ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
-- ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
-
-This method will:
-
-- Evaluate the rules on the test dataset.
-- Iteratively remove duplicate rules until convergence.
-- Optionally prune infrequently used rules (with sibling promotion to maintain coverage).
-- Update the :ref:`RuleClassifier<rule_classifier>` instance with the refined rule set.
-
-You can also use the analyzer classes directly for finer control:
+If you are using Jupyter Notebooks, you can easily view a summary report of your model without needing to parse text files:
 
 .. code-block:: python
 
-    from pyruleanalyzer import DTAnalyzer, RFAnalyzer, GBDTAnalyzer
-
-    # For a Decision Tree classifier
-    analyzer = DTAnalyzer(classifier)
-    analyzer.execute_rule_analysis(
-        file_path="test.csv",
-        remove_below_n_classifications=1
-    )
+    report = model.summary_report()
+    
+    print(f"Total Active Rules: {report['total_rules']}")
+    print(f"Classes: {report['classes']}")
+    
+    # You can even load the rules into a DataFrame for visualization!
+    rules_df = pd.DataFrame(report['rules'])
+    print(rules_df.head())
 
 Make Predictions
 ----------------
 
-Single-sample prediction
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-Use the ``classify`` method to make predictions on individual samples. If your dataset didn't include a header row you must name your features as ``"v{column}"`` where ``column`` is the column index in the csv. If ``final`` is set to true the classifier will use the refined rule set to classify the sample.
+You can make predictions on individual samples or batches using the standard Scikit-Learn API:
 
 .. code-block:: python
 
-    sample = {"feature_1": 1, "feature_2": 23, "feature_4": 34, "feature_n": 654}
-    predicted_class, votes, probabilities = classifier.classify(sample, final=True)
+    # Batch prediction on a DataFrame or NumPy array
+    predictions = model.predict(X_test)
+    
+    # Or get class probabilities (for Random Forest / GBDT)
+    probabilities = model.predict_proba(X_test)
 
-Returns:
-
-- ``predicted_class``: The predicted class label.
-- ``votes``: A list of votes from individual rules or trees (for Random Forest and GBDT).
-- ``probabilities``: A list of class probabilities (for Random Forest; ``None`` for Decision Tree and GBDT).
-
-Batch prediction (vectorized)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For high-performance prediction on large datasets, use the ``predict_batch`` method. This uses compiled numpy arrays and optional C acceleration for significantly faster inference compared to per-sample classification.
-
-.. code-block:: python
-
-    import numpy as np
-
-    # X_test should be a numpy array of shape (n_samples, n_features)
-    X_test = df_test.iloc[:, :-1].values.astype(np.float32)
-    feature_names = list(df_test.columns[:-1])
-
-    # Predict class labels for all samples at once
-    predictions = classifier.predict_batch(X_test, feature_names=feature_names, use_final=True)
-
-You can also obtain class probabilities:
-
-.. code-block:: python
-
-    # Returns array of shape (n_samples, n_classes)
-    probabilities = classifier.predict_batch_proba(X_test, feature_names=feature_names)
-
-The ``predict_batch`` method handles all three algorithm types transparently:
-
-- **Decision Tree**: First-match rule traversal.
-- **Random Forest**: Soft voting with averaged per-tree probability distributions.
-- **GBDT**: Additive scoring with sigmoid (binary) or softmax (multiclass).
-
-Compare Metrics
----------------
-
-You can use the ``compare_initial_final_results`` method to generate useful metrics on both the original rule set and the final pruned one. This method logs accuracy, confusion matrices, divergent predictions, interpretability scores (SCS -- Structural Complexity Score), and other metrics.
-
-.. code-block:: python
-
-    classifier.compare_initial_final_results("test.csv")
+    # Single-sample prediction using a dictionary
+    sample = {"feature_1": 1.5, "feature_2": 2.3, "feature_3": 0.5}
+    predicted_class = model.predict(sample)
 
 Exporting the Classifier
 -------------------------
 
-The :ref:`RuleClassifier<rule_classifier>` supports three export formats for deploying the trained model outside of Python or for maximum inference speed:
+The :ref:`RuleClassifier<rule_classifier>` supports fluid export formats for deploying the trained model outside of Python or for maximum inference speed:
 
 Export to standalone Python
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -275,10 +157,7 @@ Generates a self-contained ``.py`` file with the decision logic as pure Python c
 
 .. code-block:: python
 
-    classifier.export_to_native_python(
-        feature_names=feature_names,
-        filename="my_classifier.py"
-    )
+    model.to_python("my_classifier.py")
 
 Export to binary
 ^^^^^^^^^^^^^^^^
@@ -288,11 +167,11 @@ Exports the compiled tree arrays to a compact binary file (PYRA format). This fo
 .. code-block:: python
 
     # Export
-    classifier.export_to_binary(filepath="model.bin")
+    model.to_binary("model.bin")
 
     # Load back
     loaded = RuleClassifier.load_binary("model.bin")
-    predictions = loaded.predict_batch(X_test, feature_names=feature_names)
+    predictions = loaded.predict(X_test)
 
 Export to C header
 ^^^^^^^^^^^^^^^^^^
@@ -301,10 +180,7 @@ Exports the classifier as a standalone C header file (``.h``), suitable for embe
 
 .. code-block:: python
 
-    classifier.export_to_c_header(
-        filepath="model.h",
-        guard_name="MY_MODEL_H"
-    )
+    model.to_c_header("model.h")
 
 The generated header includes all tree arrays as ``const`` data and a ``predict(const float *features)`` function.
 
@@ -319,27 +195,20 @@ The :ref:`RuleClassifier<rule_classifier>` can be serialized to a pickle file an
 
     # Save
     with open("classifier.pkl", "wb") as f:
-        pickle.dump(classifier, f)
+        pickle.dump(model, f)
 
     # Load
-    loaded = RuleClassifier.load("classifier.pkl")
+    with open("classifier.pkl", "rb") as f:
+        loaded_model = pickle.load(f)
 
 Editing
 -------
 
 You can also manually edit the final rules by calling the ``edit_rules()`` method in your classifier instance.
 
-The program will spawn an interactive menu that allows you to edit the rules.
-
-In the first screen you can select a rule for editing by typing its associated number or name. You may enter 'exit' to exit.
-
-After selecting a rule, you'll be presented with its conditions. You can use 'a' to add a new condition, 'r' to remove and 'c' to change the predicted class. By entering 's' you'll save the changes and return to the previous menu.
-
-New conditions are added as 'variable operator value', e.g.: "v5 > 10.5"
-
 .. code-block:: python
 
-    classifier.edit_rules()
+    model.edit_rules()
 
 During editing:
 
@@ -350,5 +219,3 @@ During editing:
     - :code:`c` -- change class
     - :code:`s` -- save changes
 - Type exit at the main prompt to finish editing.
-
-This is useful if you want to refine the automatically extracted rules with domain knowledge.
