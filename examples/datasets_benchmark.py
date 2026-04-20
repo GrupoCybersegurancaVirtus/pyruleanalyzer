@@ -4,6 +4,7 @@ import time
 import pickle
 import numpy as np
 import pandas as pd
+from datetime import datetime
 
 # Adiciona o diretório pai ao sys.path for importar pyruleanalyzer
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -56,7 +57,8 @@ MODELS_TO_TEST = [
     "Gradient Boosting Decision Trees"
 ]
 
-OUTPUT_FILE = "files/benchmark_results.txt"
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_FILE = f"files/benchmark_results_{current_time}.txt"
 
 # Method to ensure dir.
 def ensure_dir(file_path):
