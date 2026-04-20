@@ -2997,23 +2997,25 @@ class RuleClassifier(RuleExporterMixin):
     @staticmethod
     def calculate_structural_complexity(rules: List[Rule], n_features_total: int) -> Dict[str, Any]:
         """
-        Computes a normalized complexity score and other interpretability metrics for a rule set.
+        Computes the Structural Complexity Score (SCS) and other interpretability metrics for a rule set.
 
         This method calculates a comprehensive set of metrics, including:
-        - A novel 'Structural Complexity Score' based on depth balance and attribute usage.
+        - A novel 'Structural Complexity Score' based on depth and attribute usage.
         - Traditional metrics like rule counts and depth statistics.
 
-        The primary score combines two dimensions:
-        1.  Depth Balance (D_bal): Ratio of mean rule depth to max depth.
-            D_bal = mean_rule_depth / max_depth
-            (Values closer to 1 indicate a balanced tree structure).
+        The Structural Complexity Score (SCS) measures the overall cognitive load of the model
+        as an absolute volume index:
 
-        2.  Normalized Attribute Usage (A_norm): Measures feature diversity across rules.
-            A_norm = sum(unique_attributes_per_rule) / (total_rules * n_features_total)
-            (Higher values indicate the model leverages a wider range of features).
+        SCS = sum( d_i * (U_i / |F|) )
 
-        The final 'complexity_score' (D_bal * A_norm) rewards models that are
-        both structurally balanced and diverse in feature usage.
+        Where:
+        - d_i: depth of rule i
+        - U_i: number of unique features used in rule i
+        - |F|: total number of available features (n_features_total)
+
+        Unlike proportion-based metrics, this additive nature ensures that any rule refinement
+        or pruning results in an immediate and mathematically evident reduction in the score.
+        A score closer to zero indicates a highly concise and interpretable model.
 
         Args:
             rules (List[Rule]): A list of Rule objects to analyze.
@@ -3022,42 +3024,35 @@ class RuleClassifier(RuleExporterMixin):
         Returns:
             Dict[str, Any]: A dictionary containing detailed complexity metrics.
         """
-        if not rules:
+        if not rules or n_features_total <= 0:
             return {
                 "total_rules": 0,
-                "mean_rule_depth": 0.0,
+                "features_used": 0,
+                "total_features": n_features_total,
                 "max_depth": 0,
-                "depth_balance": 0.0,
-                "attribute_usage_norm": 0.0,
+                "mean_rule_depth": 0.0,
                 "complexity_score": 0.0,
             }
 
         total_rules = len(rules)
-        
-        # Accumulators for single-pass analysis
         rule_depths = []
         all_features_used = set()
-        sum_unique_attr_per_rule = 0
         
-        # Helper for Random Forest analysis: maps tree_name -> list of rule depths
-        tree_stats = defaultdict(list)
+        structural_complexity_score = 0.0
 
         for rule in rules:
-            # 1. Depth Calculation
+            # 1. Depth Calculation (d_i)
             depth = len(rule.conditions)
             rule_depths.append(depth)
 
-            # 2. Attribute Usage (using cached parsed_conditions)
+            # 2. Attribute Usage (U_i) using cached parsed_conditions
             # item format: (var, op, value)
             unique_features_in_rule = {item[0] for item in rule.parsed_conditions}
             all_features_used.update(unique_features_in_rule)
-            sum_unique_attr_per_rule += len(unique_features_in_rule)
+            u_i = len(unique_features_in_rule)
 
-            # 3. Random Forest Grouping (on-the-fly)
-            # Assumes naming convention "DTx_..."
-            if '_' in rule.name:
-                tree_id = rule.name.split('_')[0]
-                tree_stats[tree_id].append(depth)
+            # 3. Additive SCS Calculation
+            structural_complexity_score += depth * (u_i / n_features_total)
 
         # --- Metrics Calculation ---
         
@@ -3066,44 +3061,14 @@ class RuleClassifier(RuleExporterMixin):
         mean_rule_depth = sum(rule_depths) / total_rules if total_rules > 0 else 0.0
         n_features_used = len(all_features_used)
 
-        # 1. Depth Balance (D_bal)
-        depth_balance = (mean_rule_depth / max_depth) if max_depth > 0 else 0.0
-
-        # 2. Normalized Attribute Usage (A_norm)
-        denominator = total_rules * n_features_total
-        attribute_usage_norm = (sum_unique_attr_per_rule / denominator) if denominator > 0 else 0.0
-
-        # 3. Final Complexity Score
-        complexity_score = depth_balance * attribute_usage_norm
-
         result = {
             "total_rules": total_rules,
             "features_used": n_features_used,
             "total_features": n_features_total,
             "max_depth": max_depth,
             "mean_rule_depth": float(mean_rule_depth),
-            "depth_balance": float(depth_balance),
-            "attribute_usage_norm": float(attribute_usage_norm),
-            "complexity_score": float(complexity_score),
+            "complexity_score": float(structural_complexity_score),
         }
-
-        # --- Extra metrics for Random Forest ---
-        # Calculate only if multiple trees were detected
-        if len(tree_stats) > 1:
-            num_trees = len(tree_stats)
-            
-            # tree_stats values are lists of depths for each tree
-            avg_rules_per_tree = sum(len(depths) for depths in tree_stats.values()) / num_trees
-            avg_max_depth_per_tree = sum(max(depths) for depths in tree_stats.values()) / num_trees
-            
-            # Mean depth per tree, then average of those means
-            avg_mean_depth_per_tree = sum((sum(d) / len(d)) for d in tree_stats.values()) / num_trees
-
-            result.update({
-                "average_rules_per_tree": float(avg_rules_per_tree),
-                "average_max_depth_per_tree": float(avg_max_depth_per_tree),
-                "average_rule_depth_per_tree": float(avg_mean_depth_per_tree),
-            })
 
         return result
 
