@@ -19,6 +19,7 @@ class_names_2 = ['class_0', 'class_1']
 class_names_5 = [f'class_{i}' for i in range(5)]
 
 
+# Method to execute build clf dt rf functionality.
 def build_clf_dt_rf(model, feat_names_list, class_names_list, algorithm_type):
     """Build a RuleClassifier from a fitted DT or RF model."""
     rules = RuleClassifier.get_tree_rules(model, feat_names_list, class_names_list, algorithm_type=algorithm_type)
@@ -27,6 +28,7 @@ def build_clf_dt_rf(model, feat_names_list, class_names_list, algorithm_type):
     return clf
 
 
+# Method to execute build clf gbdt functionality.
 def build_clf_gbdt(model, feat_names_list, class_names_list):
     """Build a RuleClassifier from a fitted GBDT model."""
     rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
@@ -40,7 +42,20 @@ def build_clf_gbdt(model, feat_names_list, class_names_list):
     return clf
 
 
+# Method to execute run test functionality.
 def run_test(test_name, sk_pred, clf, X_test, feat_names_list):
+    """Execute run_test.
+
+    Args:
+        test_name: Description for test_name.
+        sk_pred: Description for sk_pred.
+        clf: Description for clf.
+        X_test: Description for X_test.
+        feat_names_list: Description for feat_names_list.
+
+    Returns:
+        Description of return value.
+    """
     global all_pass
     print('=' * 70)
     print(f'TEST: {test_name}')
@@ -61,7 +76,13 @@ def run_test(test_name, sk_pred, clf, X_test, feat_names_list):
         assert False, f"Mismatches found in {test_name}"
     print()
 
+# Method to execute test predict batch functionality.
 def test_predict_batch():
+    """Execute test_predict_batch.
+
+    Returns:
+        Description of return value.
+    """
     global all_pass
     all_pass = True
 

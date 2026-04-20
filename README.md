@@ -335,8 +335,8 @@ from pyruleanalyzer import PyRuleAnalyzer
 model = PyRuleAnalyzer.new_model(model='Random Forest')
 model.fit(X_train, y_train)
 
-# Safe to remove low-usage rules in ensemble models
-model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1)
+# Safe to remove low-usage rules in ensemble models, and merge inter-tree clones
+model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1, refine_between_trees=True)
 model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 

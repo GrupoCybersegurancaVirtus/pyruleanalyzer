@@ -1,6 +1,7 @@
 import numpy as np
 from .rule_classifier import Rule
 
+# Function to get rules.
 def get_rules(tree, feature_names, class_names):
     """
     Extracts human-readable decision rules from a scikit-learn DecisionTreeClassifier.
@@ -100,6 +101,7 @@ def get_rules(tree, feature_names, class_names):
     recurse(0, [], [])
     return rules
 
+# Function to get tree rules.
 def get_tree_rules(model, feature_names, class_names, algorithm_type='Random Forest'):
     """
     Extracts rules from a trained scikit-learn model (Decision Tree or Random Forest).
@@ -116,7 +118,7 @@ def get_tree_rules(model, feature_names, class_names, algorithm_type='Random For
     Returns:
         Union[List[Rule], List[List[Rule]]]: The extracted rules.
     """
-    # Remove debug print to clean up output
+    # removes debug print to clean up output
     # print("Feature names:", feature_names)
 
     rules = []
@@ -138,6 +140,7 @@ def get_tree_rules(model, feature_names, class_names, algorithm_type='Random For
     
     return rules
 
+# Function to get gbdt rules.
 def get_gbdt_rules(model, feature_names, class_names):
     """
     Extracts rules from a trained GradientBoostingClassifier into standard Rule objects.
@@ -184,7 +187,7 @@ def get_gbdt_rules(model, feature_names, class_names):
             init_preds = np.asarray(init.predict_proba(dummy_sample))
             if is_binary:
                 # Binary GBDT: sklearn uses log-odds (logit) of
-                # the positive class as the initial raw score.
+                # the positive class the the initial raw score.
                 p = float(init_preds[0, 1])
                 p = np.clip(p, 1e-15, 1 - 1e-15)
                 init_score = float(np.log(p / (1 - p)))
@@ -197,7 +200,7 @@ def get_gbdt_rules(model, feature_names, class_names):
 
         init_scores[class_label] = init_score
 
-        # Create init rule (no conditions, just a constant score)
+        # Create init rule (in the conditions, just the constant score)
         init_rule_name = f'GBDT{class_label}T0_Init_Class{class_label}'
         init_rule = Rule(
             init_rule_name, str(class_label), [],
@@ -213,7 +216,19 @@ def get_gbdt_rules(model, feature_names, class_names):
             tree_ = estimator.tree_
             tree_rules = []
 
+            # Function to recurse.
             def recurse(node_id, conditions_str, conditions_parsed):
+                """
+                Function to recurse.
+                
+                Args:
+                    node_id: Argument node_id.
+                    conditions_str: Argument conditions_str.
+                    conditions_parsed: Argument conditions_parsed.
+                    
+                Returns:
+                    Any: Result of the operation.
+                """
                 left = int(tree_.children_left[node_id])
                 right = int(tree_.children_right[node_id])
 

@@ -109,6 +109,7 @@ After fitting the model, you can analyze and refine the extracted rules using th
     model.execute_rule_refinement(
         X=X_test, y=y_test,
         remove_below_n_classifications=-1,
+        refine_between_trees=False,
         save_final_model=False,
         save_report=False
     )

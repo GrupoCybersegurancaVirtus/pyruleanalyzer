@@ -7,7 +7,7 @@ classifier lifecycle: create, refine, predict, and export.
 Example:
     from pyruleanalyzer import PyRuleAnalyzer
     
-    # Create and refine a classifier in one step
+    # Create and refine the classifier in one step
     analyzer = PyRuleAnalyzer.create(
         train_path="data/train.csv",
         test_path="data/test.csv",
@@ -56,6 +56,7 @@ class PyRuleAnalyzer:
         >>> analyzer.export("my_model")
     """
     
+    # Method to init.
     def __init__(self, classifier: RuleClassifier, feature_names: List[str], class_names: List[str]):
         """
         Initialize a PyRuleAnalyzer with an existing RuleClassifier.
@@ -73,6 +74,7 @@ class PyRuleAnalyzer:
     # FACTORY METHODS
     # ==========================================================================
     
+    # Method to create.
     @staticmethod
     def create(
         train_path: str,
@@ -145,6 +147,7 @@ class PyRuleAnalyzer:
         
         return analyzer
     
+    # Method to new model.
     @staticmethod
     def new_model(
         model: str = "Decision Tree",
@@ -178,6 +181,7 @@ class PyRuleAnalyzer:
         
         return PyRuleAnalyzer(classifier, [], [])
         
+    # Method to fit.
     def fit(self, X, y) -> "PyRuleAnalyzer":
         """
         Fit the model according to the given training data.
@@ -198,7 +202,7 @@ class PyRuleAnalyzer:
         params = getattr(self.classifier, 'model_parameters', self._get_default_params(self.classifier.algorithm_type))
         algorithm_type = self.classifier.algorithm_type
         
-        # Train a new Scikit-Learn model
+        # Train the new Scikit-Learn model
         if algorithm_type == 'Random Forest':
             model = RandomForestClassifier(**params)
         elif algorithm_type == 'Decision Tree':
@@ -243,6 +247,7 @@ class PyRuleAnalyzer:
         
         return self
     
+    # Method to load.
     @staticmethod
     def load(path: str) -> "PyRuleAnalyzer":
         """
@@ -262,6 +267,7 @@ class PyRuleAnalyzer:
         class_names = classifier.class_labels
         return PyRuleAnalyzer(classifier, feature_names, class_names)
     
+    # Method to get default params.
     @staticmethod
     def _get_default_params(model: str) -> Dict:
         """Return sensible default parameters for each model type."""
@@ -276,6 +282,7 @@ class PyRuleAnalyzer:
     # REFINEMENT
     # ==========================================================================
     
+    # Method to execute rule refinement.
     def execute_rule_refinement(
         self,
         test_path: str = None,
@@ -360,6 +367,7 @@ class PyRuleAnalyzer:
             "reduction_percent": ((rules_before - rules_after) / rules_before * 100) if rules_before > 0 else 0
         }
     
+    # Method to compare initial final results.
     def compare_initial_final_results(self, test_path: str = None, X = None, y = None) -> None:
         """
         Compare the initial and final (refined) models on the test dataset.
@@ -379,6 +387,7 @@ class PyRuleAnalyzer:
     # PREDICTION
     # ==========================================================================
     
+    # Method to predict.
     def predict(
         self,
         X,
@@ -421,6 +430,7 @@ class PyRuleAnalyzer:
             use_final=use_refined
         )
     
+    # Method to predict proba.
     def predict_proba(
         self,
         X,
@@ -453,6 +463,7 @@ class PyRuleAnalyzer:
     # EXPORT
     # ==========================================================================
     
+    # Method to export.
     def export(
         self,
         base_name: str = "model",
@@ -503,6 +514,7 @@ class PyRuleAnalyzer:
     # SAVE/LOAD
     # ==========================================================================
     
+    # Method to save.
     def save(self, path: str) -> None:
         """
         Save the PyRuleAnalyzer to a file.
@@ -520,6 +532,7 @@ class PyRuleAnalyzer:
     # INSPECTION
     # ==========================================================================
     
+    # Method to summary.
     def summary(self) -> Dict[str, Any]:
         """
         Get a summary of the classifier.
@@ -544,6 +557,7 @@ class PyRuleAnalyzer:
             "class_names": self.class_names
         }
 
+    # Method to summary report.
     def summary_report(self):
         """Generate a summary report dictionary for interactive use."""
         rules = self.classifier.final_rules if self.classifier.final_rules else self.classifier.initial_rules
@@ -562,18 +576,22 @@ class PyRuleAnalyzer:
             "rules": rules_list
         }
 
+    # Method to to python.
     def to_python(self, file_path: str, **kwargs):
         """Proxy to RuleClassifier.to_python()"""
         return self.classifier.to_python(file_path, **kwargs)
 
+    # Method to to c header.
     def to_c_header(self, file_path: str, **kwargs):
         """Proxy to RuleClassifier.to_c_header()"""
         return self.classifier.to_c_header(file_path, **kwargs)
 
+    # Method to to binary.
     def to_binary(self, file_path: str, **kwargs):
         """Proxy to RuleClassifier.to_binary()"""
         return self.classifier.to_binary(file_path, **kwargs)
 
+    # Method to load binary.
     @classmethod
     def load_binary(cls, file_path: str):
         """Proxy to RuleClassifier.load_binary() wrapped in PyRuleAnalyzer"""
@@ -582,11 +600,22 @@ class PyRuleAnalyzer:
         class_names = classifier.class_labels
         return cls(classifier, feature_names, class_names)
 
+    # Method to edit rules.
     def edit_rules(self):
         """Proxy to RuleClassifier.edit_rules()"""
         return self.classifier.edit_rules()
     
+    # Method to repr.
     def __repr__(self) -> str:
+        """
+        Method to repr.
+        
+        Args:
+            None
+            
+        Returns:
+            Any: Result of the operation.
+        """
         summary = self.summary()
         return (f"PyRuleAnalyzer(model={summary['model_type']}, "
                 f"features={summary['n_features']}, "

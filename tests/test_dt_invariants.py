@@ -31,6 +31,7 @@ from pyruleanalyzer import PyRuleAnalyzer
 # HELPERS
 # ============================================================================
 
+# Method to execute generate dataset functionality.
 def generate_dataset(name, n_train=1000, n_test=300, n_features=5, n_classes=2,
                      random_state=42, noise=0.0, categorical=False):
     """Generate a synthetic dataset and save to temporary CSV files.
@@ -104,6 +105,7 @@ def generate_dataset(name, n_train=1000, n_test=300, n_features=5, n_classes=2,
     return train_path, test_path, tmpdir
 
 
+# Method to execute sklearn predict functionality.
 def sklearn_predict(train_path, test_path, model_params):
     """Train sklearn DT and return predictions on test set.
 
@@ -123,6 +125,7 @@ def sklearn_predict(train_path, test_path, model_params):
     return y_pred, y_test, model, feature_names, X_test
 
 
+# Method to execute rule classify all functionality.
 def rule_classify_all(classifier, X_test, feature_names, rules):
     """Classify all test samples using RuleClassifier.classify_dt.
 
@@ -147,6 +150,7 @@ def rule_classify_all(classifier, X_test, feature_names, rules):
     return np.array(preds)
 
 
+# Method to execute native classify all functionality.
 def native_classify_all(classifier, X_test, feature_names):
     """Classify all test samples using native compiled function.
 
@@ -310,6 +314,7 @@ TEST_CONFIGS = [
 # MAIN TEST RUNNER
 # ============================================================================
 
+# Method to execute run test config functionality.
 def run_test_config(name, dataset_kwargs, model_params, verbose=True):
     """Run all invariant tests for a single configuration.
 
@@ -568,6 +573,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
     return results
 
 
+# Method to execute print results functionality.
 def print_results(results):
     """Print formatted test results."""
     status = 'PASS' if results['passed'] else 'FAIL'
@@ -638,8 +644,19 @@ def print_results(results):
 
 import pytest
 
+# Method to execute test dt invariants functionality.
 @pytest.mark.parametrize("name, dataset_kwargs, model_params", TEST_CONFIGS)
 def test_dt_invariants(name, dataset_kwargs, model_params):
+    """Execute test_dt_invariants.
+
+    Args:
+        name: Description for name.
+        dataset_kwargs: Description for dataset_kwargs.
+        model_params: Description for model_params.
+
+    Returns:
+        Description of return value.
+    """
     result = run_test_config(name, dataset_kwargs, model_params)
     if not result['passed']:
         pytest.fail("\n".join(result['failures']))

@@ -41,7 +41,13 @@ class DTAnalyzer:
         redundancy_counts: Dict mapping redundancy type to count.
     """
 
+    # Method to   init  .
     def __init__(self, classifier: RuleClassifier) -> None:
+        """Initializes the DTAnalyzer.
+
+        Args:
+            classifier: The RuleClassifier instance.
+        """
         if classifier.algorithm_type != 'Decision Tree':
             raise ValueError(
                 f"DTAnalyzer requires a Decision Tree classifier, "
@@ -57,8 +63,13 @@ class DTAnalyzer:
     # Redundancy summary
     # ------------------------------------------------------------------
 
+    # Method to print redundancy summary.
     def print_redundancy_summary(self) -> None:
-        """Prints the redundancy breakdown and rule reduction summary."""
+        """Prints the redundancy breakdown and rule reduction summary.
+
+        Returns:
+            None
+        """
         clf = self.classifier
         initial_count = len(clf.initial_rules)
         final_count = len(clf.final_rules) if clf.final_rules else initial_count
@@ -77,6 +88,7 @@ class DTAnalyzer:
     # Main analysis pipeline
     # ------------------------------------------------------------------
 
+    # Method to execute rule refinement.
     def execute_rule_refinement(
         self,
         file_path: str = None,
@@ -88,22 +100,16 @@ class DTAnalyzer:
     ) -> None:
         """Evaluates DT rules on a dataset, detects redundancies, and refines.
 
-        This method:
-        1. Classifies every sample to gather per-rule usage stats.
-        2. Optionally removes low-usage rules (with sibling promotion).
-        3. Tracks redundancy counts by type.
-        4. Writes a report and saves the final model.
-
         Args:
             file_path: Path to the CSV test file.
             X: Dataframe or array for test data.
             y: True labels.
-            remove_below_n_classifications: Threshold for low-usage refinement
-                (-1 disables).
-            save_final_model: Whether to save the final model to 'final_model.pkl'.
-                Default is True.
-            save_report: Whether to save the analysis report to 'output_classifier_dt.txt'.
-                Default is True.
+            remove_below_n_classifications: Threshold for low-usage refinement (-1 disables).
+            save_final_model: Whether to save the final model.
+            save_report: Whether to save the analysis report.
+
+        Returns:
+            None
         """
         clf = self.classifier
         data_name = os.path.basename(file_path) if file_path else "DataFrames/Arrays"
@@ -248,15 +254,15 @@ class DTAnalyzer:
     # Track intra-tree redundancies from adjust_and_remove_rules
     # ------------------------------------------------------------------
 
+    # Method to track intra tree from duplicates.
     def track_intra_tree_from_duplicates(self, duplicated_rules_pairs: list) -> None:
         """Updates the intra_tree counter from duplicate-pair detection.
 
-        Called by :meth:`RuleClassifier.execute_rule_refinement` after the
-        duplicate-removal loop finishes for DT.
-
         Args:
-            duplicated_rules_pairs: List of (rule1, rule2) tuples found by
-                ``find_duplicated_rules``.
+            duplicated_rules_pairs: List of (rule1, rule2) tuples.
+
+        Returns:
+            None
         """
         self.redundancy_counts["intra_tree"] += len(duplicated_rules_pairs)
 
@@ -264,18 +270,18 @@ class DTAnalyzer:
     # Initial vs Final comparison
     # ------------------------------------------------------------------
 
+    # Method to compare initial final results.
     def compare_initial_final_results(self, file_path: str = None, X = None, y = None) -> None:
         """Compares performance of initial vs final rules for a Decision Tree.
-
-        Evaluates both rule sets on the test data, displays metrics, logs
-        divergent cases, and writes a detailed report.
 
         Args:
             file_path: Path to the CSV test file.
             X: Dataframe or array for test data.
             y: True labels.
-        """
 
+        Returns:
+            None
+        """
         # Load data
         X_test, y_test, feature_names = RuleClassifier._prepare_test_data(file_path, X, y, self.classifier)
         target_column_name = "Class"
@@ -284,8 +290,17 @@ class DTAnalyzer:
 
         self._compare_dt(df_test, target_column_name)
 
+    # Method to  compare dt.
     def _compare_dt(self, df_test: pd.DataFrame, target_column_name: str) -> None:
-        """Internal DT comparison logic."""
+        """Internal DT comparison logic.
+
+        Args:
+            df_test: DataFrame containing test data.
+            target_column_name: Name of the target column.
+
+        Returns:
+            None
+        """
         clf = self.classifier
 
         print("\n" + "*" * 80)
@@ -308,7 +323,12 @@ class DTAnalyzer:
             try:
                 with open('files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(X_test_np)
+                
+                # As models are now always trained with DataFrames (with column names),
+                # predict() must receive a DataFrame to avoid UserWarnings/Errors.
+                X_test_predict = pd.DataFrame(X_test_np, columns=feature_names_list)
+                
+                y_pred_sk = sk_model.predict(X_test_predict)
                 correct_sk = np.sum(y_pred_sk == y_true)
                 RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
             except Exception as e:

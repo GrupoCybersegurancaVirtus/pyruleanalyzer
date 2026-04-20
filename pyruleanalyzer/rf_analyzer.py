@@ -43,7 +43,13 @@ class RFAnalyzer:
         redundancy_counts: Dict mapping redundancy type to count.
     """
 
+    # Method to initialize the RFAnalyzer with a RuleClassifier.
     def __init__(self, classifier: RuleClassifier) -> None:
+        """Initializes the RFAnalyzer.
+
+        Args:
+            classifier: The underlying RuleClassifier instance.
+        """
         if classifier.algorithm_type != 'Random Forest':
             raise ValueError(
                 f"RFAnalyzer requires a Random Forest classifier, "
@@ -60,6 +66,7 @@ class RFAnalyzer:
     # Redundancy summary
     # ------------------------------------------------------------------
 
+    # Method to print the redundancy breakdown and rule reduction summary.
     def print_redundancy_summary(self) -> None:
         """Prints the redundancy breakdown and rule reduction summary."""
         clf = self.classifier
@@ -80,6 +87,7 @@ class RFAnalyzer:
     # Track redundancies from adjust_and_remove_rules
     # ------------------------------------------------------------------
 
+    # Method to update redundancy counters after an adjust_and_remove cycle.
     def track_from_adjust_and_remove(
         self,
         method: str,
@@ -108,12 +116,14 @@ class RFAnalyzer:
     # Main analysis pipeline
     # ------------------------------------------------------------------
 
+    # Method to evaluate RF rules on a dataset, detect redundancies, and refine.
     def execute_rule_refinement(
         self,
         file_path: str = None,
         X=None,
         y=None,
         remove_below_n_classifications: int = -1,
+        refine_between_trees: bool = False,
         save_final_model: bool = True,
         save_report: bool = True,
     ) -> None:
@@ -122,8 +132,9 @@ class RFAnalyzer:
         This method:
         1. Classifies every sample to gather per-rule usage stats.
         2. Optionally removes low-usage rules (with sibling promotion).
-        3. Tracks redundancy counts by type (intra_tree, inter_tree, low_usage).
-        4. Writes a report and saves the final model.
+        3. Optionally detects and merges semantically identical rules across trees.
+        4. Tracks redundancy counts by type (intra_tree, inter_tree, low_usage).
+        5. Writes a report and saves the final model.
 
         Args:
             file_path: Path to the CSV test file.
@@ -131,6 +142,8 @@ class RFAnalyzer:
             y: True labels.
             remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
+            refine_between_trees: If True, merges semantically identical rules
+                across different trees (hard reduction).
             save_final_model: Whether to save the final model to 'final_model.pkl'.
                 Default is True.
             save_report: Whether to save the analysis report to 'output_classifier_rf.txt'.
@@ -318,6 +331,34 @@ class RFAnalyzer:
 
             clf.update_native_model(clf.final_rules)
 
+        # Detect and merge semantically identical rules across trees
+        if refine_between_trees:
+            print("\nAnalyzing duplicated rules between trees...")
+            similar_rule_groups = clf.find_duplicated_rules_between_trees()
+            inter_tree_count = len(similar_rule_groups)
+            self.redundancy_counts["inter_tree"] = inter_tree_count
+            
+            if similar_rule_groups:
+                print(f"Found {inter_tree_count} groups of semantically duplicated rules (inter-tree).")
+                rules_to_remove_ids = set()
+                new_generalized_rules = []
+                for group in similar_rule_groups:
+                    for rule in group:
+                        rules_to_remove_ids.add(id(rule))
+                    representative = group[0]
+                    new_name = "_&_".join(sorted([r.name for r in group]))
+                    new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
+                        new_name, representative.class_, representative.conditions,
+                        class_distribution=representative.class_distribution
+                    )
+                    if hasattr(representative, 'parsed_conditions') and representative.parsed_conditions:
+                        new_rule.parsed_conditions = representative.parsed_conditions
+                    new_generalized_rules.append(new_rule)
+                
+                clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
+                print(f"Rules after merging inter-tree duplicates: {len(clf.final_rules)}")
+                clf.update_native_model(clf.final_rules)
+
         # Generate Report
         if save_report:
             clf._write_report(
@@ -337,6 +378,7 @@ class RFAnalyzer:
     # Initial vs Final comparison
     # ------------------------------------------------------------------
 
+    # Method to compare performance of initial vs final rules for a Random Forest.
     def compare_initial_final_results(self, file_path: str = None, X = None, y = None) -> None:
         """Compares performance of initial vs final rules for a Random Forest.
 
@@ -355,8 +397,14 @@ class RFAnalyzer:
 
         self._compare_rf(df_test, target_column_name)
 
+    # Method to execute internal RF comparison logic.
     def _compare_rf(self, df_test: pd.DataFrame, target_column_name: str) -> None:
-        """Internal RF comparison logic."""
+        """Internal RF comparison logic.
+
+        Args:
+            df_test: DataFrame containing the test data.
+            target_column_name: The name of the target column.
+        """
         clf = self.classifier
 
         print("\n" + "*" * 80)
@@ -379,11 +427,17 @@ class RFAnalyzer:
             try:
                 with open('files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(X_test_np)
+                
+                # Since the models are now always trained with DataFrames (with column names),
+                # predict() must receive a DataFrame to avoid UserWarnings/Errors.
+                X_test_predict = pd.DataFrame(X_test_np, columns=feature_names_list)
+                
+                y_pred_sk = sk_model.predict(X_test_predict)
                 correct_sk = np.sum(y_pred_sk == y_true)
                 RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
-            except Exception:
-                f.write("Could not load/evaluate sklearn model.\n")
+            except Exception as e:
+                msg = f"Could not load/evaluate sklearn model: {e}\n"
+                f.write(msg)
 
             # 2. Compare Rules — Vectorized batch prediction
             print("\nComparing Initial vs Final Rules...")

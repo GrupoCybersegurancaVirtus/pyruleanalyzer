@@ -32,6 +32,7 @@ except ImportError:
 
 # --- NumPy fallback implementations ---
 
+# Function to numpy traverse tree batch.
 def _numpy_traverse_tree_batch(
     X: np.ndarray,
     feature_idx: np.ndarray,
@@ -67,6 +68,7 @@ def _numpy_traverse_tree_batch(
     return node_ids
 
 
+# Function to numpy traverse tree batch multi.
 def _numpy_traverse_tree_batch_multi(
     X: np.ndarray,
     trees: list,
@@ -96,6 +98,7 @@ def _numpy_traverse_tree_batch_multi(
 
 # --- Public API: auto-select best backend ---
 
+# Function to traverse tree batch.
 def traverse_tree_batch(
     X: np.ndarray,
     feature_idx: np.ndarray,
@@ -137,6 +140,7 @@ def traverse_tree_batch(
         )
 
 
+# Function to traverse tree batch multi.
 def traverse_tree_batch_multi(
     X: np.ndarray,
     trees: list,

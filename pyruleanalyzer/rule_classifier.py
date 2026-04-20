@@ -44,6 +44,7 @@ class Rule:
         'leaf_value', 'learning_rate', 'contribution', 'class_group',
     ]
 
+    # Method to execute __init__
     def __init__(self, name, class_, conditions, leaf_value=None,
                  learning_rate=None, class_group=None, class_distribution=None):
         """
@@ -78,7 +79,13 @@ class Rule:
         else:
             self.contribution = None
 
+    # Method to execute __repr__
     def __repr__(self):
+        """
+        __repr__ method.
+        Returns:
+            Description of return value.
+        """
         return f"Rule(name={self.name}, class={self.class_}, conditions={self.conditions})"
 
 # Class to handle the rule classification process
@@ -86,6 +93,7 @@ from .exporters import RuleExporterMixin
 class RuleClassifier(RuleExporterMixin):
     # Represents a rule-based classifier built from decision paths in tree models.
     
+    # Method to execute __init__
     def __init__(self, rules, algorithm_type='Decision Tree'):
         """
         Represents a rule-based classifier built from decision paths in tree models.
@@ -319,6 +327,14 @@ class RuleClassifier(RuleExporterMixin):
 
         # Build code
         def build_code(node_id, indent):
+            """
+            build_code method for RuleClassifier.
+            Args:
+                node_id: Description of node_id.
+                indent: Description of indent.
+            Returns:
+                Description of return value.
+            """
             node = tree_dict[node_id]
             tab = "    " * indent
             
@@ -409,7 +425,17 @@ class RuleClassifier(RuleExporterMixin):
                             curr = tree_dict[curr]['r']
                     tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
 
+                # Method to _build_code.
                 def _build_code(node_id, indent, td=tree_dict):
+                    """
+                    _build_code method for RuleClassifier.
+                    Args:
+                        node_id: Description of node_id.
+                        indent: Description of indent.
+                        td: Description of td.
+                    Returns:
+                        Description of return value.
+                    """
                     node = td[node_id]
                     tab = '    ' * indent
                     if node['f'] == -2:
@@ -537,7 +563,16 @@ class RuleClassifier(RuleExporterMixin):
                             clean_class = rule.class_
                         tree_dict[curr]['v'] = clean_class
 
+                # Method to build_rf_code.
                 def build_rf_code(node_id, indent):
+                    """
+                    build_rf_code method for RuleClassifier.
+                    Args:
+                        node_id: Description of node_id.
+                        indent: Description of indent.
+                    Returns:
+                        Description of return value.
+                    """
                     node = tree_dict[node_id]
                     tab = "    " * indent
                     if node['f'] == -2:
@@ -621,7 +656,16 @@ class RuleClassifier(RuleExporterMixin):
                     clean_class = rule.class_
                 tree_dict[curr]['v'] = clean_class
 
+            # Method to build_dt_code.
             def build_dt_code(node_id, indent):
+                """
+                build_dt_code method for RuleClassifier.
+                Args:
+                    node_id: Description of node_id.
+                    indent: Description of indent.
+                Returns:
+                    Description of return value.
+                """
                 node = tree_dict[node_id]
                 tab = "    " * indent
                 if node['f'] == -2: 
@@ -1031,6 +1075,7 @@ class RuleClassifier(RuleExporterMixin):
     #       GBDT: float64 contribution (learning_rate * leaf_value)
     # =========================================================================
 
+    # Method to execute _build_single_tree_arrays
     @staticmethod
     def _build_single_tree_arrays(
         rules: list,
@@ -1178,6 +1223,7 @@ class RuleClassifier(RuleExporterMixin):
             'max_depth': max_depth,
         }
 
+    # Method to execute compile_tree_arrays
     def compile_tree_arrays(self, rules: Optional[list] = None, feature_names: Optional[list] = None) -> None:
         """
         Compile rules into numpy tree arrays for vectorized prediction.
@@ -1276,6 +1322,7 @@ class RuleClassifier(RuleExporterMixin):
 
         self._arrays_compiled = True
 
+    # Method to execute _traverse_tree_batch
     @staticmethod
     def _traverse_tree_batch(
         X: np.ndarray,
@@ -1330,6 +1377,7 @@ class RuleClassifier(RuleExporterMixin):
 
         return node_ids
 
+    # Method to execute predict_batch
     def predict_batch(
         self,
         X: np.ndarray,
@@ -1490,6 +1538,7 @@ class RuleClassifier(RuleExporterMixin):
 
         raise ValueError(f'Unsupported algorithm_type: {self.algorithm_type}')
 
+    # Method to execute predict_batch_proba
     def predict_batch_proba(
         self,
         X: np.ndarray,
@@ -1613,6 +1662,7 @@ class RuleClassifier(RuleExporterMixin):
     # BINARY / C HEADER EXPORT
     # =========================================================================
 
+    # Method to execute export_to_binary
     def export_to_binary(self, filepath: str = 'model.bin') -> None:
         """
         Export the compiled tree arrays to a compact binary file.
@@ -1733,6 +1783,7 @@ class RuleClassifier(RuleExporterMixin):
         print(f'[EXPORT] Binary model saved to {filepath} '
               f'({os.path.getsize(filepath)} bytes)')
 
+    # Method to execute load_binary
     @classmethod
     def load_binary(cls, filepath: str) -> 'RuleClassifier':
         """
@@ -1853,6 +1904,7 @@ class RuleClassifier(RuleExporterMixin):
 
         return obj
 
+    # Method to execute export_to_c_header
     def export_to_c_header(
         self,
         filepath: str = 'model.h',
@@ -2433,6 +2485,7 @@ class RuleClassifier(RuleExporterMixin):
         """
         complement = {'<=': '>', '>': '<=', '<': '>=', '>=': '<'}
 
+        # Method to _make_key.
         def _make_key(r):
             """Build index key from a rule: (prefix, var, op, threshold_rounded)."""
             if not r.parsed_conditions:
@@ -2616,7 +2669,17 @@ class RuleClassifier(RuleExporterMixin):
                                 curr = tree_dict[curr]['r']
                         tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
 
+                    # Method to _build_export_code.
                     def _build_export_code(node_id, indent, td=tree_dict):
+                        """
+                        _build_export_code method for RuleClassifier.
+                        Args:
+                            node_id: Description of node_id.
+                            indent: Description of indent.
+                            td: Description of td.
+                        Returns:
+                            Description of return value.
+                        """
                         node = td[node_id]
                         tab = '    ' * indent
                         if node['f'] == -2:
@@ -2725,6 +2788,14 @@ class RuleClassifier(RuleExporterMixin):
 
                     # Build code string for this tree
                     def build_rf_code(node_id, indent):
+                        """
+                        build_rf_code method for RuleClassifier.
+                        Args:
+                            node_id: Description of node_id.
+                            indent: Description of indent.
+                        Returns:
+                            Description of return value.
+                        """
                         node = tree_dict[node_id]
                         tab = "    " * indent
                         if node['f'] == -2:
@@ -2804,7 +2875,16 @@ class RuleClassifier(RuleExporterMixin):
                         clean_class = rule.class_
                     tree_dict[curr]['v'] = clean_class
 
+                # Method to build_dt_code.
                 def build_dt_code(node_id, indent):
+                    """
+                    build_dt_code method for RuleClassifier.
+                    Args:
+                        node_id: Description of node_id.
+                        indent: Description of indent.
+                    Returns:
+                        Description of return value.
+                    """
                     node = tree_dict[node_id]
                     tab = "    " * indent
                     if node['f'] == -2:
@@ -3412,6 +3492,7 @@ class RuleClassifier(RuleExporterMixin):
             
         raise ValueError("Must provide either 'file_path' or both 'X' and 'y'.")
 
+    # Method to execute process_data
     @staticmethod
     def process_data(train_path, test_path, is_test_only=False):
         """
@@ -3432,6 +3513,13 @@ class RuleClassifier(RuleExporterMixin):
         
         # Helper function to consolidate loading logic
         def load_csv_robust(path):
+            """
+            load_csv_robust method for RuleClassifier.
+            Args:
+                path: Description of path.
+            Returns:
+                Description of return value.
+            """
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File not found: {path}")
             
@@ -3739,7 +3827,17 @@ class RuleClassifier(RuleExporterMixin):
                 tree_ = estimator.tree_
                 tree_rules = []
 
+                # Method to recurse.
                 def recurse(node_id, conditions_str, conditions_parsed):
+                    """
+                    recurse method for RuleClassifier.
+                    Args:
+                        node_id: Description of node_id.
+                        conditions_str: Description of conditions_str.
+                        conditions_parsed: Description of conditions_parsed.
+                    Returns:
+                        Description of return value.
+                    """
                     left = int(tree_.children_left[node_id])
                     right = int(tree_.children_right[node_id])
 
@@ -3818,6 +3916,7 @@ class RuleClassifier(RuleExporterMixin):
 
         return classifier
     
+    # Method to execute create
     @staticmethod
     def create(train, test, model="Decision Tree", parameters=None, algorithm_type=None):
         """
@@ -3854,6 +3953,7 @@ class RuleClassifier(RuleExporterMixin):
             save_sklearn_model=False
         )
     
+    # Method to execute export
     def export(self, base_name="model", formats=None, feature_names=None):
         """
         Exports the classifier to one or more file formats.

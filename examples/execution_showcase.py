@@ -11,7 +11,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from pyruleanalyzer import PyRuleAnalyzer
 
 
+# Method to execute main functionality.
 def main():
+    """Execute main.
+
+    Returns:
+        Description of return value.
+    """
     print("="*80)
     print("PYRULEANALYZER COMPREHENSIVE SHOWCASE")
     print("="*80)
@@ -114,7 +120,7 @@ def main():
     # =========================================================================
     # 6. COMPARING METRICS
     # =========================================================================
-    print("\n[6] Comparing Initial vs Final (Refined) Metrics...")
+    print("\n[6] Comparing Initial vs final (Refined) Metrics...")
     # This prints out a full comparison including confusion matrices and complexity scores
     model.compare_initial_final_results(X=X_test, y=y_test)
 

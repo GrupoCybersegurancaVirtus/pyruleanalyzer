@@ -43,7 +43,13 @@ class GBDTAnalyzer:
         redundancy_counts: Dict mapping redundancy type to count.
     """
 
+    # Method to initialize the GBDTAnalyzer.
     def __init__(self, classifier: RuleClassifier) -> None:
+        """Initializes the GBDTAnalyzer.
+
+        Args:
+            classifier: The RuleClassifier instance to analyze.
+        """
         if classifier.algorithm_type != 'Gradient Boosting Decision Trees':
             raise ValueError(
                 f"GBDTAnalyzer requires a Gradient Boosting Decision Trees classifier, "
@@ -60,6 +66,7 @@ class GBDTAnalyzer:
     # Redundancy summary
     # ------------------------------------------------------------------
 
+    # Method to print the redundancy summary.
     def print_redundancy_summary(self) -> None:
         """Prints the redundancy breakdown and rule reduction summary."""
         clf = self.classifier
@@ -80,6 +87,7 @@ class GBDTAnalyzer:
     # Track redundancies from adjust_and_remove_rules
     # ------------------------------------------------------------------
 
+    # Method to update redundancy counters after rule removal.
     def track_from_adjust_and_remove(
         self,
         method: str,
@@ -101,12 +109,14 @@ class GBDTAnalyzer:
     # Main analysis pipeline
     # ------------------------------------------------------------------
 
+    # Method to evaluate rules, detect redundancies, and refine the model.
     def execute_rule_refinement(
         self,
         file_path: str = None,
         X=None,
         y=None,
         remove_below_n_classifications: int = -1,
+        refine_between_trees: bool = False,
         save_final_model: bool = True,
         save_report: bool = True,
     ) -> None:
@@ -197,7 +207,7 @@ class GBDTAnalyzer:
         y_pred_arr = np.array(y_pred)
         correct = np.sum(y_pred_arr == y_test)
 
-        # 5. Detect and remove intra-tree duplicated rules (soft mode)
+        # Detect and remove intra-tree duplicated rules (soft mode)
         # This is equivalent to the old remove_duplicates="soft" behavior
         duplicated_pairs = clf.find_duplicated_rules(type='soft')
         intra_tree_count = len(duplicated_pairs)
@@ -213,6 +223,8 @@ class GBDTAnalyzer:
                 rules_to_remove_ids.add(id(rule2))
                 common_conditions = rule1.conditions[:-1]
                 new_rule_name = f"{rule1.name}_&_{rule2.name}"
+                
+                # For GBDT it is important to pass the correct metadata
                 new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
                     new_rule_name, rule1.class_, common_conditions,
                     leaf_value=getattr(rule1, 'leaf_value', 0.0),
@@ -227,7 +239,7 @@ class GBDTAnalyzer:
             print(f'Rules after removing duplicates: {len(clf.final_rules)}')
             clf.update_native_model(clf.final_rules)
 
-        # 7. Low-usage refinement with sibling promotion
+        # Low-usage refinement with sibling promotion
         if remove_below_n_classifications > -1:
             print(f'\nRefining rules with <= {remove_below_n_classifications} classifications...')
             clf.specific_rules = []
@@ -249,7 +261,41 @@ class GBDTAnalyzer:
 
             clf.update_native_model(clf.final_rules)
 
-        # 8. Generate Report
+        # Detect and merge semantically identical rules across trees
+        if refine_between_trees:
+            print("\nAnalyzing duplicated rules between trees...")
+            similar_rule_groups = clf.find_duplicated_rules_between_trees()
+            inter_tree_count = len(similar_rule_groups)
+            self.redundancy_counts["inter_tree"] = inter_tree_count
+            
+            if similar_rule_groups:
+                print(f"Found {inter_tree_count} groups of semantically duplicated rules (inter-tree).")
+                rules_to_remove_ids = set()
+                new_generalized_rules = []
+                for group in similar_rule_groups:
+                    for rule in group:
+                        rules_to_remove_ids.add(id(rule))
+                    representative = group[0]
+                    new_name = "_&_".join(sorted([r.name for r in group]))
+                    
+                    # For GBDT, we sum the leaf values
+                    merged_leaf_value = sum(getattr(r, 'leaf_value', 0.0) for r in group)
+                    
+                    new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
+                        new_name, representative.class_, representative.conditions,
+                        leaf_value=merged_leaf_value,
+                        learning_rate=getattr(representative, 'learning_rate', 0.1),
+                        class_group=getattr(representative, 'class_group', 0)
+                    )
+                    if hasattr(representative, 'parsed_conditions') and representative.parsed_conditions:
+                        new_rule.parsed_conditions = representative.parsed_conditions
+                    new_generalized_rules.append(new_rule)
+                
+                clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
+                print(f"Rules after merging inter-tree duplicates: {len(clf.final_rules)}")
+                clf.update_native_model(clf.final_rules)
+
+        # Generate Report
         if save_report:
             clf._write_report(
                 'files/output_classifier_gbdt.txt',
@@ -268,6 +314,7 @@ class GBDTAnalyzer:
     # Initial vs Final comparison
     # ------------------------------------------------------------------
 
+    # Method to compare initial and final rules performance.
     def compare_initial_final_results(self, file_path: str = None, X = None, y = None) -> None:
         """Compares performance of initial vs final rules for GBDT.
 
@@ -286,8 +333,14 @@ class GBDTAnalyzer:
 
         self._compare_gbdt(df_test, target_column_name)
 
+    # Method to perform the internal GBDT comparison logic.
     def _compare_gbdt(self, df_test: pd.DataFrame, target_column_name: str) -> None:
-        """Internal GBDT comparison logic."""
+        """Internal GBDT comparison logic.
+
+        Args:
+            df_test: DataFrame containing the test data.
+            target_column_name: The name of the target column.
+        """
         clf = self.classifier
 
         print('\n' + '*' * 80)
@@ -310,7 +363,12 @@ class GBDTAnalyzer:
             try:
                 with open('files/sklearn_model.pkl', 'rb') as mf:
                     sk_model = pickle.load(mf)
-                y_pred_sk = sk_model.predict(X_test_np)
+                
+                # Since models are now always trained with DataFrames (with column names),
+                # predict() must receive a DataFrame to avoid UserWarnings/Errors.
+                X_test_predict = pd.DataFrame(X_test_np, columns=feature_names_list)
+                
+                y_pred_sk = sk_model.predict(X_test_predict)
                 correct_sk = np.sum(y_pred_sk == y_true)
                 RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
             except Exception as e:

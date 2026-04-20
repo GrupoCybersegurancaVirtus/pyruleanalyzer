@@ -83,6 +83,7 @@ With the :class:`PyRuleAnalyzer<pyruleanalyzer.PyRuleAnalyzer>` instance in hand
     classifier.execute_rule_refinement(
         X=X_test, y=y_test,
         remove_below_n_classifications=-1,
+        refine_between_trees=False,
         save_final_model=True,
         save_report=True
     )
@@ -92,6 +93,7 @@ Parameters:
 - ``X``: Dataframe/Array for testing data.
 - ``y``: True labels.
 - ``remove_below_n_classifications``: Remove rules used less than or equal to this number of times during classification. Use ``-1`` to disable this feature.
+- ``refine_between_trees``: Fuses overlapping rules from different trees. Set to ``True`` for higher compression.
 - ``save_final_model``: Whether to save the final refined model to ``files/final_model.pkl``.
 - ``save_report``: Whether to save the analysis report to ``files/output_classifier_<type>.txt``.
 

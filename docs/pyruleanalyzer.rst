@@ -77,7 +77,7 @@ analyzer = PyRuleAnalyzer.create(
     model="Gradient Boosting Decision Trees",
     params={"n_estimators": 100, "learning_rate": 0.1},
     refine=True,
-    refine_params={"remove_low_usage": 5}
+    refine_params={"remove_below_n_classifications": 5}
 )
 ```
 
@@ -90,7 +90,7 @@ Refine the classifier by removing low-usage rules.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `test_path` | str | Path to CSV file for evaluating rule usage |
-| `remove_low_usage` | int | Minimum usage threshold for rules. Use -1 to disable (default: -1) |
+| `remove_below_n_classifications` | int | Minimum usage threshold for rules. Use -1 to disable (default: -1) |
 | `save_final_model` | bool | Save refined model to files/final_model.pkl (default: False) |
 | `save_report` | bool | Save refinement report (default: False) |
 
@@ -101,7 +101,7 @@ Refine the classifier by removing low-usage rules.
 ```python
 stats = analyzer.refine(
     test_path="data/test.csv",
-    remove_low_usage=5
+    remove_below_n_classifications=5
 )
 
 print(f"Removed {stats['rules_removed']} rules ({stats['reduction_percent']:.1f}%)")
@@ -268,7 +268,7 @@ analyzer = PyRuleAnalyzer.create(
     params={"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1},
     refine=True,
     refine_params={
-        "remove_low_usage": 5             # Remove rules used < 5 times
+        "remove_below_n_classifications": 5             # Remove rules used <= 5 times
     }
 )
 
@@ -321,7 +321,8 @@ classifier = RuleClassifier.new_classifier(
 # analyzer = DTAnalyzer(classifier) -> we now just call it from classifier
 classifier.execute_rule_refinement(
     file_path="data/test.csv",
-    remove_low_usage=-1,
+    remove_below_n_classifications=-1,
+    refine_between_trees=False,
     save_final_model=True,
     save_report=True
 )
@@ -431,7 +432,7 @@ model.execute_rule_refinement(X=X_test, y=y_test)
 
 ### Issue: "Refinement removes too many rules"
 
-**Solution:** Increase `remove_low_usage` threshold or set to -1 to disable.
+**Solution:** Increase `remove_below_n_classifications` threshold or set to -1 to disable.
 
 ## Advanced Usage
 
@@ -457,7 +458,7 @@ classifier.find_duplicated_rules(...)
 analyzer = PyRuleAnalyzer.create(..., refine=False)
 
 # Refine with different parameters
-stats = analyzer.refine(test_path, remove_low_usage=5)
+stats = analyzer.refine(test_path, remove_below_n_classifications=5)
 
 # Compare results
 print(f"Rules reduced by {stats['reduction_percent']:.1f}%")
