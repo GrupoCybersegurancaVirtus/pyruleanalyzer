@@ -2516,25 +2516,9 @@ class RuleClassifier(RuleExporterMixin):
         removed_ids: set = set()
 
         total = len(sorted_to_remove)
-        bar_len = 40
         start_time = time.time()
 
         for idx, rule in enumerate(sorted_to_remove):
-            # -- Progress bar --
-            if total > 0 and (idx % max(1, total // 200) == 0 or idx == total - 1):
-                percent = (idx + 1) / total
-                elapsed = time.time() - start_time
-                if percent > 0 and elapsed > 0.5:
-                    eta = elapsed / percent * (1 - percent)
-                    mins, secs = divmod(int(eta), 60)
-                    rem_str = f'{mins:02d}:{secs:02d}'
-                else:
-                    rem_str = '--:--'
-                filled = int(bar_len * percent)
-                bar = '=' * filled + '-' * (bar_len - filled)
-                sys.stdout.write(f'\r  Promoting siblings [{bar}] {percent:.1%} | ETA: {rem_str}')
-                sys.stdout.flush()
-
             if id(rule) in removed_ids:
                 continue
 
@@ -2601,9 +2585,6 @@ class RuleClassifier(RuleExporterMixin):
 
             # Mark removed (deferred filtering at the end)
             removed_ids.add(id(rule))
-
-        if total > 0:
-            print()  # Newline after progress bar
 
         # Single-pass filtering instead of per-iteration list rebuild
         working_rules = [r for r in working_rules if id(r) not in removed_ids]
