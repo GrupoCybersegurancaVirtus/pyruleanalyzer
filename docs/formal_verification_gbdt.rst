@@ -86,14 +86,14 @@ Each substitution transition :math:`{t_{stage}}^{(k)}` is refined into a DT leaf
 The stage counter :math:`\kappa \in P_{stage}` enforces sequential firing. For each stage :math:`k`:
 
 * **Guard on** :math:`{t_{stage}}^{(k)}`: :math:`[\kappa = k]` — the substitution transition is only enabled at the correct stage.
-* After the DT sub-module fires (exactly one rule matches, producing :math:`\eta \cdot {v_k}^{(c)}`), the channel module's arc expressions update:
+* After the DT sub-module fires (exactly one rule matches, generating a new token representing :math:`\eta \cdot {v_k}^{(c)}`), the channel module's arc expressions update:
 
   - :math:`P_{accum} \leftarrow s + \eta \cdot {v_k}^{(c)}` (accumulated score).
   - :math:`P_{stage} \leftarrow \kappa + 1` (advance counter).
 
 **Finalize transition** :math:`t_{finalize}`:
 
-Guarded by :math:`[\kappa = K{+}1]`, this regular transition consumes the final accumulated score from :math:`P_{accum}` and deposits it in the output port :math:`P_{result}`.
+Guarded by :math:`[\kappa = K{+}1]`, this regular transition removes the final accumulated score from :math:`P_{accum}` and generates a new token for it in the output port :math:`P_{result}`.
 
 .. note::
 
@@ -102,7 +102,7 @@ Guarded by :math:`[\kappa = K{+}1]`, this regular transition consumes the final 
 Activation Transition :math:`t_{act}`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-After all :math:`|C|` channel modules complete (each depositing a terminal score in :math:`{P_{score}}^{(c)}`), the activation transition :math:`t_{act}` in the top-level module :math:`s_{GBDT}` fires. It is a **synchronization transition** with :math:`|C|` input arcs — one from each :math:`{P_{score}}^{(c)}` — collecting the terminal scores :math:`{s_K}^{(1)}, {s_K}^{(2)}, \dots, {s_K}^{(|C|)}` in a single atomic step. The activation is a two-step process:
+After all :math:`|C|` channel modules complete (each generating a new token for a terminal score in :math:`{P_{score}}^{(c)}`), the activation transition :math:`t_{act}` in the top-level module :math:`s_{GBDT}` fires. It is a **synchronization transition** with :math:`|C|` input arcs — one from each :math:`{P_{score}}^{(c)}` — collecting the terminal scores :math:`{s_K}^{(1)}, {s_K}^{(2)}, \dots, {s_K}^{(|C|)}` in a single atomic step. The activation is a two-step process:
 
 1. **Probability computation:**
 
@@ -139,7 +139,7 @@ The input place :math:`P_{in}` is fused across the top module, all channel sub-m
 
 where :math:`K` is the number of boosting stages, :math:`\eta` is the learning rate, and :math:`{v_k}^{(c)}` is the leaf value of the matched rule in tree :math:`k` for class :math:`c`.
 
-The figure below depicts the additive composition for a single class channel. The place :math:`P_{initial\_score}` holds the bias token :math:`s_0`. Inside the additive boosting cycle, each gradient step transition :math:`T_{tree\_k}` adds :math:`\eta \cdot v_k` to the accumulator. After the final iteration, the activation transition :math:`T_{activation}` (sigmoid or softmax) converts the raw score into a class probability and deposits the result in :math:`P_{final\_prediction}`. For multiclass problems, :math:`|C|` such channels operate in parallel, and the activation transition collects all channel scores before producing the final label.
+The figure below depicts the additive composition for a single class channel. The place :math:`P_{initial\_score}` holds the bias token :math:`s_0`. Inside the additive boosting cycle, each gradient step transition :math:`T_{tree\_k}` adds :math:`\eta \cdot v_k` to the accumulator. After the final iteration, the activation transition :math:`T_{activation}` (sigmoid or softmax) converts the raw score into a class probability and generates a new token for the result in :math:`P_{final\_prediction}`. For multiclass problems, :math:`|C|` such channels operate in parallel, and the activation transition collects all channel scores before generating a new token representing the final label.
 
 .. figure:: _static/images/gbdt_to_cpn.png
    :align: center
@@ -209,7 +209,7 @@ Two boosting stages, each with a small decision tree:
 
 *Finalize* (:math:`\kappa = 3 = K{+}1`):
 
-* :math:`t_{finalize}` fires, deposits :math:`s_2 = 0.5555` in :math:`P_{result}`.
+* :math:`t_{finalize}` fires, generates a new token for :math:`s_2 = 0.5555` in :math:`P_{result}`.
 
 *Activation:*
 
@@ -273,7 +273,7 @@ After stages 1 and 2, the state is identical: :math:`P_{accum} = 0.5555`, :math:
 
 *Finalize* (:math:`\kappa = 4 = K{+}1`):
 
-* :math:`t_{finalize}` fires, deposits :math:`s_3 = 0.6755` in :math:`P_{result}`.
+* :math:`t_{finalize}` fires, generates a new token for :math:`s_3 = 0.6755` in :math:`P_{result}`.
 
 *Activation:*
 
@@ -304,6 +304,6 @@ The stage counter ensures that stages 1 through :math:`K` execute identically to
 
    {s_{K+1}}^{(c)} = {s_K}^{(c)} + \eta \cdot {v_{K+1}}^{(c)}
 
-The finalize transition then deposits the updated score. The DT invariant guarantees exactly one rule fires per stage, the stage counter guarantees sequential order, and the additive formula generalises directly.
+The finalize transition then generates a new token for the updated score. The DT invariant guarantees exactly one rule fires per stage, the stage counter guarantees sequential order, and the additive formula generalises directly.
 
 **Conclusion:** By induction on :math:`K`, the GBDT HCPN construction correctly accumulates scores for any number of boosting stages. Each additional stage adds one substitution transition and one additive contribution, without affecting the existing stages or their determinism guarantees.

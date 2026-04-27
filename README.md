@@ -25,13 +25,13 @@
   - [Decision Tree](#decision-tree)
   - [Random Forest](#random-forest)
   - [Gradient Boosting (GBDT)](#gradient-boosting-gbdt)
-  - [Batch Prediction](#batch-prediction)
-  - [Probability Prediction](#probability-prediction)
-  - [Binary Export & Loading](#binary-export--loading)
-  - [C Header Export (Embedded/Arduino)](#c-header-export-embeddedaruino)
-  - [Interactive Rule Editing](#interactive-rule-editing)
-  - [Export Standalone Classifier](#export-standalone-classifier)
-  - [Custom Rule Removal](#custom-rule-removal)
+- [Batch Prediction & Probabilities](#batch-prediction--probabilities)
+- [Binary Export & Loading](#binary-export--loading)
+- [Full Arduino/ESP32 Sketch Export](#full-arduinoesp32-sketch-export)
+- [Modeling for Arduino / ESP32](#modeling-for-arduino--esp32)
+- [Interactive Rule Editing](#interactive-rule-editing)
+- [Export Standalone Classifier](#export-standalone-classifier)
+- [Custom Rule Removal](#custom-rule-removal)
 - [API Reference](#api-reference)
   - [RuleClassifier](#ruleclassifier)
   - [Rule](#rule)
@@ -354,7 +354,7 @@ model.compare_initial_final_results(X=X_test, y=y_test)
 
 ### Batch Prediction & Probabilities
 
-Batch predictions run automatically using our vectorized high-performance C extension (if available) or NumPy when you call `predict()` or `predict_proba()` with multiple samples (DataFrames or 2D Arrays):
+Batch predictions run automatically using our vectorized high-performance C extension (if available) or NumPy when you call `predict()` or `predict_proba()` with multiple samples (DataFrames or 2D arrays):
 
 ```python
 # Predict all samples at once
@@ -409,6 +409,98 @@ The generated `.h` file contains:
 float sample[] = {5.1, 3.5, 1.4, 0.2};
 int predicted_class = predict(sample);
 ```
+
+### Full Arduino/ESP32 Sketch Export
+
+For a **complete ready-to-upload sketch** (with `setup()`, `loop()`, sensor placeholders and Serial output), use the `full_pipeline` with `generate_arduino_sketch=True`:
+
+```python
+from pyruleanalyzer import full_pipeline
+
+results = full_pipeline(
+    train_csv='train.csv',
+    target_feature='Target',
+    model_type='Decision Tree',
+    max_depth=10,
+    generate_arduino_sketch=True,  # ← generates .ino file
+    board_model='uno',              # or 'auto' for auto-detect
+    serial_baud=115200,
+)
+
+# Generated files:
+print(results['generated_files']['arduino'])   # path to model.ino
+print(results['memory_check'])                  # flash/ram compatibility check
+```
+
+The generated `.ino` sketch is **fully self-contained**:
+- Tree data as inline C arrays (no external files needed)
+- `pyra_traverse_tree()` + `pyra_predict()` in C for fast inference
+- `setup()` prints model metadata to Serial
+- `loop()` reads features, runs prediction, outputs JSON via Serial
+- `read_features()` with TODO placeholders for your sensors
+
+```cpp
+// Generated sketch (model.ino):
+#define SERIAL_BAUD 115200
+float features[4];
+
+void read_features(void) {
+    features[0] = 0.0; // TODO: read sensor 1
+    features[1] = 0.0; // TODO: read sensor 2
+    // ... edit with real sensor readings
+}
+
+void loop(void) {
+    read_features();
+    int32_t result = pyra_predict((const double*)features);
+    Serial.print(F("{\"class\":"));
+    Serial.print(result);
+    Serial.println("}");
+    delay(1000);
+}
+```
+
+**Board compatibility:**
+
+| Board | Flash | SRAM | Suitable for |
+|-------|-------|------|--------------|
+| Uno / Nano | ~140 KB | 2 KB | Simple models (~<5K nodes) |
+| Mega | ~1 MB | 8 KB | Medium models |
+| ESP32 | ~4 MB | 512 KB | Complex models (RF, GBDT) |
+
+The pipeline auto-estimates memory usage and checks compatibility before generating. If the model is too large for the target board, it warns with "OVER!".
+
+**Demo script:**
+
+```bash
+# Train on Iris + generate Uno sketch automatically:
+python examples/arduino_example.py --dataset iris
+
+# Try Wine dataset (larger model):
+python examples/arduino_example.py --dataset wine --board mega
+
+# Force ESP32 target for a larger Random Forest:
+python examples/arduino_example.py \
+    --dataset wine \
+    --model "Random Forest" \
+    --n-estimators 50 \
+    --board esp32
+```
+
+For full details, see [docs/tutorials/arduino.rst](docs/tutorials/arduino.rst).
+
+### Modeling for Arduino / ESP32
+
+For in-depth guidance on training and optimizing models specifically for Arduino/ESP32 deployment — including depth strategies, memory validation, feature selection, and board-specific recommendations — see the dedicated modeling guide:
+
+**[docs/tutorials/modeling_for_arduino.rst](docs/tutorials/modeling_for_arduino.rst)**
+
+This guide covers:
+- Depth vs. accuracy trade-offs per board type
+- Memory estimation formulas (Flash + SRAM)
+- Feature selection strategies for embedded systems
+- GBDT optimization for microcontrollers
+- Optimization checklist and troubleshooting
 
 ### Interactive Rule Editing
 

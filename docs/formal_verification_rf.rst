@@ -49,7 +49,7 @@ Colour compatibility is ensured: the DT module's output port produces :math:`\te
 
 .. note::
 
-   In the RF context, the DT module's output arc expression is adapted: instead of depositing a discrete label, it yields the normalised class distribution :math:`\mathbf{p}_k \in [0,1]^{|C|}` at the matched leaf. The port colour is therefore :math:`\text{PROB}` rather than :math:`\text{LABEL}`.
+   In the RF context, the DT module's output arc expression is adapted: instead of generating a new token for a discrete label, it yields the normalised class distribution :math:`\mathbf{p}_k \in [0,1]^{|C|}` at the matched leaf. The port colour is therefore :math:`\text{PROB}` rather than :math:`\text{LABEL}`.
 
 **Fusion set** :math:`FS_{RF}`:
 
@@ -61,7 +61,7 @@ The input place :math:`P_{in}` is a **fusion place** shared across the top modul
 
 **Soft Voting (transition** :math:`t_{vote}` **):**
 
-The aggregation transition :math:`t_{vote}` consumes all :math:`N` probability tokens from :math:`P_{collect}` (enabled only when :math:`|P_{collect}| \geq N`). Its output arc expression computes:
+The aggregation transition :math:`t_{vote}` removes all :math:`N` probability tokens from :math:`P_{collect}` (enabled only when :math:`|P_{collect}| \geq N`). Its output arc expression computes:
 
 .. math::
 
@@ -69,7 +69,7 @@ The aggregation transition :math:`t_{vote}` consumes all :math:`N` probability t
 
 This matches the default behaviour of scikit-learn's ``RandomForestClassifier``, which uses soft voting via ``predict_proba`` averaging.
 
-The following figure shows the parallel composition. Each sub-page :math:`Tree_k` is an independent CPN module whose output probability vector is collected in :math:`P_{collector}`. The aggregation transition :math:`T_{voter}` computes the averaged probabilities and deposits the winning class in :math:`P_{final\_class}`.
+The following figure shows the parallel composition. Each sub-page :math:`Tree_k` is an independent CPN module whose output probability vector is collected in :math:`P_{collector}`. The aggregation transition :math:`T_{voter}` computes the averaged probabilities and generates a new token for the winning class in :math:`P_{final\_class}`.
 
 .. figure:: _static/images/rf_to_cpn.png
    :align: center
@@ -92,7 +92,7 @@ The following example demonstrates that the HCPN construction preserves correct 
 
 **Base case** :math:`(N = 2)`:
 
-Two decision trees, each producing a probability vector at its matched leaf:
+Two decision trees, each generating a new token representing a probability vector at its matched leaf:
 
 .. list-table::
    :header-rows: 1
@@ -111,8 +111,8 @@ Two decision trees, each producing a probability vector at its matched leaf:
 **HCPN state trace:**
 
 1. :math:`P_{in}` holds token :math:`x = (3.0, 7.0)`. Fusion set shares it with both DT sub-modules.
-2. :math:`t_{tree_1}` fires (substitution transition refines to :math:`s_{DT}^{(1)}`): one rule matches, deposits :math:`(0.8, 0.2)` in :math:`P_{collect}`.
-3. :math:`t_{tree_2}` fires (substitution transition refines to :math:`s_{DT}^{(2)}`): one rule matches, deposits :math:`(0.6, 0.4)` in :math:`P_{collect}`.
+2. :math:`t_{tree_1}` fires (substitution transition refines to :math:`s_{DT}^{(1)}`): one rule matches, generates a new token for :math:`(0.8, 0.2)` in :math:`P_{collect}`.
+3. :math:`t_{tree_2}` fires (substitution transition refines to :math:`s_{DT}^{(2)}`): one rule matches, generates a new token for :math:`(0.6, 0.4)` in :math:`P_{collect}`.
 4. :math:`P_{collect}` now contains 2 tokens. :math:`t_{vote}` is enabled (requires :math:`N = 2` tokens):
 
 .. math::

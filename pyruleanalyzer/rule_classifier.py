@@ -88,6 +88,52 @@ class Rule:
         """
         return f"Rule(name={self.name}, class={self.class_}, conditions={self.conditions})"
 
+# Helper function for memory estimation (used by export_to_arduino_ino)
+def _compute_memory_for_rule_classifier(rf_model) -> dict:
+    """Compute memory estimates for a RuleClassifier instance.
+
+    Args:
+        rf_model: A RuleClassifier with compiled tree arrays.
+
+    Returns:
+        Dict with flash and RAM byte estimates.
+    """
+    avr_max_flash = 143360   # Arduino Uno: ~140KB available
+    avr_max_sram = 2048      # Arduino Uno: 2KB SRAM
+    esp32_max_flash = 4 * 1024 * 1024  # ESP32: 4MB Flash
+    esp32_max_sram = 524288              # ESP32: 512KB SRAM
+
+    estimated_flash_bytes = 0
+    total_ram_bytes = 0
+
+    if not hasattr(rf_model, '_tree_arrays') or not rf_model._tree_arrays:
+        return {
+            'estimated_flash_bytes': 0,
+            'total_ram_bytes': 0,
+            'avr_max_flash': avr_max_flash,
+            'avr_max_sram': avr_max_sram,
+            'esp32_max_flash': esp32_max_flash,
+            'esp32_max_sram': esp32_max_sram,
+        }
+
+    for tree in rf_model._tree_arrays:
+        if 'init_score' in tree:
+            continue  # GBDT init entry — no tree structure
+        n_nodes = len(tree['feature_idx'])
+        estimated_flash_bytes += n_nodes * 36 + 512  # ~36 bytes per node + header
+
+    total_ram_bytes = estimated_flash_bytes * 0.1  # ~10% overhead
+
+    return {
+        'estimated_flash_bytes': estimated_flash_bytes,
+        'total_ram_bytes': total_ram_bytes,
+        'avr_max_flash': avr_max_flash,
+        'avr_max_sram': avr_max_sram,
+        'esp32_max_flash': esp32_max_flash,
+        'esp32_max_sram': esp32_max_sram,
+    }
+
+
 # Class to handle the rule classification process
 from .exporters import RuleExporterMixin
 class RuleClassifier(RuleExporterMixin):
@@ -1968,8 +2014,28 @@ class RuleClassifier(RuleExporterMixin):
             vals = ', '.join(str(v) for v in tree['feature_idx'])
             a(f'static const int32_t tree{t_idx}_feature[{n_nodes}] = {{{vals}}};')
 
-            # threshold
-            vals = ', '.join(f'{v:.17g}' for v in tree['threshold'])
+            # threshold — convert special float values to C-compatible literals
+            def _format_c_float(v):
+                """Format a float value as a C-compatible literal.
+
+                Special values (inf, -inf, nan) are mapped to standard C99
+                macros or safe finite substitutes that behave identically in
+                tree traversal comparisons:
+                  * +inf  → "1e500"       (larger than any realistic feature)
+                  * -inf  → "-1e500"      (smaller than any realistic feature)
+                  * nan   → "-1e500"      (fallback; treated as -inf)
+
+                Using finite substitutes avoids linker errors on targets that
+                do not support <math.h> INFINITY / NAN macros.
+                """
+                import math
+                if math.isinf(v):
+                    return "1e500" if v > 0 else "-1e500"
+                if math.isnan(v):
+                    return "-1e500"  # safe finite fallback
+                return f'{v:.17g}'
+
+            vals = ', '.join(_format_c_float(v) for v in tree['threshold'])
             a(f'static const double tree{t_idx}_threshold[{n_nodes}] = {{{vals}}};')
 
             # children_left
@@ -2100,6 +2166,407 @@ class RuleClassifier(RuleExporterMixin):
 
         print(f'[EXPORT] C header saved to {filepath} '
               f'({os.path.getsize(filepath)} bytes)')
+
+    # Method to export Arduino .ino sketch
+    def export_to_arduino_ino(
+        self,
+        filepath: str = 'model.ino',
+        board_model: str = 'auto',
+        serial_baud: int = 115200,
+        include_sensor_placeholders: bool = True,
+        include_memory_check: bool = True,
+        max_flash_percent: float = 90.0,
+        max_ram_percent: float = 85.0,
+    ) -> dict:
+        """
+        Export the compiled model to a complete Arduino/ESP32 .ino sketch file.
+
+        The generated sketch is self-contained and ready for upload via
+        Arduino IDE or PlatformIO. It includes:
+          - The C header with tree data (inline as #define constants)
+          - The predict() function inline in the sketch
+          - A setup() that prints model metadata
+          - A loop() that reads features, runs prediction, and outputs results
+
+        Parameters
+        ----------
+        filepath : str
+            Output .ino file path. Default is 'model.ino'.
+        board_model : str
+            Target board to determine memory limits and architecture hints.
+            Options: 'auto', 'uno', 'nano', 'mega', 'esp32', 'leonardo'.
+            Default is 'auto' (detects from model size).
+        serial_baud : int
+            Serial baud rate for output. Default is 115200.
+        include_sensor_placeholders : bool
+            If True, includes a read_features() function with TODO placeholders
+            that the user should replace with real sensor readings.
+            Default is True.
+        include_memory_check : bool
+            If True, includes compile-time checks for Flash/RAM limits in
+            comments at the top of the file. Also prints memory report to stdout.
+            Default is True.
+        max_flash_percent : float
+            Maximum percentage of Flash memory to allow (for compatibility check).
+            Default is 90.0.
+        max_ram_percent : float
+            Maximum percentage of SRAM to allow (for compatibility check).
+            Default is 85.0.
+
+        Returns
+        -------
+        dict
+            Dictionary with keys:
+              - 'ino_path': Path to the generated .ino file
+              - 'memory_check': Dict with memory estimation results
+              - 'metadata': Model metadata embedded in the sketch
+        """
+        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
+            raise RuntimeError(
+                'Tree arrays not compiled. Call compile_tree_arrays() first.'
+            )
+
+        # Memory limits per board type (Flash bytes, SRAM bytes)
+        BOARD_MEMORY = {
+            'uno':      (143360, 2048),     # Arduino Uno: ~140KB flash, 2KB SRAM
+            'nano':     (143360, 2048),     # Arduino Nano: same as Uno
+            'mega':     (1048576, 8192),    # Arduino Mega: 1MB flash, 8KB SRAM
+            'leonardo': (32768, 2560),      # Leonardo: ~32KB for sketch, 2.5KB SRAM
+            'esp32':    (4194304, 524288),  # ESP32: 4MB flash, 512KB SRAM
+        }
+
+        # Estimate Flash and RAM usage
+        estimates = _compute_memory_for_rule_classifier(self)
+        est_flash = estimates['estimated_flash_bytes']
+        est_ram = estimates['total_ram_bytes']
+
+        # Determine target board
+        if board_model == 'auto':
+            # Auto-detect: pick the smallest board that fits
+            if est_flash <= 143360 and est_ram <= 2048:
+                board_model = 'uno'
+            elif est_flash <= 1048576 and est_ram <= 8192:
+                board_model = 'mega'
+            else:
+                board_model = 'esp32'
+
+        max_flash, max_sram = BOARD_MEMORY.get(board_model, (143360, 2048))
+        
+        flash_pct = (est_flash / max_flash) * 100 if max_flash > 0 else 0
+        ram_pct = (est_ram / max_sram) * 100 if max_sram > 0 else 0
+        
+        fits_flash = est_flash <= (max_flash * max_flash_percent / 100.0)
+        fits_ram = est_ram <= (max_sram * max_ram_percent / 100.0)
+
+        # Default class
+        try:
+            default_cls = int(str(self.default_class).replace('Class', '').strip())
+        except (ValueError, AttributeError):
+            default_cls = 0
+
+        # Build the sketch content
+        lines = []
+        a = lines.append
+
+        # Header comment block with metadata and memory check
+        a('// ============================================================')
+        a(f'// Auto-generated Arduino/ESP32 Sketch by pyruleanalyzer')
+        a(f'// Model: {self.algorithm_type}')
+        a(f'// Features: {len(self._array_feature_names)} | Classes: {self.num_classes} | Trees: {len(self._tree_arrays)}')
+        a(f'// Target Board: {board_model.upper()}')
+        a('// ============================================================')
+        a('')
+
+        if include_memory_check:
+            flash_status = 'OK' if fits_flash else 'OVER!'
+            ram_status = 'OK' if fits_ram else 'OVER!'
+            a('// --- Memory Check (Target: ' + board_model.upper() + ') ---')
+            a(f'// Flash: {est_flash:,} / {max_flash:,} bytes ({flash_pct:.1f}%) [{flash_status}]')
+            a(f'// SRAM:  {est_ram:,} / {max_sram:,} bytes ({ram_pct:.1f}%) [{ram_status}]')
+            if not fits_flash or not fits_ram:
+                a('// WARNING: Model may NOT fit on this board! Reduce tree depth or number of trees.')
+            a('')
+
+        # Include the inline C header content
+        a('// ============================================================')
+        a(f'// MODEL DATA ({len(self._tree_arrays)} trees, {len(self._array_feature_names)} features)')
+        a('// ============================================================')
+        
+        # Generate inline header (same logic as export_to_c_header but without #ifndef guards)
+        default_cls_inline = default_cls
+        
+        a(f'#define N_FEATURES {len(self._array_feature_names)}')
+        a(f'#define N_CLASSES  {self.num_classes}')
+        a(f'#define N_TREES    {len(self._tree_arrays)}')
+        a(f'#define DEFAULT_CLASS {default_cls_inline}')
+        a('')
+
+        # Feature name comments
+        a('// Feature order:')
+        for i, name in enumerate(self._array_feature_names):
+            a(f'  [{i}] {name}')
+        a('')
+
+        # Per-tree arrays (same format as C header)
+        for t_idx, tree in enumerate(self._tree_arrays):
+            if 'init_score' in tree:
+                continue  # GBDT init handled separately
+
+            n_nodes = len(tree['feature_idx'])
+            tree_depth = tree.get('max_depth', 50)
+            a(f'// Tree {t_idx}: {n_nodes} nodes, depth {tree_depth}')
+            a(f'#define TREE{t_idx}_DEPTH {tree_depth}')
+
+            # feature_idx
+            vals = ', '.join(str(v) for v in tree['feature_idx'])
+            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}] = {{{vals}}};')
+
+            # threshold with C-compatible float formatting
+            def _format_c_float_inline(v):
+                import math
+                if math.isinf(v):
+                    return "1e500" if v > 0 else "-1e500"
+                if math.isnan(v):
+                    return "-1e500"
+                return f'{v:.17g}'
+
+            vals = ', '.join(_format_c_float_inline(v) for v in tree['threshold'])
+            a(f'static const double tree{t_idx}_threshold[{n_nodes}] = {{{vals}}};')
+
+            # children_left
+            vals = ', '.join(str(v) for v in tree['children_left'])
+            a(f'static const int32_t tree{t_idx}_left[{n_nodes}] = {{{vals}}};')
+
+            # children_right
+            vals = ', '.join(str(v) for v in tree['children_right'])
+            a(f'static const int32_t tree{t_idx}_right[{n_nodes}] = {{{vals}}};')
+
+            # value
+            if self.algorithm_type == 'Decision Tree':
+                vals = ', '.join(str(v) for v in tree['value'])
+                a(f'static const int32_t tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+            elif self.algorithm_type == 'Random Forest':
+                flat = tree['value'].flatten()
+                vals = ', '.join(f'{v:.17g}' for v in flat)
+                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}] = {{{vals}}};')
+            elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+                vals = ', '.join(f'{v:.17g}' for v in tree['value'])
+                a(f'static const double tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+
+            a('')
+
+        # Inline traverse_tree function
+        a('// ============================================================')
+        a('// PREDICTION ENGINE (C inline — no library needed)')
+        a('// ============================================================')
+        a('')
+        a('static inline int32_t pyra_traverse_tree(')
+        a('    const double *features,')
+        a('    const int32_t *feat_idx,')
+        a('    const double *thresh,')
+        a('    const int32_t *left,')
+        a('    const int32_t *right,')
+        a('    int max_depth')
+        a(') {')
+        a('    int32_t node = 0;')
+        a('    int d;')
+        a('    for (d = 0; d < max_depth; d++) {')
+        a('        if (left[node] == node) break;')
+        a('        if (features[feat_idx[node]] <= thresh[node])')
+        a('            node = left[node];')
+        a('        else')
+        a('            node = right[node];')
+        a('    }')
+        a('    return node;')
+        a('}')
+        a('')
+
+        # Main predict function based on algorithm type
+        if self.algorithm_type == 'Decision Tree':
+            a('static inline int32_t pyra_predict(const double *features) {')
+            a('    int32_t leaf = pyra_traverse_tree(features, tree0_feature, tree0_threshold, tree0_left, tree0_right, TREE0_DEPTH);')
+            a('    return tree0_value[leaf];')
+            a('}')
+        elif self.algorithm_type == 'Random Forest':
+            a('#include <math.h>')
+            a('')
+            a('static inline int32_t pyra_predict(const double *features) {')
+            a(f'    double prob_sum[N_CLASSES] = {{0}};')
+            for t_idx in range(len(self._tree_arrays)):
+                a(f'    {{')
+                a(f'        int32_t leaf = pyra_traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH);')
+                a(f'        double total = 0.0;')
+                a(f'        int k;')
+                a(f'        for (k = 0; k < N_CLASSES; k++) total += tree{t_idx}_value[leaf * N_CLASSES + k];')
+                a(f'        if (total > 0.0) {{')
+                a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += tree{t_idx}_value[leaf * N_CLASSES + k] / total;')
+                a(f'        }}')
+                a(f'    }}')
+            a(f'    int32_t best = 0;')
+            a(f'    int k;')
+            a(f'    for (k = 1; k < N_CLASSES; k++) {{')
+            a(f'        if (prob_sum[k] > prob_sum[best]) best = k;')
+            a(f'    }}')
+            a(f'    return best;')
+            a('}')
+        elif self.algorithm_type == 'Gradient Boosting Decision Trees':
+            classes = self._gbdt_classes or []
+            init_scores = self._gbdt_init_scores or {}
+            tree_class_groups_c = self._tree_class_groups
+            assert tree_class_groups_c is not None
+
+            if self._gbdt_is_binary and len(classes) >= 2:
+                a('#include <math.h>')
+                a('')
+                a('static inline int32_t pyra_predict(const double *features) {')
+                pos_class = classes[1]
+                init_s = init_scores.get(pos_class, 0.0)
+                a(f'    double score = {init_s:.17g};')
+                for t_idx, tree in enumerate(self._tree_arrays):
+                    if 'init_score' in tree:
+                        continue
+                    if tree_class_groups_c[t_idx] != pos_class:
+                        continue
+                    a(f'    score += tree{t_idx}_value[pyra_traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
+                a(f'    double prob = 1.0 / (1.0 + exp(-score));')
+                a(f'    return (prob >= 0.5) ? {int(classes[1])} : {int(classes[0])};')
+                a('}')
+            else:
+                a('#include <math.h>')
+                a('')
+                a('static inline int32_t pyra_predict(const double *features) {')
+                a(f'    double scores[{len(classes)}] = {{')
+                inits = ', '.join(f'{init_scores.get(cl, 0.0):.17g}' for cl in classes)
+                a(f'        {inits}')
+                a(f'    }};')
+                for t_idx, tree in enumerate(self._tree_arrays):
+                    if 'init_score' in tree:
+                        continue
+                    cg = tree_class_groups_c[t_idx]
+                    col = list(classes).index(cg) if cg in classes else 0
+                    a(f'    scores[{col}] += tree{t_idx}_value[pyra_traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
+                a(f'    int32_t best = 0;')
+                a(f'    int k;')
+                a(f'    for (k = 1; k < {len(classes)}; k++) {{')
+                a(f'        if (scores[k] > scores[best]) best = k;')
+                a(f'    }}')
+                a(f'    static const int32_t class_map[{len(classes)}] = {{')
+                cls_vals = ', '.join(str(int(cl)) for cl in classes)
+                a(f'        {cls_vals}')
+                a(f'    }};')
+                a(f'    return class_map[best];')
+                a('}')
+
+        a('')
+
+        # Arduino sketch section
+        a('// ============================================================')
+        a('// ARDUINO SKETCH SECTION')
+        a('// ============================================================')
+        a('')
+        a(f'#define SERIAL_BAUD {serial_baud}')
+        a('#define SAMPLE_INTERVAL_MS 1000')
+        a('')
+
+        # Global feature variables
+        a('// Feature buffer (modify read_features() to populate these)')
+        a(f'float features[N_FEATURES];')
+        a('')
+
+        if include_sensor_placeholders:
+            a('// ============================================================')
+            a('// TODO: Replace with your sensor reading logic')
+            a('// ============================================================')
+            a('void read_features(void) {')
+            for i in range(min(len(self._array_feature_names), 10)):
+                feat_name = self._array_feature_names[i] if i < len(self._array_feature_names) else f'feature_{i}'
+                a(f'    features[{i}] = 0.0; // TODO: read {feat_name}')
+            remaining = max(0, len(self._array_feature_names) - 10)
+            if remaining > 0:
+                a(f'    // ... and {remaining} more features')
+            a('}')
+            a('')
+
+        # Setup function
+        a('void setup(void) {')
+        a('    Serial.begin(SERIAL_BAUD);')
+        a('    while (!Serial) delay(10);')
+        a('    Serial.println(F("pyruleanalyzer model loaded"));')
+        a(f'    Serial.print(F("Algorithm: ")); Serial.println(F("{self.algorithm_type}"));')
+        a(f'    Serial.print(F("Features: ")); Serial.print(N_FEATURES);')
+        a(f'    Serial.print(F(" | Classes: ")); Serial.print(N_CLASSES);')
+        a(f'    Serial.print(F(" | Trees: ")); Serial.println(N_TREES);')
+        a('}')
+        a('')
+
+        # Loop function
+        a('void loop(void) {')
+        a('    unsigned long start_us = micros();')
+        a('')
+        if include_sensor_placeholders:
+            a('    read_features();  // Populate features[] from sensors')
+        else:
+            a('    // TODO: populate features[] from your sensors')
+        a('')
+        a('    int32_t result = pyra_predict((const double*)features);')
+        a('')
+        a('    Serial.print(F("{\\"class\\":"));')
+        a('    Serial.print(result);')
+        a('    Serial.print(F(", \\"trees\\":"));')
+        a(f'    Serial.print(N_TREES);')
+        a('    Serial.println("}");')
+        a('')
+        a('    unsigned long elapsed_us = micros() - start_us;')
+        a('    Serial.print(F("("));')
+        a('    Serial.print(elapsed_us);')
+        a('    Serial.println(F(" us)"));')
+        a('')
+        a('    delay(SAMPLE_INTERVAL_MS);')
+        a('}')
+
+        # Write the file
+        ino_dir = os.path.dirname(filepath)
+        if ino_dir:
+            os.makedirs(ino_dir, exist_ok=True)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+
+        # Print memory report to stdout
+        avr_pct_flash = (est_flash / max_flash) * 100 if max_flash > 0 else 0
+        avr_pct_ram = (est_ram / max_sram) * 100 if max_sram > 0 else 0
+        
+        print(f'  ✅ Arduino sketch generated: {filepath}')
+        print(f'     Flash: {est_flash:,} bytes ({avr_pct_flash:.1f}% of {max_flash:,})')
+        print(f'     SRAM:  {est_ram:,} bytes ({avr_pct_ram:.1f}% of {max_sram:,})')
+        
+        if not fits_flash or not fits_ram:
+            print('     ⚠️  WARNING: Model may NOT fit on target board!')
+
+        file_size = os.path.getsize(filepath)
+        
+        return {
+            'ino_path': filepath,
+            'memory_check': {
+                'board_model': board_model,
+                'flash_bytes': est_flash,
+                'ram_bytes': est_ram,
+                'max_flash': max_flash,
+                'max_sram': max_sram,
+                'flash_percent': avr_pct_flash,
+                'ram_percent': avr_pct_ram,
+                'fits_flash': fits_flash,
+                'fits_ram': fits_ram,
+            },
+            'metadata': {
+                'algorithm_type': self.algorithm_type,
+                'n_features': len(self._array_feature_names),
+                'n_classes': self.num_classes,
+                'n_trees': len(self._tree_arrays),
+                'default_class': default_cls,
+                'file_size_bytes': file_size,
+            },
+        }
 
     # Method to find similar rules between trees
     def find_duplicated_rules_between_trees(self):

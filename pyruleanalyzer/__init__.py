@@ -3,6 +3,7 @@ from .dt_analyzer import DTAnalyzer
 from .rf_analyzer import RFAnalyzer
 from .gbdt_analyzer import GBDTAnalyzer
 from .pyruleanalyzer import PyRuleAnalyzer
+from .full_pipeline import full_pipeline
 
 __all__ = [
     'RuleClassifier',
@@ -11,4 +12,5 @@ __all__ = [
     'RFAnalyzer',
     'GBDTAnalyzer',
     'PyRuleAnalyzer',
+    'full_pipeline',
 ]

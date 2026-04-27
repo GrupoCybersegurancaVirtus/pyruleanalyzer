@@ -8,4 +8,6 @@ decision rules from Decision Tree, Random Forest, and Gradient Boosting Decision
 .. toctree::
 
    usage
+   arduino
+   modeling_for_arduino
    examples/index
