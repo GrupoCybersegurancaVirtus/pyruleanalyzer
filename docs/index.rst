@@ -28,10 +28,3 @@ Key functionalities include:
    installation
    tutorials/index
    api/index
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Advanced Topics
-   :hidden:
-
-   formal_verification
