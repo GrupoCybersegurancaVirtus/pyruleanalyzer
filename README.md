@@ -29,6 +29,7 @@
 - [Binary Export & Loading](#binary-export--loading)
 - [Full Arduino/ESP32 Sketch Export](#full-arduinoesp32-sketch-export)
 - [Modeling for Arduino / ESP32](#modeling-for-arduino--esp32)
+- [CPN Tools HCPN Export (Formal Verification)](#cpn-tools-hcpn-export-formal-verification)
 - [Interactive Rule Editing](#interactive-rule-editing)
 - [Export Standalone Classifier](#export-standalone-classifier)
 - [Custom Rule Removal](#custom-rule-removal)
@@ -502,6 +503,62 @@ This guide covers:
 - GBDT optimization for microcontrollers
 - Optimization checklist and troubleshooting
 
+### CPN Tools HCPN Export (Formal Verification)
+
+Convert a trained model into a **Hierarchical Coloured Petri Net (HCPN)** in the
+native [CPN Tools](https://cpntools.org) `.cpn` format, so it can be opened,
+visualised, simulated and formally verified (reachability, liveness,
+boundedness) directly in CPN Tools. You can generate the HCPN for **both** the
+initial model and the final, post-refinement model:
+
+```python
+analyzer = PyRuleAnalyzer.create(
+    train_path="train.csv", test_path="test.csv",
+    model="Gradient Boosting Decision Trees", refine=False)
+
+analyzer.execute_rule_refinement(test_path="test.csv",
+                                 remove_below_n_classifications=1)
+
+# Generates files/gbdt_initial.cpn and files/gbdt_final.cpn
+analyzer.export_hcpn("gbdt", which="both", sample=X_test.iloc[0])
+```
+
+Or via the generic export / the low-level classifier method:
+
+```python
+analyzer.classifier.export("gbdt", formats=["cpn"])          # uses refined rules if present
+analyzer.classifier.to_cpn_tools("model.cpn", use_final=False)  # explicit rule set
+```
+
+The conversion implements the proofs of correctness from the accompanying
+article (*Coloured Petri Nets-Based Modeling and Validation of Gradient Boosting
+Decision Trees*):
+
+- **Theorem 1 (Decision Tree → CPN).** Each root-to-leaf path becomes one
+  transition whose guard is the Boolean translation of the path conditions;
+  exactly one transition is enabled per sample. Each tree is emitted as its own
+  CPN subpage with `P_in`/`P_out` ports.
+- **Theorem 2 (GBDT → HCPN).** Each class channel evaluates the `M` boosting
+  stages sequentially and accumulates `s + η·vₘ` from the initial estimator
+  `s₀`. Every stage is a *substitution transition* bound to its tree subpage.
+- **Decision module.** Binary GBDT uses the sigmoid threshold (`s_M ≥ 0`);
+  multiclass GBDT uses NumPy-compatible `argmax` tie-breaking (lowest index wins
+  ties). Decision Tree models export as a single CPN page, and Random Forest as
+  a top page with one tree subpage per estimator — each emitting its leaf's
+  class-probability vector — plus a **soft-voting** decision transition that
+  sums the vectors and takes the `argmax`, reproducing scikit-learn's `predict`.
+
+The generated model uses a `SAMPLE` record colour set (one `REAL` field per
+feature) and a real input sample as the initial marking, so it is immediately
+simulatable. Supported for **Decision Tree, Random Forest and GBDT** (binary and
+multiclass), with no extra dependencies.
+
+```bash
+python examples/generate_hcpn_example.py                       # binary GBDT
+python examples/generate_hcpn_example.py --classes 3           # multiclass GBDT
+python examples/generate_hcpn_example.py --model "Random Forest"
+```
+
 ### Interactive Rule Editing
 
 After analysis, you can manually edit rules through an interactive terminal interface:
@@ -667,6 +724,7 @@ The main class that handles the entire pipeline.
 | `export_to_native_python(feature_names, filename)` | Write a standalone `.py` classifier file |
 | `export_to_binary(filepath='model.bin')` | Export compiled tree arrays to a compact binary file |
 | `export_to_c_header(filepath='model.h', guard_name='PYRULEANALYZER_MODEL_H')` | Export a standalone C header for embedded targets |
+| `to_cpn_tools(filepath, use_final=None, sample=None, feature_names=None)` | Export the model as a CPN Tools `.cpn` HCPN (DT/RF/GBDT) for opening, visualising and simulating in CPN Tools |
 | `update_native_model(rules)` | Compile rules into in-memory Python function via `exec()` |
 | `edit_rules()` | Open interactive terminal rule editor |
 | `set_custom_rule_removal(func)` | Set a custom refinement callback |

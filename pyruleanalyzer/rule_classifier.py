@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import copy
 import time
 import pickle
 import struct
@@ -206,6 +207,81 @@ class RuleClassifier(RuleExporterMixin):
         self._array_feature_names: list = []
         self._arrays_compiled: bool = False
 
+        # --- UNCOVERED-REGION (FALLBACK) ACCOUNTING ---
+        # Refinement can leave regions of the feature space with no matching
+        # rule.  Every engine resolves them to `default_class`; this counter
+        # records how often that happened so the loss of coverage is reported
+        # instead of silently absorbed into the metrics.
+        self.fallback_activations: int = 0
+
+        # --- INPUT PRECISION ---
+        # scikit-learn casts X to float32 before comparing against the
+        # (float64) thresholds.  Set to 'float32' to reproduce that
+        # quantization exactly; None keeps full float64 comparison.
+        self.input_dtype: Optional[str] = None
+
+    # Method to execute _default_class_int
+    def _default_class_int(self) -> int:
+        """The default class as an int, for array/vectorized code paths.
+
+        Returns:
+            int: `default_class` stripped of any 'Class' prefix, or 0 when it
+            cannot be interpreted as an integer.
+        """
+        try:
+            return int(str(self.default_class).replace('Class', '').strip())
+        except (ValueError, AttributeError, TypeError):
+            return 0
+
+    # Method to execute _assert_no_missing_values
+    @staticmethod
+    def _assert_no_missing_values(X) -> None:
+        """Reject inputs containing NaN.
+
+        A scikit-learn tree routes a missing value to a side chosen per node
+        (`missing_go_to_left`), which the rules cannot express: they only test
+        `feature <= threshold`, and every comparison against NaN is False, so
+        the sample matches no rule and silently falls back to `default_class`.
+        The two therefore disagree (measured: ~29% of samples on a tree fitted
+        with 15% missing values). Note that this affects any tree, not only
+        those fitted on data with NaN.
+
+        Args:
+            X (np.ndarray): Input data.
+
+        Raises:
+            ValueError: If `X` contains NaN.
+        """
+        arr = np.asarray(X, dtype=np.float64)
+        if arr.size and np.isnan(arr).any():
+            n = int(np.isnan(arr).any(axis=-1).sum()) if arr.ndim > 1 else 1
+            raise ValueError(
+                f'Input contains NaN in {n} sample(s). Rule-based prediction '
+                'cannot reproduce the missing-value routing of the original '
+                'tree model, so the result would silently differ from it. '
+                'Impute the missing values before prediction.'
+            )
+
+    # Method to execute _quantize_input
+    def _quantize_input(self, X):
+        """Apply the configured input precision to a numpy array.
+
+        Args:
+            X (np.ndarray): Input data.
+
+        Returns:
+            np.ndarray: `X` round-tripped through float32 when `input_dtype` is
+            'float32', otherwise `X` unchanged.
+        """
+        if self.input_dtype == 'float32':
+            return np.asarray(X, dtype=np.float32).astype(np.float64)
+        return X
+
+    # Method to execute reset_fallback_counter
+    def reset_fallback_counter(self) -> None:
+        """Zero the uncovered-region counter (see `fallback_activations`)."""
+        self.fallback_activations = 0
+
     # Methods to support pickling and unpickling of the RuleClassifier
     def __getstate__(self):
         """Returns the state of the RuleClassifier for pickling.
@@ -242,7 +318,13 @@ class RuleClassifier(RuleExporterMixin):
             self._tree_is_init = None
             self._array_feature_names = []
             self._arrays_compiled = False
-        
+
+        # Backward compat: attributes introduced after some pickles were written
+        if not hasattr(self, 'fallback_activations'):
+            self.fallback_activations = 0
+        if not hasattr(self, 'input_dtype'):
+            self.input_dtype = None
+
         # Auto-recompile the native model upon loading
         rules_to_compile = self.final_rules if self.final_rules else self.initial_rules
         if rules_to_compile:
@@ -766,6 +848,12 @@ class RuleClassifier(RuleExporterMixin):
                 - List of votes (Random Forest only).
                 - Class probabilities (Random Forest only).
         """
+        # Checked up front: the fast paths below swallow exceptions, so this
+        # must not be left to predict_batch or it would be silently masked.
+        for _v in data.values():
+            if _v != _v:   # NaN, whatever the numeric type
+                self._assert_no_missing_values(np.array([np.nan]))
+
         # --- FAST PATH 1: Array-based single-sample prediction ---
         # Works for BOTH initial and final rules (arrays are compiled for whichever
         # rule set is current). This fixes the final=True bypass bug.
@@ -775,6 +863,7 @@ class RuleClassifier(RuleExporterMixin):
                     [[data.get(f, 0.0) for f in self._array_feature_names]],
                     dtype=np.float64,
                 )
+                # predict_batch applies the configured input precision itself.
                 pred = self.predict_batch(row)[0]
                 clean_class = int(pred)
                 return clean_class, None, None
@@ -792,14 +881,24 @@ class RuleClassifier(RuleExporterMixin):
 
         # --- SLOW PATH: Iterative Execution ---
         rules = self.final_rules if final else self.initial_rules
-        
+
+        if self.input_dtype == 'float32':
+            data = {
+                k: (float(np.float32(v)) if isinstance(v, (int, float)) else v)
+                for k, v in data.items()
+            }
+
         predicted_class = self.default_class
         votes = None
         proba = None
 
         if self.algorithm_type == 'Random Forest':
             predicted_class, votes, proba, _ = self.classify_rf(data, rules)
-        
+            if predicted_class is None:
+                # No tree had a matching rule: uncovered region in every tree.
+                predicted_class = self.default_class
+                self.fallback_activations += 1
+
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             predicted_class, _, _ = self.classify_gbdt(
                 data, rules, self._gbdt_init_scores,
@@ -810,6 +909,9 @@ class RuleClassifier(RuleExporterMixin):
             matched_rule = self.classify_dt(data, rules)
             if matched_rule:
                 predicted_class = matched_rule.class_
+            else:
+                # Uncovered region: `predicted_class` stays at default_class.
+                self.fallback_activations += 1
 
         # Ensure the returned class is always an integer for consistency with metrics
         try:
@@ -1128,9 +1230,20 @@ class RuleClassifier(RuleExporterMixin):
         feature_name_to_idx: Dict[str, int],
         algorithm_type: str,
         n_classes: int = 0,
+        default_class: int = 0,
+        validate_structure: bool = True,
     ) -> dict:
         """
         Convert a list of rules (all from one tree) into flat numpy arrays.
+
+        The reconstruction walks each rule from the root, so it requires the
+        rule set to be *prefix-closed*: rules sharing a prefix of conditions
+        must agree on the split (feature and threshold) at every shared node.
+        This holds for rules extracted from a tree and is preserved by the
+        built-in refinement operations, but a custom removal function (see
+        `set_custom_rule_removal`) can break it.  When that happens rules are
+        routed by operator alone and land in the wrong leaf, silently;
+        `validate_structure` turns that silent corruption into an error.
 
         Args:
             rules (List[Rule]): Rules for a single tree.
@@ -1138,10 +1251,18 @@ class RuleClassifier(RuleExporterMixin):
             algorithm_type (str): 'Decision Tree', 'Random Forest', or
                 'Gradient Boosting Decision Trees'.
             n_classes (int): Number of classes (needed for RF leaf distributions).
+            default_class (int): Class assigned to uncovered regions (DT only).
+            validate_structure (bool): Raise if the rules are not prefix-closed.
 
         Returns:
             Dict with keys: 'feature_idx', 'threshold', 'children_left',
-            'children_right', 'value'.  Each is a numpy array indexed by node id.
+            'children_right', 'value', 'max_depth', 'is_hole'.  Each array is
+            indexed by node id; 'is_hole' marks leaves that no rule reached,
+            i.e. uncovered regions of the feature space.
+
+        Raises:
+            ValueError: If `validate_structure` is set and the rules are not
+                prefix-closed (conflicting split at a shared node).
         """
         # 1. Reconstruct tree structure
         tree_dict: Dict[int, dict] = {
@@ -1164,6 +1285,21 @@ class RuleClassifier(RuleExporterMixin):
                         'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None,
                     }
                     next_id += 2
+                elif validate_structure and (
+                    tree_dict[curr]['f'] != var
+                    or float(tree_dict[curr]['t']) != float(val)
+                ):
+                    raise ValueError(
+                        'Rule set is not prefix-closed and cannot be compiled '
+                        'into tree arrays: rule '
+                        f'{getattr(rule, "name", "?")!r} requires the split '
+                        f'({var} {op} {val}) at a node already split on '
+                        f'({tree_dict[curr]["f"]} @ {tree_dict[curr]["t"]}). '
+                        'Rules sharing a prefix of conditions must agree on the '
+                        'split at every shared node. This usually means a custom '
+                        'rule-removal function produced a rule set that is no '
+                        'longer a tree.'
+                    )
                 if op in ('<=', '<'):
                     curr = tree_dict[curr]['l']
                 else:
@@ -1211,7 +1347,13 @@ class RuleClassifier(RuleExporterMixin):
         elif algorithm_type == 'Gradient Boosting Decision Trees':
             value = np.zeros(n_nodes, dtype=np.float64)
         else:
-            value = np.full(n_nodes, -1, dtype=np.int32)
+            value = np.full(n_nodes, int(default_class), dtype=np.int32)
+
+        # Leaves that no rule reached: uncovered regions left behind by
+        # refinement.  They resolve to `default_class` (DT), to an abstention
+        # (zero probability vector for RF, zero contribution for GBDT), and are
+        # flagged here so callers can report how often they are hit.
+        is_hole = np.zeros(n_nodes, dtype=bool)
 
         for node_id, node in tree_dict.items():
             feat = node['f']
@@ -1227,6 +1369,7 @@ class RuleClassifier(RuleExporterMixin):
                 threshold[node_id] = -np.inf
                 children_left[node_id] = node_id   # self-loop
                 children_right[node_id] = node_id   # self-loop
+                is_hole[node_id] = node['v'] is None
                 if algorithm_type == 'Random Forest':
                     v = node['v']
                     if v is not None:
@@ -1235,7 +1378,10 @@ class RuleClassifier(RuleExporterMixin):
                 elif algorithm_type == 'Gradient Boosting Decision Trees':
                     value[node_id] = float(node['v']) if node['v'] is not None else 0.0
                 else:
-                    value[node_id] = int(node['v']) if node['v'] is not None else -1
+                    value[node_id] = (
+                        int(node['v']) if node['v'] is not None
+                        else int(default_class)
+                    )
             else:
                 feature_idx[node_id] = feature_name_to_idx.get(feat, -2)
                 threshold[node_id] = float(node['t'])
@@ -1267,6 +1413,7 @@ class RuleClassifier(RuleExporterMixin):
             'children_right': children_right,
             'value': value,
             'max_depth': max_depth,
+            'is_hole': is_hole,
         }
 
     # Method to execute compile_tree_arrays
@@ -1306,7 +1453,8 @@ class RuleClassifier(RuleExporterMixin):
             # Single tree — all rules belong to the same tree
             tree_arrays = [
                 self._build_single_tree_arrays(
-                    rules, feature_name_to_idx, self.algorithm_type, n_classes
+                    rules, feature_name_to_idx, self.algorithm_type, n_classes,
+                    default_class=self._default_class_int(),
                 )
             ]
             self._tree_arrays = tree_arrays
@@ -1324,6 +1472,7 @@ class RuleClassifier(RuleExporterMixin):
                 arr = self._build_single_tree_arrays(
                     tree_rules_map[tid], feature_name_to_idx,
                     self.algorithm_type, n_classes,
+                    default_class=self._default_class_int(),
                 )
                 tree_arrays.append(arr)
             self._tree_arrays = tree_arrays
@@ -1359,6 +1508,7 @@ class RuleClassifier(RuleExporterMixin):
                     arr = self._build_single_tree_arrays(
                         trules, feature_name_to_idx,
                         self.algorithm_type, n_classes,
+                        default_class=self._default_class_int(),
                     )
                     tree_arrays.append(arr)
 
@@ -1459,6 +1609,8 @@ class RuleClassifier(RuleExporterMixin):
             col_order = [feature_names.index(f) for f in self._array_feature_names]
             X = X[:, col_order]
 
+        self._assert_no_missing_values(X)
+        X = self._quantize_input(X)
         n_samples = X.shape[0]
 
         # --- Decision Tree ---
@@ -1469,6 +1621,11 @@ class RuleClassifier(RuleExporterMixin):
                 tree['children_left'], tree['children_right'],
                 tree['max_depth'],
             )
+            # Uncovered regions already carry `default_class` in `value`; count
+            # them so the loss of coverage is reported, not silently absorbed.
+            holes = tree.get('is_hole')
+            if holes is not None:
+                self.fallback_activations += int(holes[leaf_ids].sum())
             predictions = tree['value'][leaf_ids]
             return predictions
 
@@ -1501,6 +1658,15 @@ class RuleClassifier(RuleExporterMixin):
             # Average and argmax
             avg_proba = prob_sum / n_trees
             predictions = np.argmax(avg_proba, axis=1).astype(np.int32)
+
+            # Every tree abstained (refinement left this sample uncovered in
+            # all of them): the argmax would silently return class 0 with no
+            # evidence behind it.  Resolve to `default_class` and count it.
+            abstained = prob_sum.sum(axis=1) == 0.0
+            n_abstained = int(abstained.sum())
+            if n_abstained:
+                predictions[abstained] = np.int32(self._default_class_int())
+                self.fallback_activations += n_abstained
             return predictions
 
         # --- GBDT (Additive Scoring) ---
@@ -1528,6 +1694,10 @@ class RuleClassifier(RuleExporterMixin):
             else:
                 all_leaf_ids = np.empty((0, n_samples), dtype=np.int32)
 
+            # A stage whose region is uncovered contributes 0.0 (abstention).
+            # Track, per sample, whether any stage abstained.
+            touched_hole = np.zeros(n_samples, dtype=bool)
+
             if is_binary and len(classes) >= 2:
                 # Binary: accumulate score for positive class
                 pos_class = classes[1]
@@ -1545,12 +1715,16 @@ class RuleClassifier(RuleExporterMixin):
                         continue
                     leaf_ids = all_leaf_ids[batch_idx]
                     scores += self._tree_arrays[orig_idx]['value'][leaf_ids]
+                    holes = self._tree_arrays[orig_idx].get('is_hole')
+                    if holes is not None:
+                        touched_hole |= holes[leaf_ids]
 
                 # Sigmoid
                 prob = 1.0 / (1.0 + np.exp(-scores))
                 predictions = np.where(
                     prob >= 0.5, int(classes[1]), int(classes[0])
                 ).astype(np.int32)
+                self.fallback_activations += int(touched_hole.sum())
                 return predictions
 
             else:
@@ -1575,11 +1749,15 @@ class RuleClassifier(RuleExporterMixin):
                         continue
                     leaf_ids = all_leaf_ids[batch_idx]
                     scores[:, col] += self._tree_arrays[orig_idx]['value'][leaf_ids]
+                    holes = self._tree_arrays[orig_idx].get('is_hole')
+                    if holes is not None:
+                        touched_hole |= holes[leaf_ids]
 
                 # Argmax -> class label
                 best_col = np.argmax(scores, axis=1)
                 class_arr = np.array([int(cl) for cl in classes], dtype=np.int32)
                 predictions = class_arr[best_col]
+                self.fallback_activations += int(touched_hole.sum())
                 return predictions
 
         raise ValueError(f'Unsupported algorithm_type: {self.algorithm_type}')
@@ -2568,6 +2746,125 @@ class RuleClassifier(RuleExporterMixin):
             },
         }
 
+    # Method to detect rules whose regions overlap
+    def find_overlapping_rules(self, rules=None, per_tree=True, max_rules_per_tree=20000):
+        """
+        Find pairs of rules whose feature-space regions intersect.
+
+        Each rule's conditions are axis-aligned inequalities, so its region is
+        a box (a product of intervals). Two rules overlap exactly when their
+        boxes intersect on every feature. Rules extracted from a tree never
+        overlap — the leaves partition the space — but refinement can break
+        that: promoting a sibling drops a condition and may extend the rule
+        over ground already covered by other rules.
+
+        This matters because an overlap is invisible to accuracy. The iterative
+        engine resolves it by taking the first matching rule, which is an
+        implicit priority order that a tree does not have and that the CPN model
+        does not reproduce. A rule set with overlaps is a *rule list*, not a
+        decision tree.
+
+        Args:
+            rules (List[Rule], optional): Rules to check. Defaults to
+                final_rules if available, else initial_rules.
+            per_tree (bool): Compare only rules belonging to the same tree
+                (the name prefix before the first '_'). Rules from different
+                trees of an ensemble are expected to overlap and are skipped.
+            max_rules_per_tree (int): Trees with more rules than this are
+                skipped, with their id reported under 'skipped_trees', to keep
+                the quadratic comparison bounded.
+
+        Returns:
+            Dict with keys:
+                'overlaps': list of (name_i, name_j, same_class) tuples;
+                'n_overlaps': total number of overlapping pairs;
+                'n_conflicting': pairs that also disagree on the predicted
+                    class (these change the prediction, not just the shape);
+                'trees_affected': sorted list of tree ids containing overlaps;
+                'skipped_trees': tree ids skipped for exceeding the size limit.
+        """
+        if rules is None:
+            rules = self.final_rules if self.final_rules else self.initial_rules
+
+        # A Decision Tree is a single tree even though its rule names contain
+        # '_' ("Rule0_Class1"); splitting on it would put every rule in its own
+        # group and compare nothing.
+        group_by_tree = per_tree and self.algorithm_type != 'Decision Tree'
+
+        groups: Dict[str, list] = defaultdict(list)
+        for rule in rules:
+            tid = (rule.name.split('_')[0]
+                   if (group_by_tree and '_' in rule.name) else '_all')
+            groups[tid].append(rule)
+
+        overlaps = []
+        skipped = []
+        for tid, group in groups.items():
+            if len(group) > max_rules_per_tree:
+                skipped.append(tid)
+                continue
+
+            # Bounds per rule: lo/hi arrays plus inclusiveness flags.
+            feats = sorted({v for r in group for v, _, _ in r.parsed_conditions})
+            if not feats:
+                continue
+            col = {f: i for i, f in enumerate(feats)}
+            n, d = len(group), len(feats)
+
+            lo = np.full((n, d), -np.inf)
+            hi = np.full((n, d), np.inf)
+            lo_open = np.zeros((n, d), dtype=bool)   # lower bound is strict (>)
+            hi_open = np.zeros((n, d), dtype=bool)   # upper bound is strict (<)
+
+            for i, rule in enumerate(group):
+                for var, op, val in rule.parsed_conditions:
+                    c = col[var]
+                    if op in ('<=', '<'):
+                        if val < hi[i, c] or (val == hi[i, c] and op == '<'):
+                            hi[i, c] = val
+                            hi_open[i, c] = (op == '<')
+                    else:
+                        if val > lo[i, c] or (val == lo[i, c] and op == '>'):
+                            lo[i, c] = val
+                            lo_open[i, c] = (op == '>')
+
+            for i in range(n - 1):
+                j = slice(i + 1, n)
+                # Intervals [lo_a, hi_a] and [lo_b, hi_b] intersect when
+                # max(lo) < min(hi), or they touch at a point that both sides
+                # include.
+                lo_max = np.maximum(lo[i], lo[j])
+                hi_min = np.minimum(hi[i], hi[j])
+                touching = lo_max == hi_min
+                # Inclusiveness comes from whichever bound is binding: a looser
+                # bound being strict says nothing about the tighter one. Only
+                # when both coincide do they both have to be inclusive.
+                lo_incl = np.where(
+                    lo[i] > lo[j], ~lo_open[i],
+                    np.where(lo[j] > lo[i], ~lo_open[j],
+                             ~(lo_open[i] | lo_open[j])))
+                hi_incl = np.where(
+                    hi[i] < hi[j], ~hi_open[i],
+                    np.where(hi[j] < hi[i], ~hi_open[j],
+                             ~(hi_open[i] | hi_open[j])))
+                per_feat = (lo_max < hi_min) | (touching & lo_incl & hi_incl)
+                hits = np.nonzero(per_feat.all(axis=1))[0]
+                for k in hits:
+                    other = group[i + 1 + int(k)]
+                    overlaps.append((
+                        group[i].name, other.name,
+                        str(group[i].class_) == str(other.class_),
+                    ))
+
+        trees = sorted({name.split('_')[0] for name, _, _ in overlaps})
+        return {
+            'overlaps': overlaps,
+            'n_overlaps': len(overlaps),
+            'n_conflicting': sum(1 for _, _, same in overlaps if not same),
+            'trees_affected': trees,
+            'skipped_trees': skipped,
+        }
+
     # Method to find similar rules between trees
     def find_duplicated_rules_between_trees(self):
         """
@@ -2625,18 +2922,30 @@ class RuleClassifier(RuleExporterMixin):
         """
         duplicated_rules = []
         rules_by_prefix = defaultdict(list)
-        
+
         # Target rules to analyze
         target_rules = self.final_rules if self.final_rules else self.initial_rules
 
-        # 1. Group rules by class and their "Prefix" (all conditions except the last)
+        # Boundary redundancy is a property of a *single* tree: the two rules
+        # must be the two children of one split. Ensemble trees often split on
+        # the same feature at the same threshold, so the signature has to
+        # include the tree id -- otherwise leaves of different trees can be
+        # merged as if they were siblings, silently dropping a leaf from one of
+        # them. A Decision Tree is one tree even though its rule names contain
+        # '_' ("Rule0_Class1"), so it is grouped as a whole.
+        group_by_tree = self.algorithm_type != 'Decision Tree'
+
+        # 1. Group rules by tree, class and their "Prefix" (all conditions except the last)
         for rule in target_rules:
             if not rule.parsed_conditions:
                 continue
-            
-            # Prefix signature: (class, conditions[0:-1])
+
+            tree_id = (rule.name.split('_')[0]
+                       if (group_by_tree and '_' in rule.name) else '_all')
+
+            # Prefix signature: (tree, class, conditions[0:-1])
             # We assume order matters here because it represents a tree path
-            prefix_key = (rule.class_, tuple(rule.parsed_conditions[:-1]))
+            prefix_key = (tree_id, rule.class_, tuple(rule.parsed_conditions[:-1]))
             rules_by_prefix[prefix_key].append(rule)
             
         # 2. Check for boundary redundancy within groups
@@ -2952,14 +3261,48 @@ class RuleClassifier(RuleExporterMixin):
         """
         complement = {'<=': '>', '>': '<=', '<': '>=', '>=': '<'}
 
+        # Siblings only exist *within* one tree. Ensemble trees routinely split
+        # on the same feature at the same threshold, so a key that ignores the
+        # tree would match a leaf of one tree as the sibling of a leaf of
+        # another and promote it -- generalizing a rule over ground still
+        # covered by its own tree's leaves (overlapping guards). Group by tree
+        # id, using the same convention as find_overlapping_rules: a Decision
+        # Tree is a single tree even though its rule names contain '_'.
+        group_by_tree = self.algorithm_type != 'Decision Tree'
+
+        # Method to _tree_id.
+        def _tree_id(r):
+            """Tree the rule belongs to (prefix before the first '_')."""
+            if group_by_tree and '_' in r.name:
+                return r.name.split('_')[0]
+            return '_all'
+
         # Method to _make_key.
         def _make_key(r):
-            """Build index key from a rule: (prefix, var, op, threshold_rounded)."""
+            """Index key: (tree_id, prefix, var, op, threshold_rounded)."""
             if not r.parsed_conditions:
                 return None
             prefix = tuple(r.parsed_conditions[:-1])
             var, op, val = r.parsed_conditions[-1]
-            return (prefix, var, op, round(val, 9))
+            return (_tree_id(r), prefix, var, op, round(val, 9))
+
+        # Promotion rewrites a rule's conditions, class and name. `final_rules`
+        # and `initial_rules` hold the *same* Rule objects, so mutating them in
+        # place would silently rewrite the unrefined model too: its rules would
+        # gain the generalized regions, start overlapping each other, and stop
+        # reproducing the original tree. Clone first, so refinement only ever
+        # touches its own copies.
+        clones = {}
+        for r in all_rules:
+            c = copy.copy(r)
+            c.conditions = list(r.conditions)
+            c.parsed_conditions = list(r.parsed_conditions)
+            dist = getattr(r, 'class_distribution', None)
+            if dist is not None:
+                c.class_distribution = list(dist)
+            clones[id(r)] = c
+        all_rules = [clones[id(r)] for r in all_rules]
+        rules_to_remove = [clones[id(r)] for r in rules_to_remove if id(r) in clones]
 
         # --- Build sibling index: key -> list of rules with that key ---
         sibling_index: dict = {}
@@ -2996,8 +3339,9 @@ class RuleClassifier(RuleExporterMixin):
                 last_var, last_op, last_val = rule.parsed_conditions[-1]
                 expected_op = complement.get(last_op)
                 if expected_op is not None:
-                    # The sibling has the complementary operator
-                    sib_key = (prefix, last_var, expected_op, round(last_val, 9))
+                    # The sibling has the complementary operator, in the same tree
+                    sib_key = (_tree_id(rule), prefix, last_var,
+                               expected_op, round(last_val, 9))
                     candidates = sibling_index.get(sib_key, [])
                     for c in candidates:
                         if c is not rule and id(c) not in removed_ids:
@@ -3058,8 +3402,60 @@ class RuleClassifier(RuleExporterMixin):
 
         if promoted_count > 0:
             print(f"Promoted {promoted_count} sibling rule(s) after specific rule removal.")
+            self._warn_promotions_that_overlap(working_rules)
 
         return working_rules
+
+    # Method to report promotions that swallowed still-live rules
+    @staticmethod
+    def _warn_promotions_that_overlap(rules) -> int:
+        """
+        Report promoted rules whose region now contains other live rules.
+
+        Promotion drops a rule's last condition so it covers the region of the
+        removed sibling. When that sibling was a whole sub-branch with leaves
+        still in the rule set, the promoted rule spreads over them and the rule
+        set stops being a partition: two rules match the same sample. Accuracy
+        does not reveal this (the iterative engine just takes the first match),
+        but the CPN model becomes nondeterministic and the set is no longer a
+        decision tree.
+
+        Detection is a prefix test: rules from a tree are prefix-structured, so
+        a rule lies inside a promoted rule's region exactly when its conditions
+        extend the promoted rule's conditions. Sorting makes those a contiguous
+        range, giving O(n log n) instead of a quadratic comparison.
+
+        Args:
+            rules (List[Rule]): The rule set after promotion.
+
+        Returns:
+            int: How many promoted rules swallowed at least one live rule.
+        """
+        import bisect
+
+        promoted = [r for r in rules if r.name.endswith('_promoted')]
+        if not promoted:
+            return 0
+
+        keys = sorted(tuple(r.parsed_conditions) for r in rules)
+        affected = 0
+        for r in promoted:
+            p = tuple(r.parsed_conditions)
+            i = bisect.bisect_right(keys, p)
+            if i < len(keys) and keys[i][:len(p)] == p:
+                affected += 1
+
+        if affected:
+            # Plain ASCII: this runs with stdout redirected to files whose
+            # encoding is the system codepage (cp1252 on Windows).
+            print(
+                f'  WARNING: {affected} promoted rule(s) now overlap rules '
+                'still in the set: the refined rule set is no longer a '
+                'partition. Predictions become order-dependent and the CPN '
+                'model becomes nondeterministic. Inspect with '
+                'find_overlapping_rules().'
+            )
+        return affected
 
     # Exports the rule set to a standalone native Python classifier file
     def export_to_native_python(self, feature_names=None, filename="files/fast_classifier.py"):
@@ -4044,7 +4440,7 @@ class RuleClassifier(RuleExporterMixin):
             List[Rule]: A list of extracted Rule objects.
         """
         tree_ = tree.tree_ if hasattr(tree, 'tree_') else tree
-        
+
         # Mapping feature indices to names
         feature_name = [
             feature_names[i] if i != -2 else "undefined!"
@@ -4389,6 +4785,7 @@ class RuleClassifier(RuleExporterMixin):
         export_python = "python" in formats
         export_binary = "binary" in formats or "bin" in formats
         export_c = "c" in formats or "header" in formats
+        export_cpn = "cpn" in formats or "cpntools" in formats or "hcpn" in formats
         
         print("\n" + "=" * 60)
         print("EXPORTING CLASSIFIER")
@@ -4418,7 +4815,13 @@ class RuleClassifier(RuleExporterMixin):
             self.export_to_c_header(filepath=c_filename)
             results["c"] = c_filename
             print(f"  [OK] C Header export: {c_filename}")
-        
+
+        if export_cpn:
+            cpn_filename = f"{base_path}.cpn"
+            self.to_cpn_tools(filepath=cpn_filename, feature_names=feature_names)
+            results["cpn"] = cpn_filename
+            print(f"  [OK] CPN Tools export: {cpn_filename}")
+
         print("=" * 60 + "\n")
         
         return results

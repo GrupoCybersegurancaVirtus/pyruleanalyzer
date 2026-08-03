@@ -192,3 +192,7 @@ formalization/hcpn_dt_model.png
 formalization/dt_module.json
 /formalization
 /utils
+
+# Local research artifacts, not part of the library
+/artigo_iee_gbdt_teorema/
+/demo_cpn/

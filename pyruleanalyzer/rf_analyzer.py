@@ -18,6 +18,7 @@ Typical usage::
 import os
 import sys
 import time
+import warnings
 import pickle
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional
@@ -142,8 +143,10 @@ class RFAnalyzer:
             y: True labels.
             remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
-            refine_between_trees: If True, merges semantically identical rules
-                across different trees (hard reduction).
+            refine_between_trees: Ignored for Random Forest. Merging rules
+                across trees removes voters from the soft vote and can change
+                predictions, so the stage is skipped with a RuntimeWarning.
+                It is sound only for Gradient Boosting (additive scores).
             save_final_model: Whether to save the final model to 'final_model.pkl'.
                 Default is True.
             save_report: Whether to save the analysis report to 'output_classifier_rf.txt'.
@@ -331,7 +334,26 @@ class RFAnalyzer:
 
             clf.update_native_model(clf.final_rules)
 
-        # Detect and merge semantically identical rules across trees
+        # Detect and merge semantically identical rules across trees.
+        #
+        # Unsound for Random Forest: the prediction is a soft vote, i.e. the
+        # *average* of one probability distribution per tree. Collapsing N
+        # rules from N different trees into a single rule removes N-1 voters
+        # (those trees no longer match the sample), which changes the average
+        # and can flip the argmax -- measured at 2/270 samples on a 3-class
+        # forest. Unlike GBDT, where scores are additive and the merge sums the
+        # leaf values (exactly preserving the total), there is no way to fold
+        # several voters into one rule and keep the mean unchanged.
+        if refine_between_trees:
+            warnings.warn(
+                "refine_between_trees is unsound for Random Forest: merging "
+                "rules across trees removes voters from the soft vote and can "
+                "change predictions. Skipping this stage. Use it only with "
+                "Gradient Boosting, where scores are additive.",
+                RuntimeWarning, stacklevel=2,
+            )
+            refine_between_trees = False
+
         if refine_between_trees:
             print("\nAnalyzing duplicated rules between trees...")
             similar_rule_groups = clf.find_duplicated_rules_between_trees()

@@ -507,9 +507,89 @@ class PyRuleAnalyzer:
             # Restore refined rules
             if not use_refined and self.classifier.final_rules:
                 self.classifier.final_rules = temp_final
-        
+
         return result
-    
+
+    # Method to export hcpn.
+    def export_hcpn(
+        self,
+        base_name: str = "model",
+        which: str = "both",
+        sample=None,
+        feature_names: Optional[List[str]] = None,
+        model_name: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Generate CPN Tools ``.cpn`` HCPN models for the initial and/or final model.
+
+        Converts the extracted rules into a Hierarchical Coloured Petri Net in
+        the native CPN Tools 4.x format so the model can be opened, visualised
+        and simulated in `CPN Tools <https://cpntools.org>`_. The mapping
+        follows the proofs of correctness (Theorems 1 and 2) for Decision Tree,
+        Gradient Boosting Decision Trees (binary and multiclass) and Random
+        Forest models.
+
+        Args:
+            base_name: Base name for the output files (saved under ``files/`` if
+                no path separator is given). Produces ``<base>_initial.cpn``
+                and/or ``<base>_final.cpn``.
+            which: Which model(s) to export: ``"initial"``, ``"final"`` or
+                ``"both"`` (default). ``"final"`` requires that refinement has
+                been run.
+            sample: Optional example input sample (dict or sequence) used as the
+                initial marking of the top-level input place so the generated
+                net is immediately simulatable.
+            feature_names: Ordered feature names. Defaults to the analyzer's
+                feature names, then inference from the rules.
+            model_name: Display name for the model. Defaults to ``base_name``.
+
+        Returns:
+            Dictionary mapping ``"initial"``/``"final"`` to the written paths.
+
+        Example:
+            >>> analyzer = PyRuleAnalyzer.create(train, test,
+            ...     model="Gradient Boosting Decision Trees", refine=True)
+            >>> analyzer.export_hcpn("gbdt", which="both", sample=X_test.iloc[0])
+            {'initial': 'files/gbdt_initial.cpn', 'final': 'files/gbdt_final.cpn'}
+        """
+        from .cpn_tools_exporter import export_cpn_tools
+
+        if "/" not in base_name and "\\" not in base_name:
+            base_path = f"files/{base_name}"
+        else:
+            base_path = base_name
+
+        fn = feature_names or self.feature_names
+        name = model_name or os.path.basename(base_name)
+        has_final = bool(self.classifier.final_rules)
+
+        which = which.lower()
+        results: Dict[str, str] = {}
+
+        if which in ("initial", "both"):
+            results["initial"] = export_cpn_tools(
+                self.classifier, f"{base_path}_initial.cpn",
+                rules=self.classifier.initial_rules, feature_names=fn,
+                sample=sample, use_final=False, model_name=f"{name}_initial",
+            )
+            print(f"  [OK] CPN Tools (initial model): {results['initial']}")
+
+        if which in ("final", "both"):
+            if not has_final:
+                if which == "final":
+                    raise ValueError(
+                        "No final (refined) rules available. Run "
+                        "execute_rule_refinement() before exporting the final HCPN."
+                    )
+            else:
+                results["final"] = export_cpn_tools(
+                    self.classifier, f"{base_path}_final.cpn",
+                    rules=self.classifier.final_rules, feature_names=fn,
+                    sample=sample, use_final=True, model_name=f"{name}_final",
+                )
+                print(f"  [OK] CPN Tools (final model):   {results['final']}")
+
+        return results
+
     # ==========================================================================
     # SAVE/LOAD
     # ==========================================================================
