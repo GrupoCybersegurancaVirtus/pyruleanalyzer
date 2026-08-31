@@ -212,7 +212,12 @@ def full_pipeline(
         
         # Garantir que arrays estão compilados
         if hasattr(model.classifier, 'compile_tree_arrays'):
-            model.classifier.compile_tree_arrays()
+            # Passa a ordem completa das features: sem isso os nomes sao inferidos
+            # apenas das regras (subconjunto, ordenado alfabeticamente) e os indices
+            # dos arrays exportados deixam de corresponder as colunas do dataset.
+            model.classifier.compile_tree_arrays(
+                feature_names=getattr(model, 'feature_names', None)
+            )
         
         # Refinar regras
         refine_stats = model.execute_rule_refinement(
