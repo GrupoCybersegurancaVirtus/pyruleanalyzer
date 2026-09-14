@@ -181,6 +181,91 @@ class PyRuleAnalyzer:
         
         return PyRuleAnalyzer(classifier, [], [])
         
+    # Method to build an analyzer from an already-trained scikit-learn model.
+    @staticmethod
+    def from_sklearn(
+        model,
+        feature_names: Optional[List[str]] = None,
+        class_names: Optional[List[str]] = None,
+    ) -> "PyRuleAnalyzer":
+        """
+        Wrap an already-fitted scikit-learn estimator and extract its rules.
+
+        Use this when the model was trained elsewhere -- a saved estimator, a
+        grid search result, someone else's pipeline -- and only the rule
+        extraction, refinement, verification and export steps are needed.
+
+        Args:
+            model: A fitted ``DecisionTreeClassifier``, ``RandomForestClassifier``
+                or ``GradientBoostingClassifier``.
+            feature_names: Ordered feature names. Defaults to the estimator's
+                ``feature_names_in_``, then to ``feature_0 ... feature_n``.
+            class_names: Class labels. Defaults to the estimator's ``classes_``.
+
+        Returns:
+            PyRuleAnalyzer: An analyzer holding the extracted rules.
+
+        Raises:
+            ValueError: If the estimator type is not supported.
+
+        Example:
+            >>> from sklearn.ensemble import RandomForestClassifier
+            >>> clf = RandomForestClassifier(n_estimators=10).fit(X, y)
+            >>> analyzer = PyRuleAnalyzer.from_sklearn(clf, list(X.columns))
+        """
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+        from sklearn.tree import DecisionTreeClassifier
+
+        if isinstance(model, GradientBoostingClassifier):
+            algorithm_type = 'Gradient Boosting Decision Trees'
+        elif isinstance(model, RandomForestClassifier):
+            algorithm_type = 'Random Forest'
+        elif isinstance(model, DecisionTreeClassifier):
+            algorithm_type = 'Decision Tree'
+        else:
+            raise ValueError(
+                f"Unsupported estimator {type(model).__name__}: expected a "
+                "DecisionTreeClassifier, RandomForestClassifier or "
+                "GradientBoostingClassifier."
+            )
+
+        if feature_names is None:
+            names = getattr(model, 'feature_names_in_', None)
+            if names is not None:
+                feature_names = [str(n) for n in names]
+            else:
+                n_features = int(getattr(model, 'n_features_in_', 0))
+                feature_names = [f"feature_{i}" for i in range(n_features)]
+        feature_names = list(feature_names)
+
+        if class_names is None:
+            class_names = [str(c) for c in getattr(model, 'classes_', [])]
+        class_names = [str(c) for c in class_names]
+
+        if algorithm_type == 'Gradient Boosting Decision Trees':
+            rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
+                model, feature_names, class_names
+            )
+            classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+            classifier._gbdt_init_scores = init_scores
+            classifier._gbdt_is_binary = is_binary
+            classifier._gbdt_classes = gbdt_classes
+        else:
+            rules = RuleClassifier.get_tree_rules(
+                model, feature_names, class_names, algorithm_type=algorithm_type
+            )
+            classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+
+        classifier.class_labels = class_names
+        classifier.num_classes = len(class_names)
+        classifier._array_feature_names = feature_names
+        # scikit-learn casts X to float32 before comparing it with the
+        # thresholds; comparing in float64 routes a sample lying within one
+        # float32 ULP above a threshold to the other child.
+        classifier.input_dtype = 'float32'
+
+        return PyRuleAnalyzer(classifier, feature_names, class_names)
+
     # Method to fit.
     def fit(self, X, y) -> "PyRuleAnalyzer":
         """
@@ -223,27 +308,10 @@ class PyRuleAnalyzer:
         # Get class names from y
         self.class_names = [str(c) for c in sorted(np.unique(np.asarray(y)))]
         
-        # Extract rules
-        if algorithm_type == 'Gradient Boosting Decision Trees':
-            rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
-                model, self.feature_names, self.class_names
-            )
-            # Create new classifier with the rules
-            self.classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
-            self.classifier._gbdt_init_scores = init_scores
-            self.classifier._gbdt_is_binary = is_binary
-            self.classifier._gbdt_classes = gbdt_classes
-        else:
-            rules = RuleClassifier.get_tree_rules(
-                model, self.feature_names, self.class_names, algorithm_type=algorithm_type
-            )
-            # Create new classifier with the rules
-            self.classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
-            
-        # Update class properties
-        self.classifier.class_labels = self.class_names
-        self.classifier.num_classes = len(self.class_names)
-        self.classifier._array_feature_names = self.feature_names
+        # Extract rules from the freshly trained estimator
+        trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names,
+                                              self.class_names)
+        self.classifier = trained.classifier
         
         return self
     
@@ -290,7 +358,8 @@ class PyRuleAnalyzer:
         y=None,
         remove_below_n_classifications: int = -1,
         save_final_model: bool = False,
-        save_report: bool = False
+        save_report: bool = False,
+        refine_between_trees: bool = False,
     ) -> Dict[str, Any]:
         """
         Refine the classifier by removing redundant and low-usage rules.
@@ -306,6 +375,12 @@ class PyRuleAnalyzer:
                             Default is False.
             save_report: If True, save refinement report to files/.
                        Default is False.
+            refine_between_trees: Also merge rules with identical conditions
+                across the trees of a Gradient Boosting model (semantic
+                redundancy; the merged rule carries the sum of their values,
+                so the score is unchanged). Refused for Random Forest, where
+                it would change the soft vote; no effect on a Decision Tree.
+                Default is False.
         
         Returns:
             Dictionary with refinement statistics:
@@ -342,6 +417,7 @@ class PyRuleAnalyzer:
                 file_path=test_path,
                 X=X, y=y,
                 remove_below_n_classifications=remove_below_n_classifications,
+                refine_between_trees=refine_between_trees,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -352,6 +428,7 @@ class PyRuleAnalyzer:
                 file_path=test_path,
                 X=X, y=y,
                 remove_below_n_classifications=remove_below_n_classifications,
+                refine_between_trees=refine_between_trees,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -420,10 +497,8 @@ class PyRuleAnalyzer:
         if isinstance(X, pd.DataFrame):
             X = X.values
             
-        # Compile arrays if not done yet
-        if not getattr(self.classifier, '_arrays_compiled', False):
-            self.classifier.compile_tree_arrays(feature_names=self.feature_names)
-            
+        # predict_batch compiles (once) and uses the arrays of the requested
+        # rule set.
         return self.classifier.predict_batch(
             X,
             feature_names=self.feature_names,
@@ -451,12 +526,10 @@ class PyRuleAnalyzer:
         if isinstance(X, pd.DataFrame):
             X = X.values
             
-        if not getattr(self.classifier, '_arrays_compiled', False):
-            self.classifier.compile_tree_arrays(feature_names=self.feature_names)
-            
         return self.classifier.predict_batch_proba(
             X,
-            feature_names=self.feature_names
+            feature_names=self.feature_names,
+            use_final=use_refined,
         )
     
     # ==========================================================================
@@ -491,24 +564,12 @@ class PyRuleAnalyzer:
             >>> print(f"Exported to: {files}")
             # Output: {'python': 'files/my_model.py', 'binary': 'files/my_model.bin'}
         """
-        # Switch to initial rules if not using refined
-        if not use_refined and self.classifier.final_rules:
-            # Temporarily swap rules
-            temp_final = self.classifier.final_rules
-            self.classifier.final_rules = []
-        
-        try:
-            result = self.classifier.export(
-                base_name=base_name,
-                formats=formats,
-                feature_names=self.feature_names
-            )
-        finally:
-            # Restore refined rules
-            if not use_refined and self.classifier.final_rules:
-                self.classifier.final_rules = temp_final
-
-        return result
+        return self.classifier.export(
+            base_name=base_name,
+            formats=formats,
+            feature_names=self.feature_names,
+            use_final=use_refined,
+        )
 
     # Method to export hcpn.
     def export_hcpn(
@@ -589,6 +650,115 @@ class PyRuleAnalyzer:
                 print(f"  [OK] CPN Tools (final model):   {results['final']}")
 
         return results
+
+
+    # Method to model check.
+    def model_check(
+        self,
+        which: str = "final",
+        samples=None,
+        cpn_path: Optional[str] = None,
+        base_name: str = "model",
+        max_nodes: int = 200_000,
+        check_consistency: bool = True,
+        test_samples=None,
+        askctl: bool = False,
+        verbose: bool = True,
+    ):
+        """Verify the generated HCPN model.
+
+        Builds (or reuses) the ``.cpn`` model and verifies it with the four
+        techniques of :mod:`pyruleanalyzer.model_checker`: CTL model checking on
+        the occurrence graph (termination, absence of spurious deadlock,
+        inevitability and recoverability of the decision, a single valid label,
+        safeness, leaf determinism and selection, boosting-stage precedence,
+        complete voting), SCC analysis (home marking), structural analysis of
+        the leaf guards (disjointness for every input) and conformance testing
+        of the net against this classifier.
+
+        Running it on ``which="both"`` is the acceptance test of a refinement: a
+        property that held before refinement and fails after it means the
+        refinement broke the model, which accuracy alone does not reveal.
+
+        Args:
+            which: ``"initial"``, ``"final"`` or ``"both"``.
+            samples: Samples to fix in the net's initial marking (a DataFrame,
+                a list of rows, or a single row). Structural properties hold for
+                every input by construction; more samples widen the evidence
+                for the per-sample ones (valid label, prediction consistency).
+            cpn_path: Existing ``.cpn`` to check instead of exporting a new one.
+                Only valid together with ``which="initial"`` or ``"final"``.
+            base_name: Base name used when exporting the ``.cpn`` models.
+            max_nodes: Occurrence-graph budget; beyond it the state-space
+                properties get no verdict.
+            check_consistency: Also compare the class the net computes with this
+                classifier's own prediction.
+            test_samples: Inputs for the conformance test (defaults to
+                ``samples``); one occurrence sequence each, so a whole test set
+                is affordable.
+            askctl: Write the matching ASK-CTL (SML) script next to each
+                ``.cpn``, ready to paste into CPN Tools.
+            verbose: Print the report of each verified model.
+
+        Returns:
+            ModelCheckResult: For ``which="initial"`` or ``"final"``.
+            Dict[str, ModelCheckResult]: For ``which="both"``, keyed by stage.
+
+        Example:
+            >>> analyzer.execute_rule_refinement(X=X_test, y=y_test)
+            >>> results = analyzer.model_check(which="both", samples=X_test[:5])
+            >>> results["final"].passed
+            True
+        """
+        from .model_checker import CPNModelChecker, compare_results
+
+        which = which.lower()
+        stages = ["initial", "final"] if which == "both" else [which]
+
+        paths: Dict[str, str] = {}
+        if cpn_path is not None:
+            if which == "both":
+                raise ValueError("cpn_path cannot be combined with which='both'")
+            paths[which] = cpn_path
+        else:
+            first = samples
+            if hasattr(samples, "iloc"):
+                first = samples.iloc[0]
+            elif isinstance(samples, (list, tuple)) and samples and \
+                    not isinstance(samples[0], (int, float)):
+                first = samples[0]
+            paths = self.export_hcpn(base_name=base_name, which=which,
+                                     sample=first)
+
+        results: Dict[str, Any] = {}
+        for stage in stages:
+            path = paths.get(stage)
+            if path is None:
+                continue
+            try:
+                labels = [int(c) for c in self.class_names]
+            except (TypeError, ValueError):
+                labels = None
+            checker = CPNModelChecker(path, feature_names=self.feature_names,
+                                      class_labels=labels, max_nodes=max_nodes)
+            result = checker.check(
+                samples=samples,
+                classifier=self.classifier if check_consistency else None,
+                use_final=(stage == "final"), test_samples=test_samples,
+                verbose=verbose,
+            )
+            if askctl:
+                checker.export_askctl(os.path.splitext(path)[0] + ".sml")
+            if verbose:
+                print(result.report())
+            results[stage] = result
+
+        if which == "both":
+            if verbose and len(results) == 2:
+                print()
+                print(compare_results(results["initial"], results["final"]))
+            return results
+        return results.get(stages[0])
 
     # ==========================================================================
     # SAVE/LOAD

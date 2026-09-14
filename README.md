@@ -30,6 +30,8 @@
 - [Full Arduino/ESP32 Sketch Export](#full-arduinoesp32-sketch-export)
 - [Modeling for Arduino / ESP32](#modeling-for-arduino--esp32)
 - [CPN Tools HCPN Export (Formal Verification)](#cpn-tools-hcpn-export-formal-verification)
+- [Automatic Model Checking](#automatic-model-checking)
+- [Verified Pipeline (train -> verify -> refine -> verify -> deploy)](#verified-pipeline-train---verify---refine---verify---deploy)
 - [Interactive Rule Editing](#interactive-rule-editing)
 - [Export Standalone Classifier](#export-standalone-classifier)
 - [Custom Rule Removal](#custom-rule-removal)
@@ -58,6 +60,10 @@
 | **Binary Export** | Compact `.bin` format for instant model loading via `load_binary()` |
 | **C Header Export** | Standalone `.h` file with a `predict()` function for Arduino and embedded targets |
 | **C Extension Acceleration** | Optional compiled C extension for tree traversal; falls back gracefully to numpy if unavailable |
+| **HCPN Export** | Converts the model into a CPN Tools `.cpn` Hierarchical Coloured Petri Net |
+| **Automatic Model Checking** | Builds the reachability graph of the generated net and answers 18 CTL properties without leaving Python |
+| **Verified Pipeline** | One call: train, verify, refine, verify again, export, deploy -- gated on the verification |
+| **ASK-CTL Generation** | Writes the CPN Tools SML query script matching the exported model |
 | **Interpretability Metrics** | Depth balance, attribute usage, complexity score, feature coverage |
 | **Interactive Editing** | Terminal-based rule editor: add/remove conditions, change class labels |
 | **Pickle Serialization** | Save/load models with automatic native model recompilation |
@@ -134,17 +140,19 @@ This process runs **iteratively until convergence** -- merging at one level may 
   4 rules                       2 rules                        1 rule
 ```
 
-#### b) Semantic Redundancy Removal (Inter-Tree, Random Forest)
+#### b) Semantic Redundancy Removal (Inter-Tree, Gradient Boosting)
 
-In Random Forests, different trees may produce **identical rules** (same conditions, same class). These are deduplicated into a single representative:
+Different boosting stages of the same class channel may contain **rules with identical regions** (same set of conditions). With `refine_between_trees=True` they are folded into one rule placed in one of the trees, whose contribution is the **sum** of theirs; the other trees abstain (add 0) on that region, so the score -- and every prediction -- is unchanged:
 
 ```
-    Tree 1:                     Tree 2:
-    Rule "RF1_Rule3":           Rule "RF2_Rule7":
-      v1 <= 3.5                  v1 <= 3.5          ──> SAME! Keep only one
-      v2 > 1.2                   v2 > 1.2               representative rule
-      Class: 1                   Class: 1
+    Stage 3:                    Stage 7:                     Merged (stage 3):
+    Rule "GBDT1T3_Rule2":       Rule "GBDT1T7_Rule5":        v1 <= 3.5
+      v1 <= 3.5                   v1 <= 3.5          ──>      v2 > 1.2
+      v2 > 1.2                    v2 > 1.2                    contribution = c3 + c7
+      contribution c3             contribution c7             (stage 7: no rule there)
 ```
+
+Random Forest refuses this stage: its prediction is the *average* of one distribution per tree, and removing voters changes the average.
 
 #### c) Low-Usage Refinement with Sibling Promotion
 
@@ -167,6 +175,8 @@ Rules that match very few (or zero) test samples are candidates for removal. Whe
 
 Promotion is processed **deepest-first** to handle cascading correctly -- promoting a deep rule may make its parent eligible for further promotion.
 
+Usage counts follow the rules through the refinement: a merged parent carries the sum of its two leaves' counts, and a promoted sibling adds the count of the rule it absorbed, so every final rule's `usage_count` is the number of refinement samples in its (possibly enlarged) region. The counts are measured on the data passed to `execute_rule_refinement`; evaluate the refined model on data that was **not** used there, or the reported accuracy is optimistic.
+
 #### d) Custom Refinement
 
 You can inject custom logic to remove specific rules based on domain knowledge. Provide a callback function that takes the list of rules and returns the rules to be kept:
@@ -187,16 +197,19 @@ Each algorithm type uses a different strategy to classify new samples:
     Decision Tree                Random Forest               GBDT
     ─────────────                ─────────────               ────
 
-    First-match:                 Majority voting:            Additive scoring:
+    First-match:                 Soft voting:                Additive scoring:
 
-    for rule in rules:           votes = {}                  for class_group:
-      if all conditions          for rule in rules:            score = init_score
-         match:                    if match:                   for tree:
-        return rule.class          votes[class] += 1             if match:
-                                 return max(votes)                 score += contribution
-    return default_class                                     binary:  sigmoid(score)
-                                                             multi:   argmax(scores)
+    for rule in rules:           p = zeros(n_classes)        for class_group:
+      if all conditions          for tree:                     score = init_score
+         match:                    if a rule matches:          for tree:
+        return rule.class            p += its distribution       if match:
+                                        (normalised)               score += contribution
+    return default_class         return argmax(p)            binary:  score >= 0
+                                  (default_class if no       multi:   argmax(scores)
+                                   tree matched)
 ```
+
+Every engine -- `classify`, `predict_batch`, the native function, the Python / binary / C / Arduino exports and the CPN -- computes exactly this function, for the initial and for the refined rule set (`tests/test_rule_fidelity.py` checks all of them against a reference implementation, on samples placed on and one ULP around every threshold). Models built from scikit-learn compare `float32(x)` with the thresholds, as scikit-learn does (`input_dtype='float32'`); the exports carry that setting.
 
 ### 4. Native Python Export
 
@@ -290,6 +303,9 @@ df = pd.read_csv("dataset.csv")
 X = df.iloc[:, :-1]
 y = df.iloc[:, -1]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+# Rule usage for the refinement is measured on a split of its own, so the
+# test set stays unseen by every step that changes the model.
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2)
 
 # 2. Create and Train (extracts rules automatically)
 model = PyRuleAnalyzer.new_model(model='Decision Tree')
@@ -297,7 +313,7 @@ model.fit(X_train, y_train)
 
 # 3. Optimize rules (removes redundancies + refines low-usage)
 model.execute_rule_refinement(
-    X=X_test, y=y_test, # Used for evaluating rule usage
+    X=X_val, y=y_val, # Used for evaluating rule usage
     remove_below_n_classifications=-1
 )
 
@@ -336,8 +352,8 @@ from pyruleanalyzer import PyRuleAnalyzer
 model = PyRuleAnalyzer.new_model(model='Random Forest')
 model.fit(X_train, y_train)
 
-# Safe to remove low-usage rules in ensemble models, and merge inter-tree clones
-model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1, refine_between_trees=True)
+# Low-usage rules can be removed; inter-tree merging is refused for RF (soft vote)
+model.execute_rule_refinement(X=X_val, y=y_val, remove_below_n_classifications=1)
 model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 
@@ -349,7 +365,10 @@ from pyruleanalyzer import PyRuleAnalyzer
 model = PyRuleAnalyzer.new_model(model='Gradient Boosting Decision Trees')
 model.fit(X_train, y_train)
 
-model.execute_rule_refinement(X=X_test, y=y_test, remove_below_n_classifications=1)
+# Usage is measured on a validation split; stages with identical regions are
+# folded together (sum of contributions, predictions unchanged)
+model.execute_rule_refinement(X=X_val, y=y_val, remove_below_n_classifications=1,
+                              refine_between_trees=True)
 model.compare_initial_final_results(X=X_test, y=y_test)
 ```
 
@@ -541,7 +560,7 @@ Decision Trees*):
 - **Theorem 2 (GBDT → HCPN).** Each class channel evaluates the `M` boosting
   stages sequentially and accumulates `s + η·vₘ` from the initial estimator
   `s₀`. Every stage is a *substitution transition* bound to its tree subpage.
-- **Decision module.** Binary GBDT uses the sigmoid threshold (`s_M ≥ 0`);
+- **Decision module.** Binary GBDT decides on the sign of the score (`s_M ≥ 0`, scikit-learn's `raw_predictions >= 0`);
   multiclass GBDT uses NumPy-compatible `argmax` tie-breaking (lowest index wins
   ties). Decision Tree models export as a single CPN page, and Random Forest as
   a top page with one tree subpage per estimator — each emitting its leaf's
@@ -558,6 +577,175 @@ python examples/generate_hcpn_example.py                       # binary GBDT
 python examples/generate_hcpn_example.py --classes 3           # multiclass GBDT
 python examples/generate_hcpn_example.py --model "Random Forest"
 ```
+
+### Automatic Model Checking
+
+Exporting the net is half the job; the other half is checking that it still
+behaves like a classifier. pyRuleAnalyzer builds the **occurrence graph** of the
+generated `.cpn` under the Coloured Petri Net firing rule -- real token values,
+no abstraction, read from the file CPN Tools would open -- and verifies it:
+
+```python
+from pyruleanalyzer import check_cpn
+
+result = check_cpn("files/gbdt_final.cpn", class_labels=[0, 1, 2],
+                   samples=X_test.iloc[:3],                  # model checked
+                   classifier=analyzer.classifier, test_samples=X_test)
+print(result.report())
+```
+
+```
+Model checking: hcpn_mc3_final.cpn  [Gradient Boosting Decision Trees]
+============================================================================
+  occurrence graph : 19685 nodes, 56864 arcs
+  SCC graph        : 19685 nodes, 56864 arcs, 1 dead marking(s), 1 home marking(s)
+  semantics        : CTL over the occurrence graph, dead markings with a self-loop
+
+  CTL model checking on the occurrence graph
+  ------------------------------------------------------------------------------
+  A1   Termination                  AF dead                                  PASS
+  A2   No spurious deadlock         !EF(dead & !pred)                        PASS
+  A3   Inevitable decision          AF pred                                  PASS
+  A4   Prediction recoverability    AG EF pred                               PASS
+  A5   Unique output                AG |Prediction| <= 1                     PASS
+  A6   Valid label                  AG Prediction subset L                   PASS
+  A7   Safeness                     AG forall p: |p| <= 1                    PASS
+  B1   Leaf determinism             forall T: AG |EN(leaves_T)| <= 1         PASS
+  B2   Inevitable leaf selection    forall T: AF EN(leaves_T)                PASS
+  B3   Single tree output           forall T: AG |out_T| <= 1                PASS
+  C1   Stage precedence             forall k,m: !E[!acc(k,m-1) U acc(k,m)]   PASS
+  C2   No premature score           forall k: !E[!acc(k,M) U score(k)]       PASS
+  C3a  Inevitable decision firing   AF EN(decide)                            PASS
+  C3b  Decision determinism         AG |EN(decide)| <= 1                     PASS
+
+  SCC analysis of the occurrence graph
+  ------------------------------------------------------------------------------
+  A8   Home marking                 one terminal SCC                         PASS
+
+  Structural guard analysis (every input)
+  ------------------------------------------------------------------------------
+  B4   Guard disjointness           forall T, i!=j: box_i & box_j = {}       PASS
+
+  16 passed, 0 failed, 0 skipped -- VERIFIED
+```
+
+Four techniques, reported separately because they establish different things:
+
+| Technique | Properties | Establishes |
+|---|---|---|
+| **CTL model checking** on the occurrence graph | A1-A7, B1-B3, C1-C3b, D1-D2b | temporal properties of every execution, for the input in the initial marking |
+| **SCC analysis** | A8 home marking | a marking reachable from every marking (not a CTL formula) |
+| **Structural guard analysis** | B4 guard disjointness | the leaves partition the feature space, for **every** input |
+| **Conformance testing** | PC | the net computes the classifier's class, on the tested inputs |
+
+Readings worth keeping straight: A3 is *inevitability* (`AF`), not
+reachability; A4 (`AG EF pred`) is *not* a home-marking property -- that is A8;
+B1 is per input while B4 covers every input, so a refinement overlap the tested
+input never reaches passes B1 and fails B4; and the temporal properties say the
+net *behaves like a classifier*, not that it computes the right class -- a net
+predicting a wrong but valid class passes every CTL property and fails only PC.
+
+**Dead markings.** The checker uses textbook CTL with a self-loop on dead
+markings, so a run that stops before `phi` refutes `AF phi`. CPN Tools' ASK-CTL
+does not: its `EV` is vacuously true at a dead marking (read from
+`cpnsim/statespacefiles/ASKCTL/ASKCTL.sml`, and confirmed by running it), so a
+net that deadlocks before predicting satisfies `EV(PRED)`. The generated
+ASK-CTL scripts encode `AF phi` as `EV(phi) AND NOT E[not phi U (dead and not phi)]`.
+
+**Validated against CPN Tools.** `pyruleanalyzer.cpntools_oracle` runs the
+CPN Tools 4.0.1 simulator headlessly -- compiling the net, entering the
+state-space tool exactly as the GUI does, and evaluating the generated ASK-CTL
+queries -- and `pyruleanalyzer.cpn_mutants` derives one mutant per property, so
+agreement is also measured on nets where the properties fail:
+
+```bash
+python examples/cpn_tools_crosscheck.py        # -> files/crosscheck/report.md
+```
+
+**State-space explosion.** A `K`-class GBDT with `M` stages per class has
+`(3M+3)^K + 2` markings (the test suite checks the formula). Beyond `max_nodes`
+the state-space properties get no verdict; the structural analysis and the
+conformance test still run.
+
+From the analyzer, verifying both stages reports what the refinement changed:
+
+```python
+results = analyzer.model_check(which="both", samples=X_test.iloc[:3],
+                               test_samples=X_test, askctl=True)
+```
+
+`askctl=True` also writes, next to each `.cpn`, the CPN Tools script asking the
+same questions (evaluate `use "<file>.sml";` after *Enter State Space*).
+
+---
+
+### Verified Pipeline (train -> verify -> refine -> verify -> deploy)
+
+`verified_pipeline()` chains the whole flow and makes the verification a gate
+rather than a report:
+
+```python
+from pyruleanalyzer import verified_pipeline
+
+result = verified_pipeline(
+    train_csv="data/train.csv", test_csv="data/test.csv",
+    target_feature="Target",
+    model_type="Gradient Boosting Decision Trees",
+    params={"n_estimators": 8, "max_depth": 3, "random_state": 42},
+    remove_below_n_classifications=1,
+    verify_samples=3,
+    export_formats=("python", "binary", "c", "arduino"),
+)
+
+result["passed"]                       # every property held on both models
+result["verification"]["final"].report()
+result["exports"]["arduino"]           # files/model.ino
+```
+
+```
+1. train a scikit-learn model, or take one that is already trained
+2. extract the rules and export the initial HCPN
+3. model check the initial model                      (baseline)
+4. refine the rules
+5. model check the refined model                      (acceptance test)
+6. export: Python, binary, C header, Arduino sketch
+7. deploy to the edge device                          (optional)
+```
+
+With `fail_on_violation=True` (the default) step 5 raises `VerificationError`
+instead of exporting a model whose net no longer satisfies what the initial one
+did; the failing `ModelCheckResult` is attached to the exception.
+
+An already-trained estimator skips step 1:
+
+```python
+clf = RandomForestClassifier(n_estimators=50).fit(X_train, y_train)
+
+result = verified_pipeline(X=X, y=y, sklearn_model=clf,
+                           export_formats=("c", "arduino"))
+```
+
+`PyRuleAnalyzer.from_sklearn(clf)` does the same wrapping on its own, for use
+outside the pipeline.
+
+To also flash the board, give the pipeline the board's FQBN and port; it drives
+`arduino-cli` and reports the exact commands when the CLI is not installed:
+
+```python
+verified_pipeline(..., export_formats=("arduino",),
+                  deploy_fqbn="arduino:avr:nano", deploy_port="COM3",
+                  upload=True)
+```
+
+```bash
+python examples/verified_pipeline_example.py
+python examples/verified_pipeline_example.py --classes 3 --askctl
+python examples/verified_pipeline_example.py --arduino --fqbn arduino:avr:nano --port COM3 --upload
+```
+
+For a full hardware-in-the-loop run (compile, upload, drive the board over
+serial and compare its predictions against the host), see
+`examples/arduino_hardware_test.py`.
 
 ### Interactive Rule Editing
 
@@ -707,10 +895,10 @@ The main class that handles the entire pipeline.
 
 | Method | Description |
 |---|---|
-| `classify(sample, final=False)` | Classify a sample dict; returns `(class, votes, probabilities)` |
-| `predict_batch(X, feature_names=None, use_final=True)` | Vectorized batch prediction over a numpy array; returns int32 class labels |
-| `predict_batch_proba(X, feature_names=None)` | Vectorized batch probability prediction; returns float64 array of shape `(n_samples, n_classes)` |
-| `compile_tree_arrays(rules=None, feature_names=None)` | Compile rules into flat numpy arrays for `predict_batch()` / `predict_batch_proba()` |
+| `classify(sample, final=False)` | Classify a sample dict with `initial_rules` (`final=False`) or `final_rules` (`final=True`); returns `(class, votes, probabilities)` |
+| `predict_batch(X, feature_names=None, use_final=None)` | Vectorized batch prediction; `use_final=True/False` selects the refined/initial rule set (compiled on first use), `None` uses the arrays compiled last; returns int32 class labels |
+| `predict_batch_proba(X, feature_names=None, use_final=None)` | Vectorized batch probability prediction; returns float64 array of shape `(n_samples, n_classes)` |
+| `compile_tree_arrays(rules=None, feature_names=None)` | Compile rules into flat numpy arrays for `predict_batch()` / `predict_batch_proba()`; raises if the rules of a tree overlap (not a partition) |
 | `classify_dt(data, rules)` | Static: first-match classification for Decision Trees |
 | `classify_rf(data, rules)` | Static: majority-voting classification for Random Forests |
 | `classify_gbdt(data, rules, init_scores, is_binary, classes)` | Static: additive scoring for GBDT |
@@ -770,6 +958,23 @@ Specialized wrappers for algorithm-specific analysis:
 
 Each provides `execute_rule_refinement()` and `compare_initial_final_results()` with algorithm-specific progress tracking and redundancy breakdowns.
 
+### Verification API
+
+| Object | Purpose |
+|---|---|
+| `PyRuleAnalyzer.from_sklearn(model, feature_names=None)` | Wrap an already-fitted sklearn estimator and extract its rules |
+| `PyRuleAnalyzer.export_hcpn(base_name, which="both", sample=None)` | Write the `.cpn` model(s) for CPN Tools |
+| `PyRuleAnalyzer.model_check(which="final", samples=None, ...)` | Export if needed and verify; `which="both"` also reports the regressions |
+| `check_cpn(path, samples=None, classifier=None, class_labels=None)` | Verify an existing `.cpn` in one call |
+| `CPNToolsOracle()` / `compare_with_oracle(path)` | Run CPN Tools 4.0.1 headlessly and compare every value |
+| `make_mutants(path, out_dir)` | One mutant per property, for sensitivity checks |
+| `CPNModelChecker(path)` | The checker itself: `.check()`, `.ml_program()`, `.export_askctl()` |
+| `ModelCheckResult` | `.passed`, `.failures`, `.properties`, `.report()`, `.to_dict()`, `.latex_rows()`, `.latex_table()` |
+| `compare_results(initial, final)` | Side-by-side verdicts, flagging every regression |
+| `PROPERTY_CATALOG` | The property descriptors: id, name, CTL formula, kind, families |
+| `verified_pipeline(...)` | The whole flow, gated on the verification |
+| `VerificationError` | Raised when the pipeline refuses to export; carries the failing result |
+
 ---
 
 ## Project Structure
@@ -783,11 +988,21 @@ pyruleanalyzer/
 │   ├── _tree_traversal.c        # C extension for vectorized tree traversal
 │   ├── dt_analyzer.py           # Decision Tree analyzer (wraps RuleClassifier)
 │   ├── rf_analyzer.py           # Random Forest analyzer (wraps RuleClassifier)
-│   └── gbdt_analyzer.py         # GBDT analyzer (wraps RuleClassifier)
+│   ├── gbdt_analyzer.py         # GBDT analyzer (wraps RuleClassifier)
+│   ├── cpn_tools_exporter.py    # HCPN export in the CPN Tools .cpn format
+│   ├── cpn_semantics.py         # Reads a .cpn back and evaluates what it denotes
+│   ├── cpn_statespace.py        # Occurrence graph under the CPN firing rule + SCCs
+│   ├── model_checker.py         # CTL / SCC / structural / conformance verification
+│   ├── cpntools_oracle.py       # Runs CPN Tools 4.0.1 headlessly for cross-checks
+│   ├── cpn_mutants.py           # One mutant per property (sensitivity)
+│   ├── full_pipeline.py         # Data -> Arduino sketch shortcut
+│   └── verified_pipeline.py     # Train -> verify -> refine -> verify -> deploy
 ├── tests/
 │   ├── test_dt_invariants.py    # Decision Tree invariant test suite (25 configs)
 │   ├── test_rf_invariants.py    # Random Forest invariant test suite (25 configs)
-│   └── test_gbdt_invariants.py  # GBDT invariant test suite (25 configs)
+│   ├── test_gbdt_invariants.py  # GBDT invariant test suite (25 configs)
+│   ├── test_cpn_export.py       # .cpn structure, DTD validity, prediction consistency
+│   └── test_model_checker.py    # Properties, mutants, CPN Tools agreement, gating
 ├── examples/
 │   ├── data/                    # CSV datasets for testing
 │   ├── files/                   # Generated outputs (pkl, txt, py, bin, h)
@@ -809,7 +1024,7 @@ pyruleanalyzer/
 
 ## Output Formats
 
-pyRuleAnalyzer produces five types of output files:
+pyRuleAnalyzer produces seven types of output files:
 
 | Format | File | Description |
 |---|---|---|
@@ -822,6 +1037,10 @@ pyRuleAnalyzer produces five types of output files:
 | **Standalone Python** (`.py`) | `*_classifier.py` | Zero-dependency predict function (DT/RF: no imports; GBDT: `math` only) |
 | **Binary** (`.bin`) | `model.bin` | Compact compiled tree arrays for `predict_batch()` / `load_binary()` |
 | **C Header** (`.h`) | `model.h` | Standalone `predict()` function for embedded targets (Arduino, STM32, ESP32) |
+| **Arduino Sketch** (`.ino`) | `model.ino` | Self-contained sketch with the model inlined, ready for `arduino-cli` |
+| **HCPN** (`.cpn`) | `model_initial.cpn` | Hierarchical Coloured Petri Net of the unrefined model, for CPN Tools |
+| | `model_final.cpn` | HCPN of the refined model |
+| **ASK-CTL** (`.sml`) | `model_final.sml` | CPN Tools query script generated for that specific net |
 
 ---
 

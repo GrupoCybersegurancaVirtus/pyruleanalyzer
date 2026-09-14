@@ -50,11 +50,12 @@ Stage 1 — TRAINING + EXPORT (host, no hardware)
 
 Stage 2 — HIL SKETCH GENERATION (host, no hardware)
     The script cuts the "MODEL DATA + PREDICTION ENGINE" section out of the
-    production .ino (everything before "ARDUINO SKETCH SECTION"), fixes known
-    defects of the generator (the "Feature order:" lines are emitted without
-    "//" and break compilation; the feature buffer is declared as float and
-    passed through a cast to const double*, which reads garbage on any platform
-    where float != double) and appends the serial harness on top. Result:
+    production .ino (everything before "ARDUINO SKETCH SECTION"), patches two
+    defects of older generators (the "Feature order:" lines emitted without
+    "//"; a float feature buffer passed through a cast to const double*, which
+    reads garbage where float != double -- both fixed in the generator since
+    2026-09; the patch is a no-op on current output) and appends the serial
+    harness on top. Result:
     files/hil/<name>_hil/<name>_hil.ino.
     Arduino rule: the folder must have the same name as the .ino.
 
@@ -328,7 +329,8 @@ void loop(void) {
 def extract_model_section(ino_text):
     """Cut the reusable part of the .ino (data + engine) and patch its defects.
 
-    Two known defects of the current generator are fixed here:
+    Two defects of older generators are fixed here (current output is
+    already correct, and the patch leaves it unchanged):
       1. the "Feature order:" block is emitted as "  [0] name", without "//",
          which does not compile;
       2. the production sketch declares `float features[]` and calls

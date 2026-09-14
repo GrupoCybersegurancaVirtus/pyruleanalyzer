@@ -207,36 +207,18 @@ class GBDTAnalyzer:
         y_pred_arr = np.array(y_pred)
         correct = np.sum(y_pred_arr == y_test)
 
-        # Detect and remove intra-tree duplicated rules (soft mode)
-        # This is equivalent to the old remove_duplicates="soft" behavior
-        duplicated_pairs = clf.find_duplicated_rules(type='soft')
+        # Boundary redundancy: merge sibling leaves with the same output into
+        # their parent, repeating until no pair is left (a merge can make the
+        # parent redundant with its own sibling). Predictions do not change.
+        # Merged rules carry the usage of the leaves they replace, which the
+        # low-usage stage below decides on.
+        duplicated_pairs = clf.merge_boundary_redundancy()
         intra_tree_count = len(duplicated_pairs)
         self.redundancy_counts["intra_tree"] = intra_tree_count
-        
+
         if duplicated_pairs:
-            print(f'Found {intra_tree_count} duplicated rule pairs (intra-tree).')
-            # Create generalized rules by merging the siblings
-            rules_to_remove_ids = set()
-            new_generalized_rules = []
-            for rule1, rule2 in duplicated_pairs:
-                rules_to_remove_ids.add(id(rule1))
-                rules_to_remove_ids.add(id(rule2))
-                common_conditions = rule1.conditions[:-1]
-                new_rule_name = f"{rule1.name}_&_{rule2.name}"
-                
-                # For GBDT it is important to pass the correct metadata
-                new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
-                    new_rule_name, rule1.class_, common_conditions,
-                    leaf_value=getattr(rule1, 'leaf_value', 0.0),
-                    learning_rate=getattr(rule1, 'learning_rate', 0.1),
-                    class_group=getattr(rule1, 'class_group', 0)
-                )
-                if hasattr(rule1, 'parsed_conditions') and rule1.parsed_conditions:
-                    new_rule.parsed_conditions = rule1.parsed_conditions[:-1]
-                new_generalized_rules.append(new_rule)
-                
-            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
-            print(f'Rules after removing duplicates: {len(clf.final_rules)}')
+            print(f"Found {intra_tree_count} duplicated rule pairs (intra-tree).")
+            print(f"Rules after removing duplicates: {len(clf.final_rules)}")
             clf.update_native_model(clf.final_rules)
 
         # Low-usage refinement with sibling promotion
@@ -275,20 +257,29 @@ class GBDTAnalyzer:
                 for group in similar_rule_groups:
                     for rule in group:
                         rules_to_remove_ids.add(id(rule))
-                    representative = group[0]
+                    # The merged rule joins the tree of the first name (its
+                    # tree id is the prefix of `new_name`), replacing that
+                    # tree's rule for the same region; it must therefore keep
+                    # that rule's conditions in that tree's path order.
+                    representative = min(group, key=lambda r: r.name)
                     new_name = "_&_".join(sorted([r.name for r in group]))
-                    
-                    # For GBDT, we sum the leaf values
+
+                    # For GBDT, we sum the leaf values: the other trees now
+                    # abstain (add 0.0) on this region, so the score is kept.
                     merged_leaf_value = sum(getattr(r, 'leaf_value', 0.0) for r in group)
-                    
+
                     new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
                         new_name, representative.class_, representative.conditions,
                         leaf_value=merged_leaf_value,
                         learning_rate=getattr(representative, 'learning_rate', 0.1),
                         class_group=getattr(representative, 'class_group', 0)
                     )
-                    if hasattr(representative, 'parsed_conditions') and representative.parsed_conditions:
-                        new_rule.parsed_conditions = representative.parsed_conditions
+                    # What the separate rules added to the score (lr * v each).
+                    new_rule.contribution = sum(r.contribution for r in group)
+                    new_rule.parsed_conditions = list(representative.parsed_conditions)
+                    # Same region, so the same samples: counts are not summed.
+                    new_rule.usage_count = representative.usage_count
+                    new_rule.error_count = representative.error_count
                     new_generalized_rules.append(new_rule)
                 
                 clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules

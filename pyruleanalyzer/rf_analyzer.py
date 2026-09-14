@@ -178,8 +178,11 @@ class RFAnalyzer:
         tree_lookups: Dict[str, tuple] = {}
         for tree_id, rules in tree_rules_map.items():
             lookup_fn = clf._compile_tree_lookup(rules)
-            if lookup_fn:
-                tree_lookups[tree_id] = (lookup_fn, rules)
+            if lookup_fn is None:
+                # Never skip a tree: its rules would all count zero uses and
+                # the low-usage stage would delete them.
+                raise RuntimeError(f'Could not compile the lookup of tree {tree_id}.')
+            tree_lookups[tree_id] = (lookup_fn, rules)
 
         # Main Classification Loop (Soft Voting)
         for i, sample in enumerate(sample_dicts):
@@ -276,42 +279,17 @@ class RFAnalyzer:
         y_pred_arr = np.array(y_pred)
         correct = np.sum(y_pred_arr == y_test)
 
-        # Detect and remove intra-tree duplicated rules (soft mode)
-        # This is equivalent to the old remove_duplicates="soft" behavior
-        duplicated_pairs = clf.find_duplicated_rules(type='soft')
+        # Boundary redundancy: merge sibling leaves with the same output into
+        # their parent, repeating until no pair is left (a merge can make the
+        # parent redundant with its own sibling). Predictions do not change.
+        # Merged rules carry the usage of the leaves they replace, which the
+        # low-usage stage below decides on.
+        duplicated_pairs = clf.merge_boundary_redundancy()
         intra_tree_count = len(duplicated_pairs)
         self.redundancy_counts["intra_tree"] = intra_tree_count
-        
+
         if duplicated_pairs:
             print(f"Found {intra_tree_count} duplicated rule pairs (intra-tree).")
-            # Create generalized rules by merging the siblings
-            rules_to_remove_ids = set()
-            new_generalized_rules = []
-            for rule1, rule2 in duplicated_pairs:
-                rules_to_remove_ids.add(id(rule1))
-                rules_to_remove_ids.add(id(rule2))
-                common_conditions = rule1.conditions[:-1]
-                new_rule_name = f"{rule1.name}_&_{rule2.name}"
-                combined_dist = None
-                merged_class = rule1.class_
-                if hasattr(rule1, 'class_distribution') and rule1.class_distribution is not None and hasattr(rule2, 'class_distribution') and rule2.class_distribution is not None:
-                    combined_dist = [a + b for a, b in zip(rule1.class_distribution, rule2.class_distribution)]
-                    best_idx = combined_dist.index(max(combined_dist))
-                    merged_class = str(best_idx)
-                elif hasattr(rule1, 'class_distribution') and rule1.class_distribution is not None:
-                    combined_dist = list(rule1.class_distribution)
-                elif hasattr(rule2, 'class_distribution') and rule2.class_distribution is not None:
-                    combined_dist = list(rule2.class_distribution)
-                
-                new_rule = __import__('pyruleanalyzer.rule_classifier').rule_classifier.Rule(
-                    new_rule_name, merged_class, common_conditions,
-                    class_distribution=combined_dist
-                )
-                if hasattr(rule1, 'parsed_conditions') and rule1.parsed_conditions:
-                    new_rule.parsed_conditions = rule1.parsed_conditions[:-1]
-                new_generalized_rules.append(new_rule)
-                
-            clf.final_rules = [r for r in clf.final_rules if id(r) not in rules_to_remove_ids] + new_generalized_rules
             print(f"Rules after removing duplicates: {len(clf.final_rules)}")
             clf.update_native_model(clf.final_rules)
 

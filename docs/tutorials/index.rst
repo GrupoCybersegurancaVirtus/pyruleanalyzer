@@ -9,4 +9,5 @@ decision rules from Decision Tree, Random Forest, and Gradient Boosting Decision
 
    usage
    modeling_for_arduino
+   model_checking
    examples/index

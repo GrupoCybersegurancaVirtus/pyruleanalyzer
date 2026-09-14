@@ -19,6 +19,25 @@ from pyruleanalyzer._accel import (
     HAS_C_EXTENSION as _HAS_C_EXT,
 )
 
+
+# Function to order tree identifiers by estimator index.
+def _tree_sort_key(tid):
+    """Sort key that orders tree ids by their numbers, not as text.
+
+    Tree ids carry the estimator index ('DT10', 'GBDT1T12'). Sorted as text,
+    'DT10' precedes 'DT2', so the trees' outputs would be added in another
+    order than scikit-learn adds its estimators; floating-point addition is
+    not associative, so the sums could differ in the last bit and flip a
+    decision that sits on a tie (RF) or on score 0 (binary GBDT).
+
+    Args:
+        tid (str): Tree identifier.
+
+    Returns:
+        list: Alternating text and integer parts of `tid`.
+    """
+    return [int(p) if p.isdigit() else p for p in re.split(r'(\d+)', str(tid))]
+
 # Class to represent a rule
 class Rule:
     """
@@ -206,6 +225,11 @@ class RuleClassifier(RuleExporterMixin):
         self._tree_is_init: Optional[list] = None
         self._array_feature_names: list = []
         self._arrays_compiled: bool = False
+        # Rule list the current arrays were compiled from, and the other
+        # compiled sets (see compile_tree_arrays / _array_state_for).
+        self._arrays_source: Optional[list] = None
+        self._arrays_source_len: Optional[int] = None
+        self._array_states: list = []
 
         # --- UNCOVERED-REGION (FALLBACK) ACCOUNTING ---
         # Refinement can leave regions of the feature space with no matching
@@ -293,6 +317,10 @@ class RuleClassifier(RuleExporterMixin):
         # Remove the unpicklable function
         if 'native_fn' in state:
             del state['native_fn']
+        state.pop('_native_source', None)
+        # Compiled rule sets other than the current one are a cache: rebuilt
+        # on demand, not worth the size of the pickle.
+        state['_array_states'] = []
         # Also remove custom_rule_removal if it's a lambda or local function
         if 'custom_rule_removal' in state:
              # Reset to default logic string or None to be safe, 
@@ -324,8 +352,12 @@ class RuleClassifier(RuleExporterMixin):
             self.fallback_activations = 0
         if not hasattr(self, 'input_dtype'):
             self.input_dtype = None
+        if not hasattr(self, '_array_states'):
+            self._array_states = []
+        self._native_source = None
 
-        # Auto-recompile the native model upon loading
+        # Auto-recompile the native model upon loading (classify only uses it
+        # for this rule set; see _native_source)
         rules_to_compile = self.final_rules if self.final_rules else self.initial_rules
         if rules_to_compile:
             self.update_native_model(rules_to_compile)
@@ -432,26 +464,15 @@ class RuleClassifier(RuleExporterMixin):
         # Map rule logic to rule index
         # We need to ensure we don't change the order of rules passed in
         
-        # Build tree structure
-        tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
-        next_id = 1
-        
-        for idx, rule in enumerate(rules_to_compile):
-            curr = 0
-            for var, op, val in rule.parsed_conditions:
-                if tree_dict[curr]['f'] == -2:
-                    tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                    tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                    next_id += 2
-                
-                if op in ['<=', '<']:
-                    curr = tree_dict[curr]['l']
-                else:
-                    curr = tree_dict[curr]['r']
-            
-            # Store the index of the rule at the leaf
-            tree_dict[curr]['v'] = idx
+        # Build tree structure. Raises if the rules are not the leaves of one
+        # tree: a lookup through a wrong tree would credit the usage of one
+        # rule to another, and the low-usage refinement acts on those counts.
+        tree_dict = self._tree_from_rules(rules_to_compile)
+        index_of = {id(r): i for i, r in enumerate(rules_to_compile)}
+        for node in tree_dict.values():
+            rule = node.pop('rule', None)
+            # Store the index of the rule at the leaf (-1: uncovered)
+            node['v'] = index_of[id(rule)] if rule is not None else -1
 
         # Build code
         def build_code(node_id, indent):
@@ -488,6 +509,31 @@ class RuleClassifier(RuleExporterMixin):
         except Exception:
             return None
 
+    # Method to rebuild one tree for the native function
+    def _native_tree(self, rules):
+        """Rebuild one tree for `update_native_model`, or None if impossible.
+
+        The native function is only an accelerator: when the rules are not the
+        leaves of a tree (see `_tree_from_rules`) it is not built, and
+        `classify` falls back to the iterative engine instead of routing
+        samples through a tree that does not compute the rules.
+
+        Args:
+            rules (List[Rule]): The rules of one tree.
+
+        Returns:
+            Dict[int, dict] | None: The nodes, or None when the rules are not
+            a tree (a warning says why).
+        """
+        try:
+            return self._tree_from_rules(rules)
+        except ValueError as exc:
+            import warnings
+            warnings.warn(f'Native model not compiled: {exc}', RuntimeWarning,
+                          stacklevel=3)
+            self.native_fn = None
+            return None
+
     # Method to compile rules into a native Python function
     def update_native_model(self, rules_to_compile):
         """
@@ -500,6 +546,11 @@ class RuleClassifier(RuleExporterMixin):
         Args:
             rules_to_compile (List[Rule]): The rules to be compiled.
         """
+        # `classify` may only answer from native_fn for the rule set it was
+        # compiled from; remember which one that is.
+        self.native_fn = None
+        self._native_source = rules_to_compile
+
         # --- GBDT Compilation (Additive Scoring) ---
         if self.algorithm_type == 'Gradient Boosting Decision Trees':
             import math as _math
@@ -536,22 +587,14 @@ class RuleClassifier(RuleExporterMixin):
                     continue
 
                 func_name = f'predict_{tid}'
-                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}}
-                next_id = 1
-
-                for rule in rules:
-                    curr = 0
-                    for var, op, val in rule.parsed_conditions:
-                        if tree_dict[curr]['f'] == -2:
-                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
-                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
-                            next_id += 2
-                        if op in ['<=', '<']:
-                            curr = tree_dict[curr]['l']
-                        else:
-                            curr = tree_dict[curr]['r']
-                    tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
+                tree_dict = self._native_tree(rules)
+                if tree_dict is None:
+                    return
+                for node in tree_dict.values():
+                    rule = node.pop('rule', None)
+                    # Uncovered region: the stage abstains (adds 0.0).
+                    node['v'] = (rule.contribution if rule is not None
+                                 and rule.contribution is not None else 0.0)
 
                 # Method to _build_code.
                 def _build_code(node_id, indent, td=tree_dict):
@@ -598,8 +641,12 @@ class RuleClassifier(RuleExporterMixin):
                         continue
                     func_name = f'predict_{tid}'
                     func_code += f'    score += {func_name}(sample)\n'
-                func_code += '    prob = 1.0 / (1.0 + math.exp(-score))\n'
-                func_code += '    if prob >= 0.5:\n'
+                # Decide on the raw score, as scikit-learn does
+                # (raw_predictions >= 0). sigmoid(score) >= 0.5 is not the
+                # same test in floating point: sigmoid rounds to exactly 0.5
+                # for negative scores of magnitude below ~1e-16 and would pick
+                # the positive class.
+                func_code += '    if score >= 0.0:\n'
                 func_code += f'        return {int(classes[1])}, None, None\n'
                 func_code += '    else:\n'
                 func_code += f'        return {int(classes[0])}, None, None\n'
@@ -659,22 +706,16 @@ class RuleClassifier(RuleExporterMixin):
                 tree_func_names.append(func_name)
                 
                 # Build tree structure — store probability distribution at leaves
-                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}}
-                next_id = 1
-                
-                for rule in rules:
-                    curr = 0
-                    for var, op, val in rule.parsed_conditions:
-                        if tree_dict[curr]['f'] == -2:
-                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
-                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
-                            next_id += 2
-                        if op in ['<=', '<']:
-                            curr = tree_dict[curr]['l']
-                        else:
-                            curr = tree_dict[curr]['r']
-                    
+                tree_dict = self._native_tree(rules)
+                if tree_dict is None:
+                    return
+
+                for curr, node in tree_dict.items():
+                    rule = node.pop('rule', None)
+                    node['v'] = None
+                    if rule is None:
+                        continue  # uncovered region: the tree abstains
+
                     # Store normalized probability distribution at leaf
                     # (raw counts -> probabilities at compile time for fast runtime)
                     if rule.class_distribution is not None:
@@ -763,26 +804,18 @@ class RuleClassifier(RuleExporterMixin):
 
         # --- Decision Tree Compilation (Single Tree) ---
         else:
-            tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
-            next_id = 1
-            for rule in rules_to_compile:
-                curr = 0
-                for var, op, val in rule.parsed_conditions:
-                    if tree_dict[curr]['f'] == -2:
-                        tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                        tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                        tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                        next_id += 2
-                    if op in ['<=', '<']:
-                        curr = tree_dict[curr]['l']
-                    else:
-                        curr = tree_dict[curr]['r']
-                
+            tree_dict = self._native_tree(rules_to_compile)
+            if tree_dict is None:
+                return
+            for node in tree_dict.values():
+                rule = node.pop('rule', None)
+                if rule is None:
+                    node['v'] = -1  # uncovered region -> default_class
+                    continue
                 try:
-                    clean_class = int(str(rule.class_).replace('Class', '').strip())
+                    node['v'] = int(str(rule.class_).replace('Class', '').strip())
                 except Exception:
-                    clean_class = rule.class_
-                tree_dict[curr]['v'] = clean_class
+                    node['v'] = rule.class_
 
             # Method to build_dt_code.
             def build_dt_code(node_id, indent):
@@ -834,13 +867,16 @@ class RuleClassifier(RuleExporterMixin):
         """
         Classifies a single data instance using extracted rules.
 
-        This method delegates the classification logic. If 'final' is False (using initial rules)
-        and the native function is compiled, it uses the high-performance in-memory function.
-        Otherwise, it falls back to iterative evaluation.
+        This method delegates the classification logic to the compiled tree
+        arrays, to the native function when it was compiled from the requested
+        rule set, or to iterative evaluation. All three answer with the rule
+        set `final` selects.
 
         Args:
             data (Dict[str, float]): The instance to classify.
-            final (bool): If True, uses `final_rules` (post-analysis).
+            final (bool): If True, uses `final_rules` (post-analysis; the
+                initial rules when refinement has not run). If False, uses
+                `initial_rules`.
 
         Returns:
             Tuple[int, List[int]|None, List[float]|None]: 
@@ -854,9 +890,13 @@ class RuleClassifier(RuleExporterMixin):
             if _v != _v:   # NaN, whatever the numeric type
                 self._assert_no_missing_values(np.array([np.nan]))
 
+        # Every path below must answer with the rule set `final` selects:
+        # final_rules, or initial_rules when there are none yet.
+        rules = self._rules_for(final)
+
         # --- FAST PATH 1: Array-based single-sample prediction ---
-        # Works for BOTH initial and final rules (arrays are compiled for whichever
-        # rule set is current). This fixes the final=True bypass bug.
+        # predict_batch selects (and, the first time, compiles) the arrays of
+        # the requested rule set, so this path cannot answer with the other.
         if self._arrays_compiled:
             try:
                 row = np.array(
@@ -864,14 +904,25 @@ class RuleClassifier(RuleExporterMixin):
                     dtype=np.float64,
                 )
                 # predict_batch applies the configured input precision itself.
-                pred = self.predict_batch(row)[0]
+                pred = self.predict_batch(
+                    row, feature_names=list(self._array_feature_names),
+                    use_final=final)[0]
                 clean_class = int(pred)
                 return clean_class, None, None
             except Exception:
                 pass  # Fallback to slower paths
 
-        # --- FAST PATH 2: Native function (exec-compiled, initial rules only) ---
-        if not final and self.native_fn is not None:
+        if self.input_dtype == 'float32':
+            data = {
+                k: (float(np.float32(v)) if isinstance(v, (int, float)) else v)
+                for k, v in data.items()
+            }
+
+        # --- FAST PATH 2: Native function (exec-compiled) ---
+        # Only valid for the rule set it was compiled from (update_native_model
+        # is also called on the refined rules, and on unpickling).
+        if (self.native_fn is not None
+                and getattr(self, '_native_source', None) is rules):
             try:
                 # native_fn returns (prediction, votes, proba)
                 return self.native_fn(data) # pyright: ignore[reportCallIssue]
@@ -880,13 +931,6 @@ class RuleClassifier(RuleExporterMixin):
                 pass
 
         # --- SLOW PATH: Iterative Execution ---
-        rules = self.final_rules if final else self.initial_rules
-
-        if self.input_dtype == 'float32':
-            data = {
-                k: (float(np.float32(v)) if isinstance(v, (int, float)) else v)
-                for k, v in data.items()
-            }
 
         predicted_class = self.default_class
         votes = None
@@ -1069,7 +1113,8 @@ class RuleClassifier(RuleExporterMixin):
 
         For each class group, the method sums the init score plus the
         contribution of the first matching rule in each tree. Binary
-        classification uses sigmoid; multiclass uses argmax.
+        classification takes the positive class when the score is >= 0 (as
+        scikit-learn does); multiclass uses argmax.
 
         Args:
             data (Dict[str, float]): Instance data.
@@ -1084,8 +1129,6 @@ class RuleClassifier(RuleExporterMixin):
                 - List of matched rules (one per tree per class group).
                 - None (kept for API consistency).
         """
-        import math
-
         # Group rules by tree identifier (prefix before first '_')
         # e.g., 'GBDT1T0' for init, 'GBDT1T1' for tree 1 of class 1
         tree_rules_map = defaultdict(list)
@@ -1145,9 +1188,9 @@ class RuleClassifier(RuleExporterMixin):
                         matched_rules.append(rule)
                         break  # Only one match per tree
 
-            # Sigmoid
-            prob = 1.0 / (1.0 + math.exp(-score))
-            predicted_class = int(classes[1]) if prob >= 0.5 else int(classes[0])
+            # Decide on the raw score, as scikit-learn does (raw >= 0); see
+            # update_native_model for why not sigmoid(score) >= 0.5.
+            predicted_class = int(classes[1]) if score >= 0.0 else int(classes[0])
 
         else:
             # Multiclass: compute score for each class group
@@ -1223,6 +1266,97 @@ class RuleClassifier(RuleExporterMixin):
     #       GBDT: float64 contribution (learning_rate * leaf_value)
     # =========================================================================
 
+    # Method to rebuild the tree a rule set was read from
+    @staticmethod
+    def _tree_from_rules(rules: list, validate: bool = True) -> Dict[int, dict]:
+        """
+        Rebuild the binary tree that one tree's rules were read from.
+
+        Every compiled engine (tree arrays, binary, C header, native function)
+        routes a sample down this tree instead of testing the rules one by one,
+        so it only computes what the rules say if the rules really are the
+        leaves of one tree. Three ways they can fail to be, each of which would
+        otherwise make a compiled engine answer differently from the iterative
+        engine and from the CPN, without any error:
+
+        - two rules want different splits at a node they share;
+        - a rule stops at a node other rules go past (its region contains
+          theirs), or goes past a node where another rule stops;
+        - two rules stop at the same node (identical regions).
+
+        The last two are overlaps: the iterative engine takes the first match,
+        the tree keeps one of them, and the CPN becomes nondeterministic.
+
+        Args:
+            rules (List[Rule]): The rules of one tree.
+            validate (bool): Raise on any of the conditions above.
+
+        Returns:
+            Dict[int, dict]: Nodes keyed by id; internal nodes carry 'f', 't',
+            'l', 'r'; a leaf has ``f == -2`` and 'rule' set to the rule that
+            ends there, or None for a region no rule covers.
+
+        Raises:
+            ValueError: If `validate` is set and the rules are not the leaves
+                of one tree.
+        """
+        nodes: Dict[int, dict] = {
+            0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'rule': None}
+        }
+        next_id = 1
+
+        def _name(r):
+            return getattr(r, 'name', '?')
+
+        for rule in rules:
+            curr = 0
+            for var, op, val in rule.parsed_conditions:
+                node = nodes[curr]
+                if node['f'] == -2:
+                    if validate and node['rule'] is not None:
+                        raise ValueError(
+                            'Rule set is not a tree and cannot be compiled: rule '
+                            f'{_name(rule)!r} continues past the leaf of rule '
+                            f'{_name(node["rule"])!r}, whose region therefore '
+                            'contains it (overlapping rules).'
+                        )
+                    node.update({'f': var, 't': val,
+                                 'l': next_id, 'r': next_id + 1})
+                    for child in (next_id, next_id + 1):
+                        nodes[child] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0,
+                                        'rule': None}
+                    next_id += 2
+                elif validate and (node['f'] != var
+                                   or float(node['t']) != float(val)):
+                    raise ValueError(
+                        'Rule set is not prefix-closed and cannot be compiled '
+                        'into tree arrays: rule '
+                        f'{_name(rule)!r} requires the split '
+                        f'({var} {op} {val}) at a node already split on '
+                        f'({node["f"]} @ {node["t"]}). '
+                        'Rules sharing a prefix of conditions must agree on the '
+                        'split at every shared node. This usually means a custom '
+                        'rule-removal function produced a rule set that is no '
+                        'longer a tree.'
+                    )
+                curr = node['l'] if op in ('<=', '<') else node['r']
+
+            node = nodes[curr]
+            if validate and node['f'] != -2:
+                raise ValueError(
+                    'Rule set is not a tree and cannot be compiled: rule '
+                    f'{_name(rule)!r} stops at an internal node, so its region '
+                    'contains the regions of other rules (overlapping rules).'
+                )
+            if validate and node['rule'] is not None:
+                raise ValueError(
+                    'Rule set is not a tree and cannot be compiled: rules '
+                    f'{_name(node["rule"])!r} and {_name(rule)!r} cover the same '
+                    'region.'
+                )
+            node['rule'] = rule
+        return nodes
+
     # Method to execute _build_single_tree_arrays
     @staticmethod
     def _build_single_tree_arrays(
@@ -1236,14 +1370,15 @@ class RuleClassifier(RuleExporterMixin):
         """
         Convert a list of rules (all from one tree) into flat numpy arrays.
 
-        The reconstruction walks each rule from the root, so it requires the
-        rule set to be *prefix-closed*: rules sharing a prefix of conditions
-        must agree on the split (feature and threshold) at every shared node.
-        This holds for rules extracted from a tree and is preserved by the
-        built-in refinement operations, but a custom removal function (see
-        `set_custom_rule_removal`) can break it.  When that happens rules are
-        routed by operator alone and land in the wrong leaf, silently;
-        `validate_structure` turns that silent corruption into an error.
+        The reconstruction walks each rule from the root (see
+        `_tree_from_rules`), so it requires the rules to be the leaves of one
+        tree: rules sharing a prefix of conditions must agree on the split at
+        every shared node, and no rule's region may contain another's. This
+        holds for rules extracted from a tree and is preserved by the built-in
+        refinement operations, but a custom removal function (see
+        `set_custom_rule_removal`) can break it.  When that happens rules land
+        in the wrong leaf, silently; `validate_structure` turns that silent
+        corruption into an error.
 
         Args:
             rules (List[Rule]): Rules for a single tree.
@@ -1252,7 +1387,8 @@ class RuleClassifier(RuleExporterMixin):
                 'Gradient Boosting Decision Trees'.
             n_classes (int): Number of classes (needed for RF leaf distributions).
             default_class (int): Class assigned to uncovered regions (DT only).
-            validate_structure (bool): Raise if the rules are not prefix-closed.
+            validate_structure (bool): Raise if the rules are not the leaves
+                of one tree.
 
         Returns:
             Dict with keys: 'feature_idx', 'threshold', 'children_left',
@@ -1262,48 +1398,16 @@ class RuleClassifier(RuleExporterMixin):
 
         Raises:
             ValueError: If `validate_structure` is set and the rules are not
-                prefix-closed (conflicting split at a shared node).
+                the leaves of one tree (conflicting split or overlap).
         """
         # 1. Reconstruct tree structure
-        tree_dict: Dict[int, dict] = {
-            0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
-        }
-        next_id = 1
+        tree_dict = RuleClassifier._tree_from_rules(rules, validate_structure)
 
-        for rule in rules:
-            curr = 0
-            for var, op, val in rule.parsed_conditions:
-                if tree_dict[curr]['f'] == -2:
-                    tree_dict[curr].update({
-                        'f': var, 't': val,
-                        'l': next_id, 'r': next_id + 1,
-                    })
-                    tree_dict[next_id] = {
-                        'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None,
-                    }
-                    tree_dict[next_id + 1] = {
-                        'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None,
-                    }
-                    next_id += 2
-                elif validate_structure and (
-                    tree_dict[curr]['f'] != var
-                    or float(tree_dict[curr]['t']) != float(val)
-                ):
-                    raise ValueError(
-                        'Rule set is not prefix-closed and cannot be compiled '
-                        'into tree arrays: rule '
-                        f'{getattr(rule, "name", "?")!r} requires the split '
-                        f'({var} {op} {val}) at a node already split on '
-                        f'({tree_dict[curr]["f"]} @ {tree_dict[curr]["t"]}). '
-                        'Rules sharing a prefix of conditions must agree on the '
-                        'split at every shared node. This usually means a custom '
-                        'rule-removal function produced a rule set that is no '
-                        'longer a tree.'
-                    )
-                if op in ('<=', '<'):
-                    curr = tree_dict[curr]['l']
-                else:
-                    curr = tree_dict[curr]['r']
+        for curr, node in tree_dict.items():
+            rule = node.pop('rule')
+            node['v'] = None
+            if rule is None:
+                continue
 
             # Set leaf value based on algorithm type
             if algorithm_type == 'Gradient Boosting Decision Trees':
@@ -1321,17 +1425,19 @@ class RuleClassifier(RuleExporterMixin):
                     one_hot[cls_idx] = 1.0
                     tree_dict[curr]['v'] = one_hot
             else:
-                # Decision Tree — store class label as int
-                # Use class_distribution (argmax) when available, otherwise
-                # extract trailing digits from the class label string.
-                if hasattr(rule, 'class_distribution') and rule.class_distribution is not None:
-                    dist = rule.class_distribution
-                    tree_dict[curr]['v'] = int(np.argmax(dist))
-                else:
-                    cls_str = str(rule.class_)
-                    m = re.search(r'(\d+)$', cls_str)
+                # Decision Tree -- the rule's own label, read exactly as the
+                # iterative engine, the native function and the CPN read it.
+                # (argmax of the distribution is its *index*, which is the
+                # label only when the labels happen to be 0..K-1.)
+                try:
+                    tree_dict[curr]['v'] = int(str(rule.class_).replace('Class', '').strip())
+                except (ValueError, AttributeError):
+                    dist = getattr(rule, 'class_distribution', None)
+                    m = re.search(r'(\d+)$', str(rule.class_))
                     if m:
                         tree_dict[curr]['v'] = int(m.group(1))
+                    elif dist is not None:
+                        tree_dict[curr]['v'] = int(np.argmax(dist))
                     else:
                         tree_dict[curr]['v'] = 0
 
@@ -1416,6 +1522,22 @@ class RuleClassifier(RuleExporterMixin):
             'is_hole': is_hole,
         }
 
+    # Method to pick the rule set a prediction should use
+    def _rules_for(self, use_final: bool) -> list:
+        """The rule set a prediction with `use_final` must use.
+
+        Args:
+            use_final (bool): True for the refined model, False for the one
+                extracted from the trained estimator.
+
+        Returns:
+            List[Rule]: `final_rules` when requested and present, otherwise
+            `initial_rules` (before refinement they are the same model).
+        """
+        if use_final and self.final_rules:
+            return self.final_rules
+        return self.initial_rules
+
     # Method to execute compile_tree_arrays
     def compile_tree_arrays(self, rules: Optional[list] = None, feature_names: Optional[list] = None) -> None:
         """
@@ -1424,6 +1546,12 @@ class RuleClassifier(RuleExporterMixin):
         After calling this method, `predict_batch(X)` becomes available.
         This is called automatically by `update_native_model` but can also be
         called explicitly after rule removal to refresh the arrays.
+
+        The compiled set becomes the *current* one, used by `predict_batch`
+        and the binary/C/Arduino exports when no rule set is named. Each set
+        compiled is also kept, so `predict_batch(use_final=...)` can switch
+        between the initial and the refined model without recompiling.
+        Compile again after editing a rule list in place.
 
         Args:
             rules (List[Rule], optional): Rules to compile. Defaults to
@@ -1435,6 +1563,26 @@ class RuleClassifier(RuleExporterMixin):
         if rules is None:
             rules = self.final_rules if self.final_rules else self.initial_rules
 
+        state = self._compile_array_state(rules, feature_names)
+        self._set_array_state(state)
+        states = [st for st in getattr(self, '_array_states', [])
+                  if st['rules'] is not rules]
+        self._array_states = (states + [state])[-4:]
+
+    # Method to compile one rule set into tree arrays
+    def _compile_array_state(self, rules: list, feature_names: Optional[list] = None) -> dict:
+        """
+        Compile one rule set into tree arrays without making it current.
+
+        Args:
+            rules (List[Rule]): Rules to compile.
+            feature_names (List[str], optional): Column order of X. If None,
+                inferred from the rules (sorted).
+
+        Returns:
+            dict: 'rules' (the list compiled, kept by identity), 'n_rules',
+            'feature_names', 'trees', 'class_groups', 'is_init'.
+        """
         # --- Infer feature names from rules if not provided ---
         if feature_names is None:
             feat_set: set = set()
@@ -1443,10 +1591,11 @@ class RuleClassifier(RuleExporterMixin):
                     feat_set.add(var)
             feature_names = sorted(feat_set)
 
-        self._array_feature_names = list(feature_names)
         feature_name_to_idx = {name: i for i, name in enumerate(feature_names)}
 
         n_classes = self.num_classes
+        class_groups = None
+        is_init = None
 
         # --- Group rules by tree ---
         if self.algorithm_type == 'Decision Tree':
@@ -1457,9 +1606,6 @@ class RuleClassifier(RuleExporterMixin):
                     default_class=self._default_class_int(),
                 )
             ]
-            self._tree_arrays = tree_arrays
-            self._tree_class_groups = None
-            self._tree_is_init = None
 
         elif self.algorithm_type == 'Random Forest':
             tree_rules_map: Dict[str, list] = defaultdict(list)
@@ -1468,16 +1614,13 @@ class RuleClassifier(RuleExporterMixin):
                 tree_rules_map[tid].append(rule)
 
             tree_arrays = []
-            for tid in sorted(tree_rules_map.keys()):
+            for tid in sorted(tree_rules_map.keys(), key=_tree_sort_key):
                 arr = self._build_single_tree_arrays(
                     tree_rules_map[tid], feature_name_to_idx,
                     self.algorithm_type, n_classes,
                     default_class=self._default_class_int(),
                 )
                 tree_arrays.append(arr)
-            self._tree_arrays = tree_arrays
-            self._tree_class_groups = None
-            self._tree_is_init = None
 
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             tree_rules_map = defaultdict(list)
@@ -1489,7 +1632,7 @@ class RuleClassifier(RuleExporterMixin):
             class_groups = []
             is_init = []
 
-            for tid in sorted(tree_rules_map.keys()):
+            for tid in sorted(tree_rules_map.keys(), key=_tree_sort_key):
                 trules = tree_rules_map[tid]
                 if not trules:
                     continue
@@ -1511,12 +1654,108 @@ class RuleClassifier(RuleExporterMixin):
                         default_class=self._default_class_int(),
                     )
                     tree_arrays.append(arr)
+        else:
+            raise ValueError(f'Unsupported algorithm_type: {self.algorithm_type}')
 
-            self._tree_arrays = tree_arrays
-            self._tree_class_groups = class_groups
-            self._tree_is_init = is_init
+        return {
+            'rules': rules,
+            'n_rules': len(rules),
+            'feature_names': list(feature_names),
+            'trees': tree_arrays,
+            'class_groups': class_groups,
+            'is_init': is_init,
+        }
 
+    # Method to make a compiled rule set the current one
+    def _set_array_state(self, state: dict) -> None:
+        """Install `state` (from `_compile_array_state`) as the current arrays.
+
+        Args:
+            state (dict): A compiled rule set.
+        """
+        self._array_feature_names = list(state['feature_names'])
+        self._tree_arrays = state['trees']
+        self._tree_class_groups = state['class_groups']
+        self._tree_is_init = state['is_init']
+        self._arrays_source = state['rules']
+        self._arrays_source_len = state['n_rules']
         self._arrays_compiled = True
+
+    # Method to get the compiled arrays of the current rule set
+    def _current_array_state(self) -> dict:
+        """The current arrays as a state dict (see `_compile_array_state`).
+
+        Returns:
+            dict: The arrays `predict_batch` uses when no rule set is named.
+        """
+        return {
+            'rules': getattr(self, '_arrays_source', None),
+            'n_rules': getattr(self, '_arrays_source_len', None),
+            'feature_names': list(self._array_feature_names),
+            'trees': self._tree_arrays,
+            'class_groups': self._tree_class_groups,
+            'is_init': self._tree_is_init,
+        }
+
+    # Method to get the compiled arrays of the rule set a prediction needs
+    def _array_state_for(self, use_final: Optional[bool],
+                         feature_names: Optional[list] = None) -> dict:
+        """The compiled arrays of the rule set selected by `use_final`.
+
+        Args:
+            use_final (bool | None): None for the current arrays (whatever
+                `compile_tree_arrays` compiled last); True/False for the
+                refined/initial rule set, compiled on first use.
+            feature_names (List[str], optional): Column order of X, used only
+                when the set must be compiled and nothing was compiled before.
+
+        Returns:
+            dict: A compiled rule set (see `_compile_array_state`).
+
+        Raises:
+            RuntimeError: If `use_final` is None and nothing was compiled.
+        """
+        compiled = getattr(self, '_arrays_compiled', False)
+        rules = None
+        if use_final is not None and (self.initial_rules or self.final_rules):
+            rules = self._rules_for(use_final)
+        if rules is None:
+            # No rule set named, or no rules at all (a model loaded with
+            # load_binary holds only its arrays): use the current arrays.
+            if not compiled:
+                raise RuntimeError(
+                    'Tree arrays not compiled. Call compile_tree_arrays() first.'
+                )
+            return self._current_array_state()
+        names = (list(self._array_feature_names)
+                 if getattr(self, '_array_feature_names', None) else feature_names)
+        return self._array_state_for_rules(rules, names)
+
+    # Method to get (compiling if needed) the arrays of one rule list
+    def _array_state_for_rules(self, rules: list,
+                               feature_names: Optional[list] = None) -> dict:
+        """The compiled arrays of `rules`, compiled and kept on first use.
+
+        Args:
+            rules (List[Rule]): The rule list (matched by identity).
+            feature_names (List[str], optional): Column order when compiling.
+
+        Returns:
+            dict: A compiled rule set (see `_compile_array_state`).
+        """
+        if (getattr(self, '_arrays_compiled', False)
+                and getattr(self, '_arrays_source', None) is rules
+                and getattr(self, '_arrays_source_len', None) == len(rules)):
+            return self._current_array_state()
+        states = getattr(self, '_array_states', [])
+        for st in states:
+            if st['rules'] is rules and st['n_rules'] == len(rules):
+                return st
+
+        state = self._compile_array_state(rules, feature_names)
+        states = [st for st in states if st['rules'] is not rules]
+        self._array_states = (states + [state])[-4:]
+        return state
 
     # Method to execute _traverse_tree_batch
     @staticmethod
@@ -1578,7 +1817,7 @@ class RuleClassifier(RuleExporterMixin):
         self,
         X: np.ndarray,
         feature_names: Optional[list] = None,
-        use_final: bool = True,
+        use_final: Optional[bool] = None,
     ) -> np.ndarray:
         """
         Vectorized batch prediction over a numpy array.
@@ -1593,20 +1832,20 @@ class RuleClassifier(RuleExporterMixin):
             feature_names (list, optional): Feature names corresponding to columns
                 of X.  If provided and different from compiled order, X columns
                 are reordered accordingly.
-            use_final (bool): If True, uses arrays compiled from final_rules.
-                If False, uses arrays compiled from initial_rules.
+            use_final (bool, optional): True predicts with final_rules (the
+                refined model; initial_rules if there are none), False with
+                initial_rules, each compiled on first use and kept. None (the
+                default) uses whatever `compile_tree_arrays` compiled last.
 
         Returns:
             np.ndarray: Predicted class labels, shape (n_samples,), dtype int.
         """
-        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
-            raise RuntimeError(
-                'Tree arrays not compiled. Call compile_tree_arrays() first.'
-            )
+        st = self._array_state_for(use_final, feature_names)
+        trees, groups, is_init = st['trees'], st['class_groups'], st['is_init']
 
         # Reorder columns if feature_names differ from compiled order
-        if feature_names is not None and feature_names != self._array_feature_names:
-            col_order = [feature_names.index(f) for f in self._array_feature_names]
+        if feature_names is not None and list(feature_names) != st['feature_names']:
+            col_order = [list(feature_names).index(f) for f in st['feature_names']]
             X = X[:, col_order]
 
         self._assert_no_missing_values(X)
@@ -1615,7 +1854,7 @@ class RuleClassifier(RuleExporterMixin):
 
         # --- Decision Tree ---
         if self.algorithm_type == 'Decision Tree':
-            tree = self._tree_arrays[0]
+            tree = trees[0]
             leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
@@ -1632,13 +1871,13 @@ class RuleClassifier(RuleExporterMixin):
         # --- Random Forest (Soft Voting) ---
         elif self.algorithm_type == 'Random Forest':
             n_classes = self.num_classes
-            n_trees = len(self._tree_arrays)
+            n_trees = len(trees)
 
             # Build list of tree tuples for multi-tree C traversal
             tree_tuples = [
                 (t['feature_idx'], t['threshold'],
                  t['children_left'], t['children_right'], t['max_depth'])
-                for t in self._tree_arrays
+                for t in trees
             ]
             # all_leaf_ids: shape (n_trees, n_samples), int32
             all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
@@ -1648,7 +1887,7 @@ class RuleClassifier(RuleExporterMixin):
             for t_idx in range(n_trees):
                 leaf_ids = all_leaf_ids[t_idx]
                 # Get raw counts at leaves
-                raw_counts = self._tree_arrays[t_idx]['value'][leaf_ids]
+                raw_counts = trees[t_idx]['value'][leaf_ids]
                 # Normalize to probabilities per sample
                 totals = raw_counts.sum(axis=1, keepdims=True)
                 totals = np.where(totals == 0, 1.0, totals)
@@ -1673,14 +1912,14 @@ class RuleClassifier(RuleExporterMixin):
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             classes = self._gbdt_classes or []
             is_binary = self._gbdt_is_binary
-            assert self._tree_class_groups is not None
-            assert self._tree_is_init is not None
+            assert groups is not None
+            assert is_init is not None
 
             # Separate init trees from real trees and batch-traverse real trees
             real_tree_indices = []
             tree_tuples = []
-            for i, tree in enumerate(self._tree_arrays):
-                if not self._tree_is_init[i]:
+            for i, tree in enumerate(trees):
+                if not is_init[i]:
                     real_tree_indices.append(i)
                     tree_tuples.append((
                         tree['feature_idx'], tree['threshold'],
@@ -1704,25 +1943,25 @@ class RuleClassifier(RuleExporterMixin):
                 scores = np.zeros(n_samples, dtype=np.float64)
 
                 # Add init scores
-                for i, tree in enumerate(self._tree_arrays):
-                    if self._tree_is_init[i]:
-                        if self._tree_class_groups[i] == pos_class:
+                for i, tree in enumerate(trees):
+                    if is_init[i]:
+                        if groups[i] == pos_class:
                             scores += tree['init_score']
 
                 # Add real tree contributions
                 for batch_idx, orig_idx in enumerate(real_tree_indices):
-                    if self._tree_class_groups[orig_idx] != pos_class:
+                    if groups[orig_idx] != pos_class:
                         continue
                     leaf_ids = all_leaf_ids[batch_idx]
-                    scores += self._tree_arrays[orig_idx]['value'][leaf_ids]
-                    holes = self._tree_arrays[orig_idx].get('is_hole')
+                    scores += trees[orig_idx]['value'][leaf_ids]
+                    holes = trees[orig_idx].get('is_hole')
                     if holes is not None:
                         touched_hole |= holes[leaf_ids]
 
-                # Sigmoid
-                prob = 1.0 / (1.0 + np.exp(-scores))
+                # Decide on the raw score, as scikit-learn does
+                # (raw_predictions >= 0); see update_native_model.
                 predictions = np.where(
-                    prob >= 0.5, int(classes[1]), int(classes[0])
+                    scores >= 0.0, int(classes[1]), int(classes[0])
                 ).astype(np.int32)
                 self.fallback_activations += int(touched_hole.sum())
                 return predictions
@@ -1734,22 +1973,22 @@ class RuleClassifier(RuleExporterMixin):
                 scores = np.zeros((n_samples, n_cls), dtype=np.float64)
 
                 # Add init scores
-                for i, tree in enumerate(self._tree_arrays):
-                    if self._tree_is_init[i]:
-                        cg = self._tree_class_groups[i]
+                for i, tree in enumerate(trees):
+                    if is_init[i]:
+                        cg = groups[i]
                         col = class_to_col.get(cg)
                         if col is not None:
                             scores[:, col] += tree['init_score']
 
                 # Add real tree contributions
                 for batch_idx, orig_idx in enumerate(real_tree_indices):
-                    cg = self._tree_class_groups[orig_idx]
+                    cg = groups[orig_idx]
                     col = class_to_col.get(cg)
                     if col is None:
                         continue
                     leaf_ids = all_leaf_ids[batch_idx]
-                    scores[:, col] += self._tree_arrays[orig_idx]['value'][leaf_ids]
-                    holes = self._tree_arrays[orig_idx].get('is_hole')
+                    scores[:, col] += trees[orig_idx]['value'][leaf_ids]
+                    holes = trees[orig_idx].get('is_hole')
                     if holes is not None:
                         touched_hole |= holes[leaf_ids]
 
@@ -1767,6 +2006,7 @@ class RuleClassifier(RuleExporterMixin):
         self,
         X: np.ndarray,
         feature_names: Optional[list] = None,
+        use_final: Optional[bool] = None,
     ) -> np.ndarray:
         """
         Vectorized batch probability prediction.
@@ -1774,6 +2014,7 @@ class RuleClassifier(RuleExporterMixin):
         Args:
             X (np.ndarray): Input data, shape (n_samples, n_features).
             feature_names (list, optional): Feature names for column reordering.
+            use_final (bool, optional): Rule set to use, as in `predict_batch`.
 
         Returns:
             np.ndarray: Predicted probabilities, shape (n_samples, n_classes).
@@ -1782,20 +2023,22 @@ class RuleClassifier(RuleExporterMixin):
                 For GBDT binary, shape (n_samples, 2) with sigmoid probabilities.
                 For GBDT multiclass, shape (n_samples, n_classes) with softmax probabilities.
         """
-        if not hasattr(self, '_arrays_compiled') or not self._arrays_compiled:
-            raise RuntimeError(
-                'Tree arrays not compiled. Call compile_tree_arrays() first.'
-            )
+        st = self._array_state_for(use_final, feature_names)
+        trees, groups, is_init = st['trees'], st['class_groups'], st['is_init']
 
-        if feature_names is not None and feature_names != self._array_feature_names:
-            col_order = [feature_names.index(f) for f in self._array_feature_names]
+        if feature_names is not None and list(feature_names) != st['feature_names']:
+            col_order = [list(feature_names).index(f) for f in st['feature_names']]
             X = X[:, col_order]
 
+        # Same input handling as predict_batch, so the probabilities describe
+        # the leaves predict_batch routes the samples to.
+        self._assert_no_missing_values(X)
+        X = self._quantize_input(X)
         n_samples = X.shape[0]
 
         # --- Decision Tree ---
         if self.algorithm_type == 'Decision Tree':
-            tree = self._tree_arrays[0]
+            tree = trees[0]
             leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
@@ -1813,19 +2056,19 @@ class RuleClassifier(RuleExporterMixin):
         elif self.algorithm_type == 'Random Forest':
             n_classes = self.num_classes
             prob_sum = np.zeros((n_samples, n_classes), dtype=np.float64)
-            n_trees = len(self._tree_arrays)
+            n_trees = len(trees)
 
             # Batch traverse all trees at once
             tree_tuples = [
                 (t['feature_idx'], t['threshold'],
                  t['children_left'], t['children_right'], t['max_depth'])
-                for t in self._tree_arrays
+                for t in trees
             ]
             all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
 
             for t_idx in range(n_trees):
                 leaf_ids = all_leaf_ids[t_idx]
-                raw_counts = self._tree_arrays[t_idx]['value'][leaf_ids]
+                raw_counts = trees[t_idx]['value'][leaf_ids]
                 totals = raw_counts.sum(axis=1, keepdims=True)
                 totals = np.where(totals == 0, 1.0, totals)
                 probas = raw_counts / totals
@@ -1836,8 +2079,8 @@ class RuleClassifier(RuleExporterMixin):
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             classes = self._gbdt_classes or []
             is_binary = self._gbdt_is_binary
-            assert self._tree_class_groups is not None
-            assert self._tree_is_init is not None
+            assert groups is not None
+            assert is_init is not None
             class_to_col = {cl: idx for idx, cl in enumerate(classes)}
             n_cls = len(classes)
             scores = np.zeros((n_samples, n_cls), dtype=np.float64)
@@ -1845,9 +2088,9 @@ class RuleClassifier(RuleExporterMixin):
             # Separate init vs real trees, batch traverse real ones
             real_tree_indices = []
             tree_tuples_gbdt = []
-            for i, tree in enumerate(self._tree_arrays):
-                if self._tree_is_init[i]:
-                    cg = self._tree_class_groups[i]
+            for i, tree in enumerate(trees):
+                if is_init[i]:
+                    cg = groups[i]
                     col = class_to_col.get(cg)
                     if col is not None:
                         scores[:, col] += tree['init_score']
@@ -1862,12 +2105,12 @@ class RuleClassifier(RuleExporterMixin):
             if tree_tuples_gbdt:
                 all_leaf_ids = _accel_traverse_multi(X, tree_tuples_gbdt)
                 for batch_idx, orig_idx in enumerate(real_tree_indices):
-                    cg = self._tree_class_groups[orig_idx]
+                    cg = groups[orig_idx]
                     col = class_to_col.get(cg)
                     if col is None:
                         continue
                     leaf_ids = all_leaf_ids[batch_idx]
-                    scores[:, col] += self._tree_arrays[orig_idx]['value'][leaf_ids]
+                    scores[:, col] += trees[orig_idx]['value'][leaf_ids]
 
             if is_binary and n_cls == 2:
                 # Sigmoid on positive class score
@@ -1894,12 +2137,15 @@ class RuleClassifier(RuleExporterMixin):
         File format (all little-endian):
             Header:
                 4 bytes  magic: b'PYRA'
-                1 byte   version: 1
+                1 byte   version: 1, or 2 when the input precision is set
                 1 byte   algorithm_type: 0=DT, 1=RF, 2=GBDT
                 2 bytes  n_features (uint16)
                 2 bytes  n_classes (uint16)
                 2 bytes  n_trees (uint16)
                 4 bytes  default_class (int32)
+            Version 2 only:
+                1 byte   flags: bit 0 = compare inputs rounded to float32
+                         (``input_dtype='float32'``, as scikit-learn does)
             For GBDT additionally:
                 1 byte   is_binary (bool)
                 2 bytes  n_gbdt_classes (uint16)
@@ -1952,13 +2198,19 @@ class RuleClassifier(RuleExporterMixin):
 
         with open(filepath, 'wb') as f:
             # --- Header ---
+            # Version 1 had no room for the input precision; a model that
+            # rounds its inputs to float32 is written as version 2, so a
+            # reloaded model routes samples exactly like the one exported.
+            f32 = getattr(self, 'input_dtype', None) == 'float32'
             f.write(b'PYRA')                                      # magic
-            f.write(struct.pack('<B', 1))                          # version
+            f.write(struct.pack('<B', 2 if f32 else 1))            # version
             f.write(struct.pack('<B', algo_byte))                  # algorithm_type
             f.write(struct.pack('<H', len(self._array_feature_names)))  # n_features
             f.write(struct.pack('<H', self.num_classes))           # n_classes
             f.write(struct.pack('<H', n_trees))                    # n_trees
             f.write(struct.pack('<i', default_cls))                # default_class
+            if f32:
+                f.write(struct.pack('<B', 1))                      # flags
 
             # --- GBDT metadata ---
             if self.algorithm_type == 'Gradient Boosting Decision Trees':
@@ -2032,13 +2284,14 @@ class RuleClassifier(RuleExporterMixin):
             if magic != b'PYRA':
                 raise ValueError(f'Invalid binary model file (magic={magic!r})')
             version = struct.unpack('<B', f.read(1))[0]
-            if version != 1:
+            if version not in (1, 2):
                 raise ValueError(f'Unsupported binary model version: {version}')
             algo_byte = struct.unpack('<B', f.read(1))[0]
             n_features = struct.unpack('<H', f.read(2))[0]
             n_classes = struct.unpack('<H', f.read(2))[0]
             n_trees = struct.unpack('<H', f.read(2))[0]
             default_cls = struct.unpack('<i', f.read(4))[0]
+            flags = struct.unpack('<B', f.read(1))[0] if version >= 2 else 0
 
             algorithm_type = algo_names[algo_byte]
 
@@ -2125,6 +2378,13 @@ class RuleClassifier(RuleExporterMixin):
         obj._tree_class_groups = tree_class_groups if tree_class_groups else None
         obj._tree_is_init = tree_is_init if tree_is_init else None
         obj._arrays_compiled = True
+        # No rules: predict_batch always answers with these arrays.
+        obj._arrays_source = None
+        obj._arrays_source_len = None
+        obj._array_states = []
+        obj._native_source = None
+        obj.fallback_activations = 0
+        obj.input_dtype = 'float32' if flags & 1 else None
 
         return obj
 
@@ -2251,7 +2511,11 @@ class RuleClassifier(RuleExporterMixin):
         a('    int d;')
         a('    for (d = 0; d < max_depth; d++) {')
         a('        if (left[node] == node) break;  /* leaf: self-loop */')
-        a('        if (features[feat_idx[node]] <= thresh[node])')
+        if getattr(self, 'input_dtype', None) == 'float32':
+            # scikit-learn casts X to float32 before comparing.
+            a('        if ((double)(float)features[feat_idx[node]] <= thresh[node])')
+        else:
+            a('        if (features[feat_idx[node]] <= thresh[node])')
         a('            node = left[node];')
         a('        else')
         a('            node = right[node];')
@@ -2269,6 +2533,7 @@ class RuleClassifier(RuleExporterMixin):
         elif self.algorithm_type == 'Random Forest':
             a('static inline int32_t predict(const double *features) {')
             a(f'    double prob_sum[N_CLASSES] = {{0}};')
+            a(f'    int voted = 0;')
             for t_idx in range(len(self._tree_arrays)):
                 a(f'    {{')
                 a(f'        int32_t leaf = traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH);')
@@ -2276,9 +2541,13 @@ class RuleClassifier(RuleExporterMixin):
                 a(f'        int k;')
                 a(f'        for (k = 0; k < N_CLASSES; k++) total += tree{t_idx}_value[leaf * N_CLASSES + k];')
                 a(f'        if (total > 0.0) {{')
+                a(f'            voted = 1;')
                 a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += tree{t_idx}_value[leaf * N_CLASSES + k] / total;')
                 a(f'        }}')
                 a(f'    }}')
+            # Every tree abstained (refinement left the sample uncovered in
+            # all of them): default class, as predict_batch and the CPN do.
+            a(f'    if (!voted) return DEFAULT_CLASS;')
             a(f'    int32_t best = 0;')
             a(f'    int k;')
             a(f'    for (k = 1; k < N_CLASSES; k++) {{')
@@ -2305,8 +2574,8 @@ class RuleClassifier(RuleExporterMixin):
                     if tree_class_groups_c[t_idx] != pos_class:
                         continue
                     a(f'    score += tree{t_idx}_value[traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
-                a(f'    double prob = 1.0 / (1.0 + exp(-score));')
-                a(f'    return (prob >= 0.5) ? {int(classes[1])} : {int(classes[0])};')
+                # Decide on the raw score, as scikit-learn does (raw >= 0).
+                a(f'    return (score >= 0.0) ? {int(classes[1])} : {int(classes[0])};')
                 a('}')
             else:
                 a('#include <math.h>')
@@ -2482,7 +2751,7 @@ class RuleClassifier(RuleExporterMixin):
         # Feature name comments
         a('// Feature order:')
         for i, name in enumerate(self._array_feature_names):
-            a(f'  [{i}] {name}')
+            a(f'//   [{i}] {name}')
         a('')
 
         # Per-tree arrays (same format as C header)
@@ -2550,7 +2819,11 @@ class RuleClassifier(RuleExporterMixin):
         a('    int d;')
         a('    for (d = 0; d < max_depth; d++) {')
         a('        if (left[node] == node) break;')
-        a('        if (features[feat_idx[node]] <= thresh[node])')
+        if getattr(self, 'input_dtype', None) == 'float32':
+            # scikit-learn casts X to float32 before comparing.
+            a('        if ((double)(float)features[feat_idx[node]] <= thresh[node])')
+        else:
+            a('        if (features[feat_idx[node]] <= thresh[node])')
         a('            node = left[node];')
         a('        else')
         a('            node = right[node];')
@@ -2570,6 +2843,7 @@ class RuleClassifier(RuleExporterMixin):
             a('')
             a('static inline int32_t pyra_predict(const double *features) {')
             a(f'    double prob_sum[N_CLASSES] = {{0}};')
+            a(f'    int voted = 0;')
             for t_idx in range(len(self._tree_arrays)):
                 a(f'    {{')
                 a(f'        int32_t leaf = pyra_traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH);')
@@ -2577,9 +2851,13 @@ class RuleClassifier(RuleExporterMixin):
                 a(f'        int k;')
                 a(f'        for (k = 0; k < N_CLASSES; k++) total += tree{t_idx}_value[leaf * N_CLASSES + k];')
                 a(f'        if (total > 0.0) {{')
+                a(f'            voted = 1;')
                 a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += tree{t_idx}_value[leaf * N_CLASSES + k] / total;')
                 a(f'        }}')
                 a(f'    }}')
+            # Every tree abstained (refinement left the sample uncovered in
+            # all of them): default class, as predict_batch and the CPN do.
+            a(f'    if (!voted) return DEFAULT_CLASS;')
             a(f'    int32_t best = 0;')
             a(f'    int k;')
             a(f'    for (k = 1; k < N_CLASSES; k++) {{')
@@ -2606,8 +2884,8 @@ class RuleClassifier(RuleExporterMixin):
                     if tree_class_groups_c[t_idx] != pos_class:
                         continue
                     a(f'    score += tree{t_idx}_value[pyra_traverse_tree(features, tree{t_idx}_feature, tree{t_idx}_threshold, tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)];')
-                a(f'    double prob = 1.0 / (1.0 + exp(-score));')
-                a(f'    return (prob >= 0.5) ? {int(classes[1])} : {int(classes[0])};')
+                # Decide on the raw score, as scikit-learn does (raw >= 0).
+                a(f'    return (score >= 0.0) ? {int(classes[1])} : {int(classes[0])};')
                 a('}')
             else:
                 a('#include <math.h>')
@@ -2648,7 +2926,10 @@ class RuleClassifier(RuleExporterMixin):
 
         # Global feature variables
         a('// Feature buffer (modify read_features() to populate these)')
-        a(f'float features[N_FEATURES];')
+        # double, matching pyra_predict(const double *): on AVR double is the
+        # same 4-byte type as float, and on ESP32 a float buffer read through
+        # a double pointer would be garbage.
+        a(f'double features[N_FEATURES];')
         a('')
 
         if include_sensor_placeholders:
@@ -2686,7 +2967,7 @@ class RuleClassifier(RuleExporterMixin):
         else:
             a('    // TODO: populate features[] from your sensors')
         a('')
-        a('    int32_t result = pyra_predict((const double*)features);')
+        a('    int32_t result = pyra_predict(features);')
         a('')
         a('    Serial.print(F("{\\"class\\":"));')
         a('    Serial.print(result);')
@@ -2886,6 +3167,12 @@ class RuleClassifier(RuleExporterMixin):
         target_rules = self.final_rules if self.final_rules else self.initial_rules
 
         for rule in target_rules:
+            # A rule without conditions is a GBDT init score (or a tree that
+            # is a single leaf): it is not a region shared between trees, and
+            # summing it with a leaf value would mix an unscaled init score
+            # with learning-rate-scaled contributions.
+            if not rule.parsed_conditions:
+                continue
             # Create a canonical signature for the rule's logic
             # 1. We use parsed_conditions directly (no string parsing)
             # 2. We sort the conditions so that logic order doesn't matter
@@ -2989,12 +3276,12 @@ class RuleClassifier(RuleExporterMixin):
                         if op_pair in [{'<=', '>'}, {'<', '>='}, {'<', '>'}, {'>=', '<'}, {'<=', '<'}]:
                             is_duplicate = True
 
-                    # GBDT: siblings must also have the same leaf_value
-                    # to be considered redundant (different leaf values change
-                    # the residual sum and affect predictions)
+                    # GBDT: siblings must also add exactly the same value to
+                    # the score (v_i = v_j). The merged rule keeps rule1's
+                    # value, so any tolerance here would move the score of
+                    # rule2's region and could flip a decision near 0.
                     if is_duplicate and self.algorithm_type == 'Gradient Boosting Decision Trees':
-                        if (rule1.leaf_value is not None and rule2.leaf_value is not None
-                                and abs(rule1.leaf_value - rule2.leaf_value) > 1e-9):
+                        if rule1.contribution != rule2.contribution:
                             is_duplicate = False
 
                     # RF soft voting: siblings must have proportionally identical
@@ -3097,40 +3384,9 @@ class RuleClassifier(RuleExporterMixin):
             rules_to_remove.add(rule1)
             rules_to_remove.add(rule2)
 
-            # Create a new generalized rule (Parent Logic)
-            # We strip the last condition which differentiated the two siblings
-            common_conditions = rule1.conditions[:-1]
-            
-            new_rule_name = f"{rule1.name}_&_{rule2.name}"
-            if self.algorithm_type == 'Gradient Boosting Decision Trees':
-                new_rule = Rule(new_rule_name, rule1.class_, common_conditions,
-                                leaf_value=rule1.leaf_value,
-                                learning_rate=rule1.learning_rate,
-                                class_group=rule1.class_group)
-            else:
-                # Combine class distributions: element-wise sum of raw counts
-                # This correctly represents the parent node's distribution
-                combined_dist = None
-                merged_class = rule1.class_
-                if rule1.class_distribution is not None and rule2.class_distribution is not None:
-                    combined_dist = [
-                        a + b for a, b in zip(rule1.class_distribution, rule2.class_distribution)
-                    ]
-                    # Update class_ to reflect the majority class of the combined distribution
-                    best_idx = combined_dist.index(max(combined_dist))
-                    merged_class = str(best_idx)
-                elif rule1.class_distribution is not None:
-                    combined_dist = list(rule1.class_distribution)
-                elif rule2.class_distribution is not None:
-                    combined_dist = list(rule2.class_distribution)
-                
-                new_rule = Rule(new_rule_name, merged_class, common_conditions,
-                                class_distribution=combined_dist)
-            
-            # CRITICAL: Parse immediately so this rule is ready for the next analysis iteration
-            new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
-            
-            new_generalized_rules.append(new_rule)
+            # Create a new generalized rule (Parent Logic): the last condition,
+            # which differentiated the two siblings, is dropped.
+            new_generalized_rules.append(self._merge_sibling_pair(rule1, rule2))
 
         # 2. Hard Check: Semantic Redundancy between trees
         if method == "hard":
@@ -3163,6 +3419,100 @@ class RuleClassifier(RuleExporterMixin):
         
         return final_list, similar_rules_soft
     
+    # Method to name the class at an index of a class distribution
+    def _label_at(self, idx: int, n: int) -> str:
+        """The class label at index `idx` of an `n`-class distribution.
+
+        Distributions are indexed like the estimator's ``classes_``, which are
+        the labels only when those are 0..K-1; `class_labels` holds the real
+        ones when it covers every class.
+
+        Args:
+            idx (int): Index into the distribution.
+            n (int): Length of the distribution.
+
+        Returns:
+            str: The label, as the rules store it.
+        """
+        labels = getattr(self, 'class_labels', None)
+        if labels is not None and len(labels) == n:
+            return str(labels[idx])
+        return str(idx)
+
+    # Method to merge two sibling leaves into their parent
+    def _merge_sibling_pair(self, rule1, rule2):
+        """The rule of the parent of two sibling leaves with the same output.
+
+        `find_duplicated_rules` only pairs siblings whose outputs agree (same
+        class; for GBDT the same leaf value, for RF proportional
+        distributions), so the parent rule predicts exactly what both did.
+
+        Args:
+            rule1 (Rule): One leaf.
+            rule2 (Rule): Its sibling.
+
+        Returns:
+            Rule: The rule of the parent node. Its usage and error counts are
+            the sums of the children's: its region is their union, and the
+            low-usage stage decides on these counts.
+        """
+        common_conditions = rule1.conditions[:-1]
+        name = f"{rule1.name}_&_{rule2.name}"
+        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+            merged = Rule(name, rule1.class_, common_conditions,
+                          leaf_value=rule1.leaf_value,
+                          learning_rate=rule1.learning_rate,
+                          class_group=rule1.class_group)
+            merged.contribution = rule1.contribution  # == rule2.contribution
+        else:
+            d1 = rule1.class_distribution
+            d2 = rule2.class_distribution
+            if d1 is not None and d2 is not None:
+                dist = [a + b for a, b in zip(d1, d2)]
+            elif d1 is not None or d2 is not None:
+                dist = list(d1 if d1 is not None else d2)
+            else:
+                dist = None
+            # Both leaves predict rule1.class_; so does their parent.
+            merged = Rule(name, rule1.class_, common_conditions,
+                          class_distribution=dist)
+        merged.parsed_conditions = list(rule1.parsed_conditions[:-1])
+        merged.usage_count = rule1.usage_count + rule2.usage_count
+        merged.error_count = rule1.error_count + rule2.error_count
+        return merged
+
+    # Method to remove boundary redundancy until none is left
+    def merge_boundary_redundancy(self):
+        """
+        Merge sibling leaves with the same output, repeatedly, up to the root.
+
+        This is the boundary-redundancy stage of the refinement: two sibling
+        leaves that produce the same output are replaced by their parent, and
+        since that may make the parent redundant with its own sibling, the
+        stage repeats until no pair is left. The model's predictions do not
+        change. Operates on `final_rules` (seeded from `initial_rules`).
+
+        Returns:
+            List[Tuple[Rule, Rule]]: Every pair merged, over all rounds.
+        """
+        if not self.final_rules:
+            self.final_rules = list(self.initial_rules)
+        merged_pairs = []
+        while True:
+            pairs = self.find_duplicated_rules(type='soft')
+            if not pairs:
+                return merged_pairs
+            remove = set()
+            new_rules = []
+            for rule1, rule2 in pairs:
+                if id(rule1) in remove or id(rule2) in remove:
+                    continue
+                remove.update((id(rule1), id(rule2)))
+                new_rules.append(self._merge_sibling_pair(rule1, rule2))
+                merged_pairs.append((rule1, rule2))
+            self.final_rules = [r for r in self.final_rules
+                                if id(r) not in remove] + new_rules
+
     # Method to find the sibling of a rule in the tree
     def _find_sibling(self, rule, rules):
         """
@@ -3373,9 +3723,12 @@ class RuleClassifier(RuleExporterMixin):
                     sibling.class_distribution = [
                         a + b for a, b in zip(sibling.class_distribution, rule.class_distribution)
                     ]
-                    # Update class_ to match the new majority class
-                    best_idx = sibling.class_distribution.index(max(sibling.class_distribution))
-                    sibling.class_ = str(best_idx)
+                    # Update class_ to match the new majority class (a label,
+                    # not the index into the distribution)
+                    dist = sibling.class_distribution
+                    sibling.class_ = self._label_at(dist.index(max(dist)), len(dist))
+                sibling.usage_count += rule.usage_count
+                sibling.error_count += rule.error_count
 
                 # Update its name to indicate promotion
                 if "_promoted" not in sibling.name:
@@ -3402,13 +3755,13 @@ class RuleClassifier(RuleExporterMixin):
 
         if promoted_count > 0:
             print(f"Promoted {promoted_count} sibling rule(s) after specific rule removal.")
-            self._warn_promotions_that_overlap(working_rules)
+            self._warn_promotions_that_overlap(working_rules, tree_of=_tree_id)
 
         return working_rules
 
     # Method to report promotions that swallowed still-live rules
     @staticmethod
-    def _warn_promotions_that_overlap(rules) -> int:
+    def _warn_promotions_that_overlap(rules, tree_of=None) -> int:
         """
         Report promoted rules whose region now contains other live rules.
 
@@ -3425,8 +3778,15 @@ class RuleClassifier(RuleExporterMixin):
         extend the promoted rule's conditions. Sorting makes those a contiguous
         range, giving O(n log n) instead of a quadratic comparison.
 
+        Only rules of the same tree can overlap in this sense: the trees of an
+        ensemble all cover the whole space and often split on the same
+        thresholds, so comparing across trees would flag every promotion whose
+        conditions happen to prefix a path of another tree.
+
         Args:
             rules (List[Rule]): The rule set after promotion.
+            tree_of (Callable[[Rule], str], optional): Tree a rule belongs to.
+                Defaults to one tree for all rules.
 
         Returns:
             int: How many promoted rules swallowed at least one live rule.
@@ -3437,9 +3797,17 @@ class RuleClassifier(RuleExporterMixin):
         if not promoted:
             return 0
 
-        keys = sorted(tuple(r.parsed_conditions) for r in rules)
+        if tree_of is None:
+            def tree_of(_r):
+                return '_all'
+        keys_by_tree: dict = defaultdict(list)
+        for r in rules:
+            keys_by_tree[tree_of(r)].append(tuple(r.parsed_conditions))
+        for keys in keys_by_tree.values():
+            keys.sort()
         affected = 0
         for r in promoted:
+            keys = keys_by_tree[tree_of(r)]
             p = tuple(r.parsed_conditions)
             i = bisect.bisect_right(keys, p)
             if i < len(keys) and keys[i][:len(p)] == p:
@@ -3458,7 +3826,8 @@ class RuleClassifier(RuleExporterMixin):
         return affected
 
     # Exports the rule set to a standalone native Python classifier file
-    def export_to_native_python(self, feature_names=None, filename="files/fast_classifier.py"):
+    def export_to_native_python(self, feature_names=None, filename="files/fast_classifier.py",
+                               rules=None):
         """
         Generates a standalone Python file with the decision logic.
         
@@ -3468,10 +3837,13 @@ class RuleClassifier(RuleExporterMixin):
         Args:
             feature_names (List[str], optional): Kept for compatibility.
             filename (str): Output filename.
+            rules (List[Rule], optional): Rules to export. Defaults to
+                final_rules if available, else initial_rules.
         """
         print(f"[EXPORT] Generating native classifier: {filename}")
-        
-        rules_to_export = self.final_rules if self.final_rules else self.initial_rules
+
+        rules_to_export = rules if rules is not None else (
+            self.final_rules if self.final_rules else self.initial_rules)
         
         with open(filename, "w") as f:
             
@@ -3497,21 +3869,12 @@ class RuleClassifier(RuleExporterMixin):
                         continue
 
                     func_name = f'predict_{tid}'
-                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}}
-                    next_id = 1
-                    for rule in rules:
-                        curr = 0
-                        for var, op, val in rule.parsed_conditions:
-                            if tree_dict[curr]['f'] == -2:
-                                tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
-                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': 0.0}
-                                next_id += 2
-                            if op in ['<=', '<']:
-                                curr = tree_dict[curr]['l']
-                            else:
-                                curr = tree_dict[curr]['r']
-                        tree_dict[curr]['v'] = rule.contribution if rule.contribution is not None else 0.0
+                    tree_dict = self._tree_from_rules(rules)
+                    for node in tree_dict.values():
+                        rule = node.pop('rule', None)
+                        # Uncovered region: the stage abstains (adds 0.0).
+                        node['v'] = (rule.contribution if rule is not None
+                                     and rule.contribution is not None else 0.0)
 
                     # Method to _build_export_code.
                     def _build_export_code(node_id, indent, td=tree_dict):
@@ -3557,8 +3920,8 @@ class RuleClassifier(RuleExporterMixin):
                         if rules[0].class_group != pos_class:
                             continue
                         f.write(f'    score += predict_{tid}(sample)\n')
-                    f.write('    prob = 1.0 / (1.0 + math.exp(-score))\n')
-                    f.write(f'    return {int(classes[1])} if prob >= 0.5 else {int(classes[0])}\n')
+                    # Decide on the raw score, as scikit-learn does (raw >= 0).
+                    f.write(f'    return {int(classes[1])} if score >= 0.0 else {int(classes[0])}\n')
                 else:
                     for class_label in classes:
                         score_init = init_scores.get(class_label, 0.0)
@@ -3600,22 +3963,14 @@ class RuleClassifier(RuleExporterMixin):
                     tree_func_names.append(func_name)
                     
                     # Build tree structure — store probability distributions at leaves
-                    tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}}
-                    next_id = 1
-                    
-                    for rule in rules:
-                        curr = 0
-                        for var, op, val in rule.parsed_conditions:
-                            if tree_dict[curr]['f'] == -2:
-                                tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                                tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
-                                tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': None}
-                                next_id += 2
-                            if op in ['<=', '<']:
-                                curr = tree_dict[curr]['l']
-                            else:
-                                curr = tree_dict[curr]['r']
-                        
+                    tree_dict = self._tree_from_rules(rules)
+
+                    for curr, node in tree_dict.items():
+                        rule = node.pop('rule', None)
+                        node['v'] = None
+                        if rule is None:
+                            continue  # uncovered region: the tree abstains
+
                         if rule.class_distribution is not None:
                             raw = rule.class_distribution
                             total_c = sum(raw)
@@ -3698,26 +4053,16 @@ class RuleClassifier(RuleExporterMixin):
 
             # --- Decision Tree Export Strategy (Single Tree) ---
             else:
-                tree_dict = {0: {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}}
-                next_id = 1
-                for rule in rules_to_export:
-                    curr = 0
-                    for var, op, val in rule.parsed_conditions:
-                        if tree_dict[curr]['f'] == -2:
-                            tree_dict[curr].update({'f': var, 't': val, 'l': next_id, 'r': next_id + 1})
-                            tree_dict[next_id] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                            tree_dict[next_id + 1] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0, 'v': -1}
-                            next_id += 2
-                        if op in ['<=', '<']:
-                            curr = tree_dict[curr]['l']
-                        else:
-                            curr = tree_dict[curr]['r']
-                    
+                tree_dict = self._tree_from_rules(rules_to_export)
+                for node in tree_dict.values():
+                    rule = node.pop('rule', None)
+                    if rule is None:
+                        node['v'] = -1  # uncovered region -> default_class
+                        continue
                     try:
-                        clean_class = int(str(rule.class_).replace('Class', '').strip())
+                        node['v'] = int(str(rule.class_).replace('Class', '').strip())
                     except Exception:
-                        clean_class = rule.class_
-                    tree_dict[curr]['v'] = clean_class
+                        node['v'] = rule.class_
 
                 # Method to build_dt_code.
                 def build_dt_code(node_id, indent):
@@ -3752,7 +4097,28 @@ class RuleClassifier(RuleExporterMixin):
 
                 f.write("def predict(sample):\n")
                 f.write(build_dt_code(0, 1))
-        
+
+        if getattr(self, 'input_dtype', None) == 'float32':
+            # scikit-learn casts X to float32 before comparing it with the
+            # thresholds; the standalone file must too (without numpy).
+            with open(filename) as f:  # same encoding it was written with
+                code = f.read()
+            assert code.count("def predict(sample):\n") == 1
+            code = code.replace("def predict(sample):\n", "def _predict(sample):\n")
+            code += (
+                "\n\nimport struct as _struct\n\n\n"
+                "def _f32(v):\n"
+                "    \"\"\"Round v to float32, as scikit-learn does before comparing.\"\"\"\n"
+                "    try:\n"
+                "        return _struct.unpack('f', _struct.pack('f', v))[0]\n"
+                "    except (OverflowError, TypeError, _struct.error):\n"
+                "        return v\n\n\n"
+                "def predict(sample):\n"
+                "    return _predict({k: _f32(v) for k, v in sample.items()})\n"
+            )
+            with open(filename, "w") as f:
+                f.write(code)
+
         print(f"[EXPORT] File '{filename}' generated.")
         
     # Method to export to multiple formats at once
@@ -4271,7 +4637,30 @@ class RuleClassifier(RuleExporterMixin):
         with open(path, 'rb') as f:
             return pickle.load(f)
 
-    # Method to process data
+    # Method to apply the input precision to test rows
+    @staticmethod
+    def _quantize_rows(X_test, clf):
+        """Apply `clf`'s input precision to the refinement's test rows.
+
+        The refinement counts rule usage with the iterative engine; without
+        this, a sample within one float32 ULP of a threshold would be counted
+        on one side while every prediction engine routes it to the other.
+
+        Args:
+            X_test (list | np.ndarray): Test rows.
+            clf (RuleClassifier | None): The classifier.
+
+        Returns:
+            The rows, float32-rounded when ``clf.input_dtype == 'float32'``.
+        """
+        if clf is None or getattr(clf, 'input_dtype', None) != 'float32':
+            return X_test
+        try:
+            return np.asarray(X_test, dtype=np.float32).astype(np.float64).tolist()
+        except (TypeError, ValueError):
+            return X_test
+
+    # Method to prepare test data
     @staticmethod
     def _prepare_test_data(file_path=None, X=None, y=None, clf=None):
         """
@@ -4290,14 +4679,13 @@ class RuleClassifier(RuleExporterMixin):
                 feature_names = clf._array_feature_names if clf and hasattr(clf, '_array_feature_names') else [f"Feature_{i}" for i in range(len(X[0]))]
                 X_test = X.tolist() if hasattr(X, 'tolist') else list(X)
             y_test = y.tolist() if hasattr(y, 'tolist') else list(y)
-            return X_test, y_test, feature_names
-        
+            return RuleClassifier._quantize_rows(X_test, clf), y_test, feature_names
+
         if file_path:
-            from .rule_classifier import RuleClassifier # To handle potential circularity or direct calls
             _, _, X_test, y_test, _, _, feature_names = RuleClassifier.process_data(
                 '.', file_path, is_test_only=True
             )
-            return X_test, y_test, feature_names
+            return RuleClassifier._quantize_rows(X_test, clf), y_test, feature_names
             
         raise ValueError("Must provide either 'file_path' or both 'X' and 'y'.")
 
@@ -4763,7 +5151,7 @@ class RuleClassifier(RuleExporterMixin):
         )
     
     # Method to execute export
-    def export(self, base_name="model", formats=None, feature_names=None):
+    def export(self, base_name="model", formats=None, feature_names=None, use_final=None):
         """
         Exports the classifier to one or more file formats.
 
@@ -4773,10 +5161,15 @@ class RuleClassifier(RuleExporterMixin):
                                     Options: "python", "binary", "c".
                                     If None, exports to python and binary only.
             feature_names (list, optional): Feature names for export.
+            use_final (bool, optional): Export final_rules (True) or
+                initial_rules (False). Defaults to final_rules if available,
+                else initial_rules. Every format exports this same rule set.
 
         Returns:
             dict: Dictionary with export results for each format.
         """
+        rules = (self._rules_for(use_final) if use_final is not None
+                 else (self.final_rules if self.final_rules else self.initial_rules))
         if formats is None:
             formats = ["python", "binary"]
         
@@ -4797,28 +5190,43 @@ class RuleClassifier(RuleExporterMixin):
             base_path = base_name
         
         results = {}
-        
+
         if export_python:
             py_filename = f"{base_path}.py"
-            self.export_to_native_python(feature_names=feature_names, filename=py_filename)
+            self.export_to_native_python(feature_names=feature_names, filename=py_filename,
+                                         rules=rules)
             results["python"] = py_filename
             print(f"  [OK] Python export: {py_filename}")
-        
-        if export_binary:
-            bin_filename = f"{base_path}.bin"
-            self.export_to_binary(filepath=bin_filename)
-            results["binary"] = bin_filename
-            print(f"  [OK] Binary export: {bin_filename}")
-        
-        if export_c:
-            c_filename = f"{base_path}.h"
-            self.export_to_c_header(filepath=c_filename)
-            results["c"] = c_filename
-            print(f"  [OK] C Header export: {c_filename}")
+
+        if export_binary or export_c:
+            # The binary and C exports serialize the *current* arrays, which
+            # are whatever was compiled last -- possibly the other rule set.
+            # Compile the exported one for the duration of the export.
+            saved = self._current_array_state() if self._arrays_compiled else None
+            names = feature_names or (list(self._array_feature_names)
+                                      if self._array_feature_names else None)
+            self._set_array_state(self._array_state_for_rules(rules, names))
+            try:
+                if export_binary:
+                    bin_filename = f"{base_path}.bin"
+                    self.export_to_binary(filepath=bin_filename)
+                    results["binary"] = bin_filename
+                    print(f"  [OK] Binary export: {bin_filename}")
+
+                if export_c:
+                    c_filename = f"{base_path}.h"
+                    self.export_to_c_header(filepath=c_filename)
+                    results["c"] = c_filename
+                    print(f"  [OK] C Header export: {c_filename}")
+            finally:
+                if saved is not None:
+                    self._set_array_state(saved)
 
         if export_cpn:
             cpn_filename = f"{base_path}.cpn"
-            self.to_cpn_tools(filepath=cpn_filename, feature_names=feature_names)
+            self.to_cpn_tools(filepath=cpn_filename, rules=rules,
+                              feature_names=feature_names,
+                              use_final=rules is not self.initial_rules)
             results["cpn"] = cpn_filename
             print(f"  [OK] CPN Tools export: {cpn_filename}")
 
@@ -4930,6 +5338,8 @@ class RuleClassifier(RuleExporterMixin):
             classifier._gbdt_init_scores = init_scores
             classifier._gbdt_is_binary = is_binary
             classifier._gbdt_classes = gbdt_classes
+            # scikit-learn compares float32(x) with the thresholds
+            classifier.input_dtype = 'float32'
 
             # Compile native model now that metadata is set
             classifier.update_native_model(classifier.initial_rules)
@@ -4958,5 +5368,7 @@ class RuleClassifier(RuleExporterMixin):
         
         print("Initializing RuleClassifier...")
         classifier = RuleClassifier.generate_classifier_model(rules, class_names_map, algorithm_type, save_initial_model=save_initial_model)
+        # scikit-learn compares float32(x) with the thresholds
+        classifier.input_dtype = 'float32'
 
         return classifier

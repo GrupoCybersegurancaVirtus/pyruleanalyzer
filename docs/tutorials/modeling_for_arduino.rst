@@ -87,7 +87,7 @@ For larger trees, use pruning or reduce ``max_depth`` until the memory check pas
 Random Forest Strategies
 -------------------------
 
-Random Forests aggregate predictions from many trees via majority voting. Each tree adds its own node arrays to Flash, so footprint grows linearly with ``n_estimators``.
+Random Forests aggregate predictions from many trees by soft voting (sum of the leaves' class distributions, then argmax). Each tree adds its own node arrays to Flash, so footprint grows linearly with ``n_estimators``.
 
 **Rule of thumb:** On Uno/Nano, aim for total nodes across all trees < 2000 (roughly ~64 KB Flash).
 
