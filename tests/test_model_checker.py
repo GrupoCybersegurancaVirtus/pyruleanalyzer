@@ -154,8 +154,9 @@ def test_every_mutant_is_detected(tmp_path, model, params, n_classes):
     # Operators that edit dormant leaves need a tree with enough of them; the
     # others apply to every net of the family.
     needs_dormant = {"dead_branch", "overlap", "hidden_overlap"}
+    # Mutant.applies is a predicate over the analysis, not a list of families.
     required = {m.name for m in MUTANTS
-                if model in m.families and m.name not in needs_dormant}
+                if m.applies({"family": model}) and m.name not in needs_dormant}
     assert required <= {m["name"] for m in mutants}
     for m in mutants:
         result = check_cpn(m["path"], class_labels=_labels(analyzer),

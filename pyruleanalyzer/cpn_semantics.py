@@ -18,10 +18,16 @@ Supported: single-page Decision Tree, Random Forest (soft voting) and GBDT
 flattens the hierarchy read by :class:`CPNNet` into a place/transition net and
 explores its reachability graph, so both the *what the net computes* question
 and the *how the net behaves* question are answered from the same file.
+
+The parsing itself is :class:`cpncheck.net.CPNNet`, which knows nothing about
+what a net is for. :class:`CPNNet` here adds back the four methods that do --
+which model family a net encodes, where its sample is, what its leaves emit --
+because those are facts about *these* nets, not about Coloured Petri Nets.
 """
 
 import re
-import xml.etree.ElementTree as ET
+
+from cpncheck.net import CPNNet as _ParsedNet
 
 
 # ---------------------------------------------------------------------------
@@ -71,82 +77,16 @@ def _eval(expr, x):
 
 
 # ---------------------------------------------------------------------------
-# .cpn parsing
+# .cpn parsing, plus what these nets mean
 # ---------------------------------------------------------------------------
 
-# Class holding the parsed contents of a .cpn file.
-class CPNNet:
-    """The parsed contents of a ``.cpn`` file, as pages of guards and arcs."""
+# Class adding the tree-ensemble reading to the generic .cpn parser.
+class CPNNet(_ParsedNet):
+    """A parsed ``.cpn``, read as a decision tree, a forest or a boosting model.
 
-    # Method to parse a .cpn file into pages of places, transitions and arcs.
-    def __init__(self, path):
-        """Parse a ``.cpn`` file.
-
-        Args:
-            path (str): Path to the exported ``.cpn``.
-        """
-        self.path = path
-        root = ET.parse(path).getroot()
-        self.cpnet = root.find("cpnet")
-        self.pages = {}          # page name -> dict(places, transitions, arcs)
-        self.page_by_id = {}
-
-        for page in self.cpnet.iter("page"):
-            name_el = page.find("pageattr")
-            pname = name_el.get("name") if name_el is not None else page.get("id")
-            places, trans, arcs = {}, {}, []
-
-            for pl in page.iter("place"):
-                port = pl.find("port")
-                places[pl.get("id")] = {
-                    "name": (pl.findtext("text") or "").strip(),
-                    "initmark": (pl.find("initmark").findtext("text")
-                                 if pl.find("initmark") is not None else None),
-                    "port": port.get("type") if port is not None else None,
-                }
-            for tr in page.iter("trans"):
-                sub = tr.find("subst")
-                trans[tr.get("id")] = {
-                    "name": (tr.findtext("text") or "").strip(),
-                    "guard": (tr.find("cond").findtext("text")
-                              if tr.find("cond") is not None else None),
-                    "subpage": sub.get("subpage") if sub is not None else None,
-                    # (socket id, port id) pairs binding this substitution
-                    # transition's sockets to the ports of its subpage.
-                    "portsock": re.findall(r"\(([^,]+),([^)]+)\)",
-                                           sub.get("portsock") or "")
-                    if sub is not None else [],
-                }
-            for ar in page.iter("arc"):
-                arcs.append({
-                    "orient": ar.get("orientation"),
-                    "trans": ar.find("transend").get("idref"),
-                    "place": ar.find("placeend").get("idref"),
-                    "expr": (ar.find("annot").findtext("text")
-                             if ar.find("annot") is not None else "").strip(),
-                })
-
-            entry = {"id": page.get("id"), "name": pname, "places": places,
-                     "transitions": trans, "arcs": arcs}
-            self.pages[pname] = entry
-            self.page_by_id[page.get("id")] = entry
-
-    # -- helpers ---------------------------------------------------------
-
-    # Method to return the top-level page, i.e. the one carrying Prediction.
-    def top_page(self):
-        """The top-level page of the net.
-
-        Returns:
-            dict: The page entry holding the ``Prediction`` place.
-
-        Raises:
-            ValueError: If no page carries a ``Prediction`` place.
-        """
-        for page in self.pages.values():
-            if any(pl["name"] == "Prediction" for pl in page["places"].values()):
-                return page
-        raise ValueError("no page with a Prediction place")
+    Parsing comes from :class:`cpncheck.net.CPNNet`; everything below is about
+    the nets this package generates.
+    """
 
     # Method to detect which model family the net encodes.
     def family(self):

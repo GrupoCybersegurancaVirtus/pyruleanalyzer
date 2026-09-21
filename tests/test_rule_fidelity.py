@@ -264,7 +264,9 @@ def cpn(analyzer, use_final, X, tmp_path):
     mc = CPNModelChecker(paths[which], feature_names=NAMES)
     out = []
     for x in f32(X):
-        tokens = mc.cnet.run(mc.cnet.initial_marking(tuple(x)))[mc.structure.pred]
+        # Which places carry the input is the profile's to say, not the net's.
+        start = mc.cnet.initial_marking(tuple(x), places=mc.input_places)
+        tokens = mc.cnet.run(start)[mc.structure.pred]
         assert len(tokens) == 1
         out.append(int(tokens[0]))
     return np.array(out)
