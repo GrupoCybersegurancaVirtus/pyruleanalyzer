@@ -88,3 +88,24 @@ def test_an_exhausted_budget_gives_no_verdict_and_says_why():
     assert d2a.holds is None
     assert "cannot be reordered" in d2a.detail
     assert result.properties["A1"].holds is True
+
+
+@pytest.mark.parametrize("name,labels", FIXTURES, ids=IDS)
+def test_sweep_line_verdicts_equal_full_verdicts(tmp_path, name, labels):
+    """CPNCheck's sweep-line method on the tree profile: what it decides
+    (properties of single markings) it decides as the full graph does, under
+    any progress measure; the rest is left without a verdict."""
+    decided = 0
+    for m in _nets(tmp_path, name):
+        mc = CPNModelChecker(m["path"], class_labels=m["labels"] or labels)
+        full = mc.check()
+        for progress in ("0", lambda marking: hash(marking) % 3):
+            swept = mc.check(reduction="sweep", progress=progress)
+            for pid, r in swept.properties.items():
+                if r.holds is None:
+                    assert r.detail, (m["name"], pid)
+                    continue
+                assert r.holds == full.properties[pid].holds, \
+                    (m["name"], pid, r.detail)
+                decided += 1
+    assert decided > 50

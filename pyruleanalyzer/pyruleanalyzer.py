@@ -665,6 +665,7 @@ class PyRuleAnalyzer:
         askctl: bool = False,
         verbose: bool = True,
         reduction: Optional[str] = None,
+        reduction_options: Optional[Dict[str, Any]] = None,
     ):
         """Verify the generated HCPN model.
 
@@ -706,6 +707,12 @@ class PyRuleAnalyzer:
                 boosting channels are no longer interleaved, so a forest of
                 ``n`` trees needs about ``n`` markings instead of ``2**n``.
                 No CPN Tools oracle values are produced in that mode.
+                ``"sweep"``, ``"equivalence"`` and ``"symmetry"`` are CPNCheck's
+                other reductions; the tree nets are neither timed nor
+                symmetric, so ``"stubborn"`` is the one that helps here.
+            reduction_options: Settings of the reduction, passed to CPNCheck:
+                ``{"progress": ...}`` for ``"sweep"``, ``{"equivalence":
+                ...}`` or ``{"symmetry": ...}``.
 
         Returns:
             ModelCheckResult: For ``which="initial"`` or ``"final"``.
@@ -753,6 +760,7 @@ class PyRuleAnalyzer:
                 classifier=self.classifier if check_consistency else None,
                 use_final=(stage == "final"), test_samples=test_samples,
                 verbose=verbose, reduction=reduction,
+                **(reduction_options or {}),
             )
             if askctl:
                 checker.export_askctl(os.path.splitext(path)[0] + ".sml")

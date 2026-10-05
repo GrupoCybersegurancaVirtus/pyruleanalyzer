@@ -154,8 +154,8 @@ class CPNModelChecker(_GenericChecker):
     def check(self, samples=None, classifier=None, use_final: bool = True,
               test_samples=None, max_nodes: Optional[int] = None,
               verbose: bool = False, reduction: Optional[str] = None,
-              reference=None, options: Optional[Dict[str, Any]] = None
-              ) -> ModelCheckResult:
+              reference=None, options: Optional[Dict[str, Any]] = None,
+              **reduction_options) -> ModelCheckResult:
         """Verify every applicable property.
 
         Args:
@@ -165,10 +165,12 @@ class CPNModelChecker(_GenericChecker):
             test_samples: Inputs for the conformance test.
             max_nodes (int, optional): Occurrence-graph budget.
             verbose (bool): Print progress.
-            reduction (str, optional): ``"stubborn"`` for partial-order
-                reduction.
+            reduction (str, optional): ``"stubborn"``, ``"sweep"``,
+                ``"equivalence"`` or ``"symmetry"`` (see CPNCheck).
             reference: Same as ``classifier``, under CPNCheck's name.
             options (dict, optional): Further profile settings.
+            **reduction_options: ``progress``, ``equivalence`` or
+                ``symmetry``, passed to CPNCheck.
 
         Returns:
             ModelCheckResult: The verdicts.
@@ -180,7 +182,7 @@ class CPNModelChecker(_GenericChecker):
                              else reference,
                              test_samples=test_samples, max_nodes=max_nodes,
                              verbose=verbose, reduction=reduction,
-                             options=run_options)
+                             options=run_options, **reduction_options)
 
 
 # Function to verify a generated net in one call.

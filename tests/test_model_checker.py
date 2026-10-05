@@ -188,6 +188,13 @@ def test_stubborn_reduction_gives_the_full_graph_verdicts(tmp_path, model,
     assert result.passed, result.report()
     assert result.stats["reduction"] == "stubborn"
 
+    swept = analyzer.model_check(which="final", cpn_path=paths["final"],
+                                 samples=X_test.iloc[:1], reduction="sweep",
+                                 reduction_options={"progress": "0"},
+                                 check_consistency=False, verbose=False)
+    assert swept.stats["reduction"] == "sweep"
+    assert not swept.failures, swept.report()
+
 
 def test_every_property_has_a_mutant():
     covered = {t for m in MUTANTS for t in m.targets}
