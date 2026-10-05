@@ -99,7 +99,7 @@ class GBDTAnalyzer:
         duplicate-removal loop finishes for GBDT.
 
         Args:
-            method: The removal method used ('soft', 'hard').
+            method: The removal method used ('soft', 'medium').
             intra_tree_pairs: Pairs found by ``find_duplicated_rules``.
         """
         # Each pair = 2 rules merged into 1 generalized -> 1 redundancy

@@ -883,7 +883,6 @@ The main class that handles the entire pipeline.
 - `"none"` -- No redundancy removal
 - `"soft"` -- Intra-tree boundary merging only (safe for all algorithms)
 - `"medium"` -- Broader boundary definitions
-- `"hard"` -- Intra-tree + inter-tree semantic merging (RF/GBDT)
 - `"custom"` -- Use the function set via `set_custom_rule_removal()`
 
 **`remove_below_n_classifications` options:**

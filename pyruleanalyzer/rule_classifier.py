@@ -3347,11 +3347,11 @@ class RuleClassifier(RuleExporterMixin):
         """
         Adjusts and removes duplicated rules from the rule set based on the specified method.
 
-        This method analyzes the current rule set to identify duplicates. It creates generalized 
-        rules by merging sibling nodes (soft) or representative rules for inter-tree duplicates (hard).
+        This method analyzes the current rule set to identify duplicates and creates
+        generalized rules by merging sibling nodes into their parent.
 
         Args:
-            method (str): Strategy for rule refinement. Must be "custom", "soft", or "hard".
+            method (str): Strategy for rule refinement. Must be "custom", "soft", or "medium".
 
         Returns:
             Tuple[List[Rule], List[Tuple[Rule, Rule]]]: 
@@ -3361,15 +3361,15 @@ class RuleClassifier(RuleExporterMixin):
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
         
-        if method not in ["soft", "medium", "hard", "custom"]:
-            raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium', 'hard' or 'custom'.")
+        if method not in ["soft", "medium", "custom"]:
+            raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium' or 'custom'.")
 
         # Determine source rules: Use final_rules if populated (iteration n), else initial (iteration 0)
         source_rules = self.final_rules if self.final_rules else self.initial_rules
 
         # 1. Soft/Medium Check: Boundary Redundancy within the same tree
         # This identifies siblings that can be merged into their parent
-        similar_rules_soft = self.find_duplicated_rules(type=method if method in ['soft', 'medium'] else 'soft')
+        similar_rules_soft = self.find_duplicated_rules(type=method)
         
         rules_to_remove = set()
         new_generalized_rules = []
@@ -3388,32 +3388,7 @@ class RuleClassifier(RuleExporterMixin):
             # which differentiated the two siblings, is dropped.
             new_generalized_rules.append(self._merge_sibling_pair(rule1, rule2))
 
-        # 2. Hard Check: Semantic Redundancy between trees
-        if method == "hard":
-            print("Analyzing duplicated rules between trees...")
-            if self.algorithm_type == 'Random Forest':
-                similar_rule_groups = self.find_duplicated_rules_between_trees()
-                
-                for group in similar_rule_groups:
-                    # Mark all for removal
-                    for rule in group:
-                        rules_to_remove.add(rule)
-                    
-                    # Create ONE representative rule from the group
-                    # We pick the first one as the template
-                    representative = group[0]
-                    
-                    # Merge names for traceability
-                    new_name = "_&_".join(sorted([r.name for r in group]))
-                    
-                    # Create representative rule — preserve class_distribution
-                    new_rule = Rule(new_name, representative.class_, representative.conditions,
-                                    class_distribution=representative.class_distribution)
-                    new_rule.parsed_conditions = self.parse_conditions_static(new_rule.conditions)
-                    
-                    new_generalized_rules.append(new_rule)
-
-        # 3. Rebuild the Rule Set
+        # 2. Rebuild the Rule Set
         # Keep rules that were NOT marked for removal + the newly created generalized rules
         final_list = new_generalized_rules + [r for r in source_rules if r not in rules_to_remove]
         

@@ -101,10 +101,10 @@ class RFAnalyzer:
         duplicate-removal loop finishes for RF.
 
         Args:
-            method: The removal method used ('soft', 'medium', 'hard').
+            method: The removal method used ('soft', 'medium').
             intra_tree_pairs: Pairs found by ``find_duplicated_rules``.
             inter_tree_groups: Groups found by
-                ``find_duplicated_rules_between_trees`` (only for 'hard').
+                ``find_duplicated_rules_between_trees``.
         """
         # Each pair = 2 rules merged into 1 generalized -> 1 redundancy
         self.redundancy_counts["intra_tree"] += len(intra_tree_pairs)
