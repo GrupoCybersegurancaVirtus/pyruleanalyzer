@@ -852,7 +852,7 @@ def remove_short_rules(rules):
     return kept, removed
 
 classifier.set_custom_rule_removal(remove_short_rules)
-classifier.execute_rule_refinement("test.csv", remove_duplicates="custom")
+new_rules, removed = classifier.adjust_and_remove_rules("custom")
 ```
 
 ---
@@ -879,10 +879,13 @@ The main class that handles the entire pipeline.
 | `execute_rule_refinement(X, y, file_path, remove_below_n_classifications=-1)` | Run the full optimization pipeline |
 | `compare_initial_final_results(X, y, file_path)` | Compare initial vs. final model with metrics and divergence analysis |
 
-**`remove_duplicates` options:**
-- `"none"` -- No redundancy removal
-- `"soft"` -- Intra-tree boundary merging only (safe for all algorithms)
-- `"medium"` -- Broader boundary definitions
+`execute_rule_refinement` always merges boundary redundancy: sibling leaves of
+the same tree that split one variable at one threshold with complementary
+operators and give the same output are merged into their parent, until no such
+pair is left. Predictions are unchanged.
+
+**`adjust_and_remove_rules(method)` options** (one merge round, called directly):
+- `"boundary"` -- Intra-tree boundary merging (default; safe for all algorithms)
 - `"custom"` -- Use the function set via `set_custom_rule_removal()`
 
 **`remove_below_n_classifications` options:**

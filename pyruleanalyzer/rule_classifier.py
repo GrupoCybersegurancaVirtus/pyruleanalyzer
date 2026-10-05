@@ -3189,20 +3189,19 @@ class RuleClassifier(RuleExporterMixin):
         return [group for group in rules_by_signature.values() if len(group) > 1]
     
     # Method to find duplicated rules within the same tree (Boundary Redundancy)
-    def find_duplicated_rules(self, type='soft'):
+    def find_duplicated_rules(self):
         """
         Identifies nearly identical rules within the same decision tree context.
 
         This method searches for rule pairs that:
         - Have the same class label.
         - Share all conditions except the last one (same path parent).
-        - Differ only in the final condition boundary (e.g., v1 <= 5 vs v1 > 5).
+        - Differ only in the final condition, which splits the same variable at
+          the same threshold with complementary operators (``<=``/``>`` or
+          ``<``/``>=``), e.g. v1 <= 5 vs v1 > 5.
 
-        Such pairs are considered duplicates because they imply the split at that 
+        Such pairs are considered duplicates because they imply the split at that
         boundary was unnecessary for the final classification outcome.
-
-        Args:
-            type (str): Strictness level ('soft' or 'medium').
 
         Returns:
             List[Tuple[Rule,Rule]]: A list of tuples, each representing a pair of duplicated rules.
@@ -3263,18 +3262,9 @@ class RuleClassifier(RuleExporterMixin):
                     if abs(val1 - val2) > 1e-9:
                         continue
                     
-                    # Check 3: Check for complementary operators
-                    op_pair = {op1, op2}
-                    is_duplicate = False
-                    
-                    if type == 'soft':
-                        # Standard complements: (<= vs >) or (< vs >=)
-                        if op_pair in [{'<=', '>'}, {'<', '>='}]:
-                            is_duplicate = True
-                    elif type == 'medium':
-                        # Broader definition allowing overlaps or loose boundaries
-                        if op_pair in [{'<=', '>'}, {'<', '>='}, {'<', '>'}, {'>=', '<'}, {'<=', '<'}]:
-                            is_duplicate = True
+                    # Check 3: Complementary operators, (<= vs >) or (< vs >=),
+                    # so the two rules split one region exactly in two.
+                    is_duplicate = {op1, op2} in ({'<=', '>'}, {'<', '>='})
 
                     # GBDT: siblings must also add exactly the same value to
                     # the score (v_i = v_j). The merged rule keeps rule1's
@@ -3343,15 +3333,17 @@ class RuleClassifier(RuleExporterMixin):
         return rules, []
 
     # Method to adjust and remove duplicated rules
-    def adjust_and_remove_rules(self, method):
+    def adjust_and_remove_rules(self, method="boundary"):
         """
         Adjusts and removes duplicated rules from the rule set based on the specified method.
 
-        This method analyzes the current rule set to identify duplicates and creates
-        generalized rules by merging sibling nodes into their parent.
+        With ``"boundary"`` it finds sibling leaves whose split is redundant
+        (:meth:`find_duplicated_rules`) and merges each pair into their parent,
+        one round at a time. With ``"custom"`` it delegates to the function set
+        via :meth:`set_custom_rule_removal`.
 
         Args:
-            method (str): Strategy for rule refinement. Must be "custom", "soft", or "medium".
+            method (str): ``"boundary"`` (default) or ``"custom"``.
 
         Returns:
             Tuple[List[Rule], List[Tuple[Rule, Rule]]]: 
@@ -3361,26 +3353,23 @@ class RuleClassifier(RuleExporterMixin):
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
         
-        if method not in ["soft", "medium", "custom"]:
-            raise ValueError(f"Invalid method: {method}. Use 'soft', 'medium' or 'custom'.")
+        if method != "boundary":
+            raise ValueError(f"Invalid method: {method}. Use 'boundary' or 'custom'.")
 
         # Determine source rules: Use final_rules if populated (iteration n), else initial (iteration 0)
         source_rules = self.final_rules if self.final_rules else self.initial_rules
 
-        # 1. Soft/Medium Check: Boundary Redundancy within the same tree
-        # This identifies siblings that can be merged into their parent
-        similar_rules_soft = self.find_duplicated_rules(type=method)
-        
+        # 1. Boundary redundancy within the same tree: siblings that can be
+        # merged into their parent
+        sibling_pairs = self.find_duplicated_rules()
+
         rules_to_remove = set()
         new_generalized_rules = []
 
-        if similar_rules_soft:
-            # Silence per-iteration print to avoid clutter if desired, or keep it.
-            # user asked for "Merging X pairs..." to be consolidated, but seeing progress is also good.
-            # I'll keep the granular print but the summary is what counts.
-            print(f"Merging {len(similar_rules_soft)} pairs of duplicated rules...")
+        if sibling_pairs:
+            print(f"Merging {len(sibling_pairs)} pairs of duplicated rules...")
 
-        for rule1, rule2 in similar_rules_soft:
+        for rule1, rule2 in sibling_pairs:
             rules_to_remove.add(rule1)
             rules_to_remove.add(rule2)
 
@@ -3392,7 +3381,7 @@ class RuleClassifier(RuleExporterMixin):
         # Keep rules that were NOT marked for removal + the newly created generalized rules
         final_list = new_generalized_rules + [r for r in source_rules if r not in rules_to_remove]
         
-        return final_list, similar_rules_soft
+        return final_list, sibling_pairs
     
     # Method to name the class at an index of a class distribution
     def _label_at(self, idx: int, n: int) -> str:
@@ -3474,7 +3463,7 @@ class RuleClassifier(RuleExporterMixin):
             self.final_rules = list(self.initial_rules)
         merged_pairs = []
         while True:
-            pairs = self.find_duplicated_rules(type='soft')
+            pairs = self.find_duplicated_rules()
             if not pairs:
                 return merged_pairs
             remove = set()

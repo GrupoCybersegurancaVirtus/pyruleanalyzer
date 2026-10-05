@@ -389,7 +389,7 @@ def test_boundary_merge_preserves_the_model_and_reaches_a_fixpoint(kind):
     ref, overlaps = reference(clf, clf.final_rules, f32(X))
     assert overlaps == 0
     np.testing.assert_array_equal(ref, model.predict(X))
-    assert clf.find_duplicated_rules(type="soft") == []
+    assert clf.find_duplicated_rules() == []
 
 
 def test_boundary_merge_cascades_to_the_root():
