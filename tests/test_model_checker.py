@@ -268,7 +268,7 @@ def test_askctl_script_is_self_contained(tmp_path):
     text = io.open(checker.export_askctl(os.path.join(str(tmp_path), "q.sml")),
                    encoding="utf-8").read()
     assert 'ASKCTLloader.sml' in text and "CalculateOccGraph" in text
-    assert "PYRA_REPORT" in text and '("D1",' in text
+    assert "CPNCHECK_REPORT" in text and '("D1",' in text
 
 
 # ---------------------------------------------------------------------------

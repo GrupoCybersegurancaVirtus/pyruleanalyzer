@@ -33,6 +33,15 @@ docs = [
     "sphinxcontrib-bibtex",
 ]
 
+# Only the package itself: local working folders (files/, lib/, ...) must not
+# be picked up by setuptools' automatic discovery.
+[tool.setuptools]
+packages = ["pyruleanalyzer"]
+
+# The model-checking profile of the exported nets, published to CPNCheck.
+[project.entry-points."cpncheck.profiles"]
+ml_trees = "pyruleanalyzer.cpn_profile:PROFILE"
+
 [project.urls]
 Homepage = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer"
 Documentation = "https://grupocybersegurancavirtus.github.io/pyruleanalyzer/"
