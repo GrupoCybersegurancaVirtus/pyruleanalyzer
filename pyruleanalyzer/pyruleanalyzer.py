@@ -664,6 +664,7 @@ class PyRuleAnalyzer:
         test_samples=None,
         askctl: bool = False,
         verbose: bool = True,
+        reduction: Optional[str] = None,
     ):
         """Verify the generated HCPN model.
 
@@ -699,6 +700,12 @@ class PyRuleAnalyzer:
             askctl: Write the matching ASK-CTL (SML) script next to each
                 ``.cpn``, ready to paste into CPN Tools.
             verbose: Print the report of each verified model.
+            reduction: ``"stubborn"`` decides each property on a stubborn-set
+                reduced occurrence graph (partial-order reduction in CPNCheck)
+                instead of the full one. Same verdicts; independent trees and
+                boosting channels are no longer interleaved, so a forest of
+                ``n`` trees needs about ``n`` markings instead of ``2**n``.
+                No CPN Tools oracle values are produced in that mode.
 
         Returns:
             ModelCheckResult: For ``which="initial"`` or ``"final"``.
@@ -745,7 +752,7 @@ class PyRuleAnalyzer:
                 samples=samples,
                 classifier=self.classifier if check_consistency else None,
                 use_final=(stage == "final"), test_samples=test_samples,
-                verbose=verbose,
+                verbose=verbose, reduction=reduction,
             )
             if askctl:
                 checker.export_askctl(os.path.splitext(path)[0] + ".sml")

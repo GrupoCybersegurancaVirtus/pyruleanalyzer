@@ -233,6 +233,7 @@ def verified_pipeline(
     verify_final: bool = True,
     verify_samples: int = 3,
     max_nodes: int = 200_000,
+    reduction: Optional[str] = None,
     check_consistency: bool = True,
     export_askctl: bool = False,
     fail_on_violation: bool = True,
@@ -276,6 +277,9 @@ def verified_pipeline(
             occurrence graph each (the sample sits in the initial marking).
         max_nodes: Occurrence-graph budget; beyond it the state-space properties
             get no verdict.
+        reduction: ``"stubborn"`` to model check on stubborn-set reduced
+            occurrence graphs (same verdicts, far fewer markings for forests
+            and multiclass boosting); None for the full graph.
         check_consistency: Compare the class the net computes against the
             classifier's own prediction (property PC) on the whole test set.
         export_askctl: Also write the ASK-CTL (SML) script of each net, ready to
@@ -392,7 +396,8 @@ def verified_pipeline(
         _step(verbose, 3, "Model checking the initial model")
         initial_result = analyzer.model_check(
             which="initial", cpn_path=paths["initial"], samples=samples,
-            max_nodes=max_nodes, check_consistency=check_consistency,
+            max_nodes=max_nodes, reduction=reduction,
+            check_consistency=check_consistency,
             test_samples=X_test, askctl=export_askctl, verbose=verbose)
         results["verification"]["initial"] = initial_result
         if not initial_result.passed:
@@ -433,7 +438,8 @@ def verified_pipeline(
         if verify_final:
             final_result = analyzer.model_check(
                 which="final", cpn_path=paths["final"], samples=samples,
-                max_nodes=max_nodes, check_consistency=check_consistency,
+                max_nodes=max_nodes, reduction=reduction,
+                check_consistency=check_consistency,
                 test_samples=X_test, askctl=export_askctl, verbose=verbose)
             results["verification"]["final"] = final_result
             if "initial" in results["verification"]:

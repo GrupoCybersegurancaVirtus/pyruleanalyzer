@@ -167,6 +167,28 @@ def test_every_mutant_is_detected(tmp_path, model, params, n_classes):
             assert target in failed, (m["name"], target, result.report())
 
 
+@pytest.mark.parametrize("model,params,n_classes", MODELS, ids=IDS)
+def test_stubborn_reduction_gives_the_full_graph_verdicts(tmp_path, model,
+                                                          params, n_classes):
+    """Partial-order reduction must not change a verdict, mutants included."""
+    analyzer, paths, X_test = _nets(tmp_path, model, params, n_classes)
+    mutants = make_mutants(paths["final"], os.path.join(str(tmp_path), "m"))
+    for path in [paths["initial"], paths["final"]] + [m["path"] for m in mutants]:
+        checker = CPNModelChecker(path, class_labels=_labels(analyzer))
+        full = checker.check()
+        reduced = checker.check(reduction="stubborn")
+        for pid, r in full.properties.items():
+            assert reduced.properties[pid].holds == r.holds, \
+                (os.path.basename(path), pid, reduced.properties[pid].detail)
+        assert reduced.stats["nodes"] <= full.stats["nodes"]
+
+    result = analyzer.model_check(which="final", cpn_path=paths["final"],
+                                  samples=X_test.iloc[:2], test_samples=X_test,
+                                  reduction="stubborn", verbose=False)
+    assert result.passed, result.report()
+    assert result.stats["reduction"] == "stubborn"
+
+
 def test_every_property_has_a_mutant():
     covered = {t for m in MUTANTS for t in m.targets}
     assert covered >= set(PROPERTY_CATALOG) - {"D2b"}   # D2b is A5's formula
