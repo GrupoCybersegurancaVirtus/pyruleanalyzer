@@ -3,10 +3,9 @@ Comprehensive Random Forest invariant tests for pyruleanalyzer.
 
 Tests the following invariants:
 1. Initial model must be 100% faithful to sklearn (0 divergences).
-2. 'soft' duplicate removal + no specific removal = 0 divergences from sklearn.
-3. 'hard' duplicate removal + no specific removal = very few divergences (<=2%).
-   (Hard also merges inter-tree semantic duplicates, which changes voting.)
-4. Higher specific removal threshold = monotonically non-decreasing divergences.
+2. Duplicate refinement (merging redundant sibling leaves) with no low-usage
+   removal = 0 divergences from sklearn.
+3. Higher low-usage removal threshold = monotonically non-decreasing divergences.
 
 Uses multiple artificial datasets with varying characteristics and model parameters.
 """
@@ -402,100 +401,56 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
             results['warnings'].append('Native function not compiled, skipping native test.')
 
         # ================================================================
-        # INVARIANT 2: soft + no specific removal = 0 divergences
+        # INVARIANT 2: duplicate refinement + no low-usage removal = 0 divergences
         # ================================================================
         _orig_stdout = sys.stdout
         sys.stdout = open(os.devnull, 'w')
         try:
-            classifier_soft = RuleClassifier.generate_classifier_model(
+            classifier_refined = RuleClassifier.generate_classifier_model(
                 RuleClassifier.get_tree_rules(
                     sk_model, feature_names, class_names, 'Random Forest'
                 ),
                 class_names_map, 'Random Forest'
             )
-            py_analyzer_soft = PyRuleAnalyzer(classifier_soft, feature_names, class_names)
-            py_analyzer_soft.execute_rule_refinement(
+            py_analyzer_refined = PyRuleAnalyzer(classifier_refined, feature_names, class_names)
+            py_analyzer_refined.execute_rule_refinement(
                 test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
             )
         finally:
             sys.stdout.close()
             sys.stdout = _orig_stdout
 
-        n_rules_after_soft = len(classifier_soft.final_rules)
-        results['details']['n_rules_after_soft'] = n_rules_after_soft
+        n_rules_after_refinement = len(classifier_refined.final_rules)
+        results['details']['n_rules_after_refinement'] = n_rules_after_refinement
 
-        y_soft = rule_classify_all_rf(
-            classifier_soft, X_test, feature_names, classifier_soft.final_rules
+        y_refined = rule_classify_all_rf(
+            classifier_refined, X_test, feature_names, classifier_refined.final_rules
         )
-        div_soft = int(np.sum(y_sklearn != y_soft))
-        results['details']['invariant2_divergences'] = div_soft
-        results['details']['invariant2_div_pct'] = div_soft / n_test * 100
+        div_refined = int(np.sum(y_sklearn != y_refined))
+        results['details']['invariant2_divergences'] = div_refined
+        results['details']['invariant2_div_pct'] = div_refined / n_test * 100
 
-        if div_soft > 0:
+        if div_refined > 0:
             results['passed'] = False
             results['failures'].append(
-                f'INVARIANT 2 FAILED: soft removal diverges from sklearn in '
-                f'{div_soft}/{n_test} samples ({div_soft/n_test*100:.2f}%)'
+                f'INVARIANT 2 FAILED: refinement diverges from sklearn in '
+                f'{div_refined}/{n_test} samples ({div_refined/n_test*100:.2f}%)'
             )
 
-        # Also test native after soft
-        if classifier_soft.native_fn is not None:
-            y_soft_native = native_classify_all(classifier_soft, X_test, feature_names)
-            div_soft_native = int(np.sum(y_sklearn != y_soft_native))
-            results['details']['invariant2_native_divergences'] = div_soft_native
-            if div_soft_native > 0:
+        # Also test native after refinement
+        if classifier_refined.native_fn is not None:
+            y_refined_native = native_classify_all(classifier_refined, X_test, feature_names)
+            div_refined_native = int(np.sum(y_sklearn != y_refined_native))
+            results['details']['invariant2_native_divergences'] = div_refined_native
+            if div_refined_native > 0:
                 results['passed'] = False
                 results['failures'].append(
-                    f'INVARIANT 2 (NATIVE) FAILED: soft+native diverges from sklearn in '
-                    f'{div_soft_native}/{n_test} samples ({div_soft_native/n_test*100:.2f}%)'
+                    f'INVARIANT 2 (NATIVE) FAILED: refinement+native diverges from sklearn in '
+                    f'{div_refined_native}/{n_test} samples ({div_refined_native/n_test*100:.2f}%)'
                 )
 
         # ================================================================
-        # INVARIANT 3: hard + no specific removal = very few divergences (<=2%)
-        # For RF, "hard" also merges inter-tree semantic duplicates, which
-        # changes voting by reducing the number of trees that contribute.
-        # This may cause a small number of divergences from the original.
-        # ================================================================
-        _orig_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            classifier_hard = RuleClassifier.generate_classifier_model(
-                RuleClassifier.get_tree_rules(
-                    sk_model, feature_names, class_names, 'Random Forest'
-                ),
-                class_names_map, 'Random Forest'
-            )
-            py_analyzer_hard = PyRuleAnalyzer(classifier_hard, feature_names, class_names)
-            py_analyzer_hard.execute_rule_refinement(
-                test_path, remove_below_n_classifications=-1, save_final_model=False, save_report=False
-            )
-        finally:
-            sys.stdout.close()
-            sys.stdout = _orig_stdout
-
-        n_rules_after_hard = len(classifier_hard.final_rules)
-        results['details']['n_rules_after_hard'] = n_rules_after_hard
-
-        y_hard = rule_classify_all_rf(
-            classifier_hard, X_test, feature_names, classifier_hard.final_rules
-        )
-        div_hard = int(np.sum(y_sklearn != y_hard))
-        div_hard_pct = div_hard / n_test * 100
-        results['details']['invariant3_divergences'] = div_hard
-        results['details']['invariant3_div_pct'] = div_hard_pct
-
-        # Allow up to 2% divergence for hard mode (inter-tree merging changes voting)
-        hard_threshold_pct = 2.0
-        if div_hard_pct > hard_threshold_pct:
-            results['passed'] = False
-            results['failures'].append(
-                f'INVARIANT 3 FAILED: hard removal diverges from sklearn in '
-                f'{div_hard}/{n_test} samples ({div_hard_pct:.2f}%) '
-                f'[threshold: {hard_threshold_pct}%]'
-            )
-
-        # ================================================================
-        # INVARIANT 4: Higher specific removal threshold = more accuracy loss
+        # INVARIANT 3: Higher specific removal threshold = more accuracy loss
         #              (monotonically non-decreasing divergences)
         # ================================================================
         thresholds = [0, 1, 3, 5, 10, 20, 50]
@@ -530,7 +485,7 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
                 'n_rules': n_rules_t,
             })
 
-        results['details']['invariant4_threshold_results'] = threshold_results
+        results['details']['invariant3_threshold_results'] = threshold_results
 
         # Check monotonicity: divergences should be non-decreasing
         divs = [r['divergences'] for r in threshold_results]
@@ -546,14 +501,14 @@ def run_test_config(name, dataset_kwargs, model_params, verbose=True):
 
         if monotonic_violations:
             results['warnings'].append(
-                'INVARIANT 4 WARNING: Non-monotonic divergence pattern: '
+                'INVARIANT 3 WARNING: Non-monotonic divergence pattern: '
                 + '; '.join(monotonic_violations)
             )
 
         # Key check: highest threshold should have >= divergences than threshold 0
         if len(divs) >= 2 and divs[-1] < divs[0]:
             results['warnings'].append(
-                f'INVARIANT 4 NOTE: Highest threshold ({thresholds[-1]}) has fewer '
+                f'INVARIANT 3 NOTE: Highest threshold ({thresholds[-1]}) has fewer '
                 f'divergences ({divs[-1]}) than lowest ({thresholds[0]}={divs[0]}). '
                 f'This can happen if the forest is small.'
             )
@@ -600,28 +555,19 @@ def print_results(results):
     if 'invariant2_divergences' in d:
         div = d['invariant2_divergences']
         pct = d['invariant2_div_pct']
-        rules_after = d.get('n_rules_after_soft', '?')
+        rules_after = d.get('n_rules_after_refinement', '?')
         marker = 'OK' if div == 0 else 'FAIL'
-        print(f'  [INV2] Soft+NoSpec:         {div} divergences ({pct:.2f}%), '
+        print(f'  [INV2] Refined:             {div} divergences ({pct:.2f}%), '
               f'rules: {d.get("n_rules_initial","?")} -> {rules_after} [{marker}]')
     if 'invariant2_native_divergences' in d:
         div = d['invariant2_native_divergences']
         marker = 'OK' if div == 0 else 'FAIL'
-        print(f'  [INV2] Soft+NoSpec (native): {div} divergences [{marker}]')
+        print(f'  [INV2] Refined (native):    {div} divergences [{marker}]')
 
     # Invariant 3
-    if 'invariant3_divergences' in d:
-        div = d['invariant3_divergences']
-        pct = d['invariant3_div_pct']
-        rules_after = d.get('n_rules_after_hard', '?')
-        marker = 'OK' if pct <= 2.0 else 'FAIL'
-        print(f'  [INV3] Hard+NoSpec:         {div} divergences ({pct:.2f}%), '
-              f'rules: {d.get("n_rules_initial","?")} -> {rules_after} [{marker}]')
-
-    # Invariant 4
-    if 'invariant4_threshold_results' in d:
-        print('  [INV4] Threshold analysis:')
-        for tr in d['invariant4_threshold_results']:
+    if 'invariant3_threshold_results' in d:
+        print('  [INV3] Threshold analysis:')
+        for tr in d['invariant3_threshold_results']:
             print(f'         thresh={tr["threshold"]:>3d}: '
                   f'{tr["divergences"]:>4d} div ({tr["div_pct"]:>6.2f}%), '
                   f'{tr["n_rules"]:>4d} rules')
@@ -687,7 +633,7 @@ if __name__ == '__main__':
         n = d.get('n_test', '?')
         trees = d.get('n_estimators', '?')
         ri = d.get('n_rules_initial', '?')
-        rs = d.get('n_rules_after_soft', ri)
+        rs = d.get('n_rules_after_refinement', ri)
         div1 = d.get('invariant1_divergences', '?')
         acc = d.get('sklearn_accuracy', 0)
         print(f'    samples={n} | trees={trees} | rules: {ri}->{rs} | '
