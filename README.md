@@ -885,7 +885,7 @@ operators and give the same output are merged into their parent, until no such
 pair is left. Predictions are unchanged.
 
 **`adjust_and_remove_rules(method)` options** (one merge round, called directly):
-- `"boundary"` -- Intra-tree boundary merging (default; safe for all algorithms)
+- `"refine_duplicates"` -- Intra-tree boundary merging (default; safe for all algorithms)
 - `"custom"` -- Use the function set via `set_custom_rule_removal()`
 
 **`remove_below_n_classifications` options:**

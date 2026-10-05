@@ -101,7 +101,7 @@ class RFAnalyzer:
         duplicate-removal loop finishes for RF.
 
         Args:
-            method: The removal method used ('boundary' or 'custom').
+            method: The removal method used ('refine_duplicates' or 'custom').
             intra_tree_pairs: Pairs found by ``find_duplicated_rules``.
             inter_tree_groups: Groups found by
                 ``find_duplicated_rules_between_trees``.

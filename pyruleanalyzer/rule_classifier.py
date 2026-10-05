@@ -3333,17 +3333,17 @@ class RuleClassifier(RuleExporterMixin):
         return rules, []
 
     # Method to adjust and remove duplicated rules
-    def adjust_and_remove_rules(self, method="boundary"):
+    def adjust_and_remove_rules(self, method="refine_duplicates"):
         """
         Adjusts and removes duplicated rules from the rule set based on the specified method.
 
-        With ``"boundary"`` it finds sibling leaves whose split is redundant
+        With ``"refine_duplicates"`` it finds sibling leaves whose split is redundant
         (:meth:`find_duplicated_rules`) and merges each pair into their parent,
         one round at a time. With ``"custom"`` it delegates to the function set
         via :meth:`set_custom_rule_removal`.
 
         Args:
-            method (str): ``"boundary"`` (default) or ``"custom"``.
+            method (str): ``"refine_duplicates"`` (default) or ``"custom"``.
 
         Returns:
             Tuple[List[Rule], List[Tuple[Rule, Rule]]]: 
@@ -3353,8 +3353,8 @@ class RuleClassifier(RuleExporterMixin):
         if method == "custom":
             return self.custom_rule_removal(self.initial_rules)
         
-        if method != "boundary":
-            raise ValueError(f"Invalid method: {method}. Use 'boundary' or 'custom'.")
+        if method != "refine_duplicates":
+            raise ValueError(f"Invalid method: {method}. Use 'refine_duplicates' or 'custom'.")
 
         # Determine source rules: Use final_rules if populated (iteration n), else initial (iteration 0)
         source_rules = self.final_rules if self.final_rules else self.initial_rules
