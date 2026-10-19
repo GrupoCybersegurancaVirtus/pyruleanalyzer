@@ -619,6 +619,8 @@ class PyRuleAnalyzer:
         else:
             base_path = base_name
 
+        os.makedirs(os.path.dirname(base_path) or '.', exist_ok=True)
+
         fn = feature_names or self.feature_names
         name = model_name or os.path.basename(base_name)
         has_final = bool(self.classifier.final_rules)
@@ -843,18 +845,48 @@ class PyRuleAnalyzer:
 
     # Method to to python.
     def to_python(self, file_path: str, **kwargs):
-        """Proxy to RuleClassifier.to_python()"""
-        return self.classifier.to_python(file_path, **kwargs)
+        """Proxy to RuleClassifier.to_python(), writing to ``file_path``."""
+        kwargs.setdefault('feature_names', self.feature_names or None)
+        return self.classifier.to_python(filename=file_path, **kwargs)
+
+    # Method to run an array-based export on the refined rules, or the initial ones.
+    def _export_arrays(self, writer, file_path: str, **kwargs):
+        """Compile the default rule set for the duration of ``writer``.
+
+        The binary and C exports serialise the arrays compiled last, which can
+        be the other rule set; like the Python export, they should write the
+        refined rules when there are any.
+
+        Args:
+            writer: The classifier's export method.
+            file_path: Where to write.
+            **kwargs: Passed to ``writer``.
+
+        Returns:
+            Whatever ``writer`` returns.
+        """
+        clf = self.classifier
+        rules = clf.final_rules if clf.final_rules else clf.initial_rules
+        saved = clf._current_array_state() if clf._arrays_compiled else None
+        names = self.feature_names or None
+        clf._set_array_state(clf._array_state_for_rules(rules, names))
+        try:
+            return writer(file_path, **kwargs)
+        finally:
+            if saved is not None:
+                clf._set_array_state(saved)
 
     # Method to to c header.
     def to_c_header(self, file_path: str, **kwargs):
-        """Proxy to RuleClassifier.to_c_header()"""
-        return self.classifier.to_c_header(file_path, **kwargs)
+        """Write the C header of the refined (else initial) rules."""
+        return self._export_arrays(self.classifier.to_c_header, file_path,
+                                   **kwargs)
 
     # Method to to binary.
     def to_binary(self, file_path: str, **kwargs):
-        """Proxy to RuleClassifier.to_binary()"""
-        return self.classifier.to_binary(file_path, **kwargs)
+        """Write the binary model of the refined (else initial) rules."""
+        return self._export_arrays(self.classifier.to_binary, file_path,
+                                   **kwargs)
 
     # Method to load binary.
     @classmethod

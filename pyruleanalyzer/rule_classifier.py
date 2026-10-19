@@ -5153,6 +5153,8 @@ class RuleClassifier(RuleExporterMixin):
         else:
             base_path = base_name
         
+        os.makedirs(os.path.dirname(base_path) or '.', exist_ok=True)
+
         results = {}
 
         if export_python:
