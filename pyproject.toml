@@ -1,31 +1,46 @@
 [build-system]
-requires = ["setuptools", "numpy"]
+# setuptools 77 reads the SPDX licence string below (PEP 639).
+requires = ["setuptools>=77", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyruleanalyzer"
-version = "1.1.1"
-description = ""
+version = "2.0.0"
+description = "Extract, refine and formally verify the rules of scikit-learn decision trees, random forests and gradient boosting, and export them as standalone Python, C and Arduino classifiers"
 authors = [{ name = "GrupoCybersegurancaVirtus" }]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">= 3.7"
+requires-python = ">= 3.9"
 dependencies = [
     "numpy",
     "pandas",
     "scikit-learn",
     "matplotlib",
-    # Model checking of the exported .cpn models. Pure standard library;
-    # swap for "cpncheck>=0.1" once it is released to PyPI.
-    "cpncheck @ git+https://github.com/GrupoCybersegurancaVirtus/cpncheck.git",
+    # Model checking of the exported .cpn models (pure standard library).
+    "cpncheck>=0.2.1",
 ]
+keywords = ["scikit-learn", "decision tree", "random forest", "gradient boosting",
+            "rule extraction", "explainability", "petri nets", "model checking",
+            "arduino", "embedded"]
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C",
     "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 [project.optional-dependencies]
+test = ["pytest"]
 docs = [
     "sphinx",
     "sphinx-autobuild",
@@ -45,3 +60,25 @@ ml_trees = "pyruleanalyzer.cpn_profile:PROFILE"
 [project.urls]
 Homepage = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer"
 Documentation = "https://grupocybersegurancavirtus.github.io/pyruleanalyzer/"
+Changelog = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md"
+Issues = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/issues"
+
+# Wheels with the compiled C extension, built by .github/workflows/release.yml.
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+# 32-bit and musl Linux have no numpy wheels to build against or test with.
+skip = "*-win32 *_i686 *-musllinux_*"
+# A wheel without the extension must fail the build, not ship.
+environment = { PYRULEANALYZER_REQUIRE_EXTENSION = "1" }
+# Each wheel is installed in a fresh environment and must load the extension.
+test-command = "python -c \"import pyruleanalyzer._tree_traversal, pyruleanalyzer\""
+
+[tool.cibuildwheel.linux]
+# numpy publishes manylinux_2_28 wheels; the older default image would
+# compile numpy from source.
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+# Both Apple architectures from one runner; Intel wheels are tested under Rosetta.
+archs = ["x86_64", "arm64"]

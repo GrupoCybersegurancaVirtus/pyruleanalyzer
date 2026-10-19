@@ -1,0 +1,75 @@
+name: release
+
+# Pushing a tag v<version> builds the wheels (with the compiled C extension)
+# and the source distribution, and publishes them to PyPI with trusted
+# publishing: the "pyruleanalyzer" project on PyPI must trust this workflow,
+# environment "pypi"; no token is stored here.
+#
+# A push to main that touches the build, or a run by hand (Actions -> release
+# -> Run workflow), builds and tests every wheel without publishing anything.
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - setup.py
+      - pyproject.toml
+      - pyruleanalyzer/_tree_traversal.c
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+jobs:
+  wheels:
+    name: wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux x86_64 and aarch64 natively, Windows 64-bit, and both macOS
+        # architectures from the Apple-silicon runner.
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test the wheels
+        uses: pypa/cibuildwheel@v2.23.3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag must match the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v$version" = "${GITHUB_REF_NAME}"
+      - name: Build the source distribution
+        run: |
+          python -m pip install build twine
+          python -m build --sdist
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    needs: [wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,6 +1,6 @@
 # pyRuleAnalyzer
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![PyPI version](https://img.shields.io/pypi/v/pyruleanalyzer.svg)](https://pypi.org/project/pyruleanalyzer/)
 
@@ -278,9 +278,9 @@ cd pyruleanalyzer
 pip install -e .
 ```
 
-**Dependencies:** `numpy`, `pandas`, `scikit-learn`, `matplotlib`
+Python 3.9 or later. **Dependencies:** `numpy`, `pandas`, `scikit-learn`, `matplotlib` and [`cpncheck`](https://pypi.org/project/cpncheck/) (the model checker of the exported nets, pure Python).
 
-**C Extension (optional):** During installation, the build system attempts to compile the C extension (`_tree_traversal.c`) for accelerated batch prediction. This requires a C compiler (e.g., MSVC on Windows, gcc on Linux/macOS). If no compiler is found, installation succeeds normally and batch prediction falls back to numpy. You can check whether the C extension is active:
+**C Extension:** batch prediction is accelerated by a C extension (`_tree_traversal.c`). The wheels on PyPI ship it compiled for Linux (x86_64, aarch64), macOS (Intel and Apple silicon) and Windows (64-bit), Python 3.9 to 3.13, so `pip install` needs no compiler there. Elsewhere pip builds from source: with a C compiler (MSVC on Windows, gcc/clang elsewhere) the extension is compiled; without one, installation still succeeds and batch prediction falls back to numpy. You can check whether the C extension is active:
 
 ```python
 from pyruleanalyzer._accel import HAS_C_EXTENSION
@@ -507,13 +507,13 @@ python examples/arduino_example.py \
     --board esp32
 ```
 
-For full details, see [docs/tutorials/arduino.rst](docs/tutorials/arduino.rst).
+For full details, see [docs/tutorials/arduino.rst](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/tutorials/arduino.rst).
 
 ### Modeling for Arduino / ESP32
 
 For in-depth guidance on training and optimizing models specifically for Arduino/ESP32 deployment — including depth strategies, memory validation, feature selection, and board-specific recommendations — see the dedicated modeling guide:
 
-**[docs/tutorials/modeling_for_arduino.rst](docs/tutorials/modeling_for_arduino.rst)**
+**[docs/tutorials/modeling_for_arduino.rst](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/tutorials/modeling_for_arduino.rst)**
 
 This guide covers:
 - Depth vs. accuracy trade-offs per board type
@@ -1064,6 +1064,6 @@ make html
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License. See [LICENSE](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/LICENSE) for details.
 
 **Developed by [GrupoCybersegurancaVirtus](https://github.com/GrupoCybersegurancaVirtus)**
