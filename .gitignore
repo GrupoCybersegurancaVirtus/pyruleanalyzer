@@ -196,3 +196,5 @@ formalization/dt_module.json
 # Local research artifacts, not part of the library
 /artigo_iee_gbdt_teorema/
 /demo_cpn/
+
+/mastering/
