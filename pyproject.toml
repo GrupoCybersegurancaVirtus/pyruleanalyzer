@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyruleanalyzer"
-version = "2.0.0"
+version = "2.1.0"
 description = "Extract, refine and formally verify the rules of scikit-learn decision trees, random forests and gradient boosting, and export them as standalone Python, C and Arduino classifiers"
 authors = [{ name = "GrupoCybersegurancaVirtus" }]
 readme = "README.md"

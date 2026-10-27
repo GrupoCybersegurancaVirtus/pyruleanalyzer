@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
 
 **Breaking changes**
 * `verified_pipeline()` refuses an inconclusive check: a property left
@@ -66,6 +66,16 @@
   ExtraTrees trains ExtraTrees again.
 * Wheels for Python 3.14 (cibuildwheel 3.4.1); a CI job on the minimum
   declared dependency versions.
+
+**Internal**
+* `rule_classifier.py` (7 500 lines) is split into one module per
+  responsibility (`_rules`, `_labels`, `_engine`, `_native_python`, `_arrays`,
+  `_binary_format`, `_c_export`, `_refinement`, `_serialization`,
+  `_reporting`, `_extraction`), combined into `RuleClassifier` as mixins; the
+  Python and C/Arduino code generators share one generator each instead of
+  near-identical copies. Import paths are unchanged, pickles from earlier
+  versions still load, and every generated file is byte-identical to the
+  previous code's on a reference corpus.
 
 **Security**
 * `load_binary()` validates the file (header, sizes, every node and child
