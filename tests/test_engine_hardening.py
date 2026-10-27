@@ -95,15 +95,20 @@ def _dt_layout(buf):
     """
     version, algo, n_feat, n_cls, n_trees = struct.unpack_from("<BBHHH", buf, 4)
     assert algo == 0 and n_trees == 1
-    pos = 16 + (1 if version >= 2 else 0) + (4 * n_cls if version >= 3 else 0)
+    # Version 4: flag bit 2 = column labels, bit 1 = per-node missing-value
+    # routing (one byte per node after the right children).
+    flags = buf[16] if version >= 2 else 0
+    pos = 16 + (1 if version >= 2 else 0) + (4 * n_cls if version == 3 or flags & 4 else 0)
     for _ in range(n_feat):
         (ln,) = struct.unpack_from("<H", buf, pos)
         pos += 2 + ln
     (n_nodes,) = struct.unpack_from("<i", buf, pos)
     out = {"n_nodes_at": pos, "n_nodes": n_nodes}
     pos += 4
-    for key, size in (("feature_idx", 4), ("threshold", 8), ("left", 4),
-                      ("right", 4), ("value", 4)):
+    for key, size in ((("feature_idx", 4), ("threshold", 8), ("left", 4),
+                       ("right", 4))
+                      + ((("missing_left", 1),) if flags & 2 else ())
+                      + (("value", 4),)):
         out[key] = pos
         pos += n_nodes * size
     out["max_depth"] = pos

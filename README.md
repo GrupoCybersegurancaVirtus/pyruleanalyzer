@@ -71,7 +71,8 @@ the model checker for the exported nets).
 
 **The C extension.** Batch prediction uses a compiled extension. The wheels on
 PyPI ship it for Linux (x86_64, aarch64), macOS (Intel and Apple silicon) and
-Windows (64-bit), Python 3.9 to 3.13, so `pip install` needs no compiler.
+Windows (64-bit), Python 3.9 to 3.14 (not the free-threaded 3.14t build), so
+`pip install` needs no compiler.
 Elsewhere pip builds from source when a C compiler exists, and otherwise falls
 back to numpy -- slower, same answers:
 
@@ -209,8 +210,9 @@ function, for the initial and for the refined rule set:
 ![One sample through a decision tree (the one rule that matches), a random forest (summed per-tree distributions, argmax) and a boosting model (initial score plus each stage's contribution, sign of the score)](https://raw.githubusercontent.com/GrupoCybersegurancaVirtus/pyruleanalyzer/main/docs/figures/strategies.png)
 
 * **Decision Tree**: the sample goes to the one rule whose region contains it;
-  its class is the answer. With no matching rule (a hole left by a refinement)
-  the model falls back to its default class.
+  its class is the answer. With no matching rule (a rule set edited by hand
+  or a custom refinement that left a region uncovered) the model falls back to
+  its default class.
 * **Random Forest**: each tree answers with a class distribution; the
   distributions are normalised and summed, and the largest wins (lowest class
   index on a tie). A tree with no matching rule abstains.
@@ -258,12 +260,20 @@ Merging siblings is a promotion upwards:
      `-- v2 >  1.2  -> class 0                               told nothing)
 ```
 
-Removing a rarely used leaf promotes its sibling the same way when the sibling
-is a leaf, so the removed region is absorbed. When the sibling is a subtree
-there is no single rule to promote: the removed region becomes a hole, answered
-by the model's `default_class` and counted in `classifier.fallback_activations`.
-On an unpruned decision tree this reached about 3% of the test samples, so
-check that counter after an aggressive removal.
+Removing a rule never leaves an uncovered region in a Decision Tree or a
+Random Forest. When the sibling of the removed rule is a leaf, it is promoted
+the same way; when the sibling is a sub-branch, the sub-branch is raised into
+the parent's place (its rules drop the parent's split, are renamed
+`..._grafted`, and keep their outputs), so each tree still answers everywhere.
+In Gradient Boosting a removed region whose sibling is a sub-branch makes that
+stage add 0.0 to the score there: the other stages and the initial score still
+decide. Usage and error counts are recounted on the refinement set afterwards.
+
+**Error-aware removal.** `max_error_increase=k` removes a low-usage rule only
+while the refinement set's misclassifications stay within `k` of those before
+the stage; `0` never adds an error (reduced-error pruning when combined with a
+very large `remove_below_n_classifications`). `None`, the default, uses usage
+alone. A small refinement set can make it overfit: measure on fresh data.
 
 * **Random Forest refuses inter-tree fusion** (with a `RuntimeWarning`): its
   prediction is the average of one distribution per tree, so removing a voter
@@ -523,8 +533,30 @@ second formula). Beyond `max_nodes` the state-space properties get no verdict,
 rather than a guess -- they are reported as *not decided*, and an ensemble
 beyond a handful of trees gets there quickly: on a 20-tree Random Forest, 14 of
 the 16 properties were not decided at `max_nodes=50_000`, and a 50-tree forest
-took about 12 minutes. For ensembles, use partial-order reduction (stubborn
-sets), which decides most of them on much smaller graphs:
+took about 12 minutes.
+
+**For ensembles, use compositional verification.** The trees of a forest and
+the channels of a boosting model share nothing but the input, so each one is
+explored on its own (a graph of a few markings per tree) and the vote or
+decision is checked once per combination of their outputs. Every verdict comes
+with the argument that it equals the full graph's (see the model-checking
+tutorial); anything the composition cannot settle falls back to the stubborn
+reduction, and the report says which method decided each property:
+
+```python
+model.model_check(which="final", reduction="compositional")
+```
+
+| Model | Full graph | Compositional |
+|---|---|---|
+| Random Forest, 20 trees | 2^20 + 2 markings, 14 of 16 not decided | 60 markings, 1.4 s, all decided |
+| Random Forest, 50 trees | out of reach | 150 markings, 7 s, all decided |
+| Boosting, 3 classes x 20 stages | 63^3 + 2 markings | 192 markings, 1.4 s, all decided |
+
+On small ensembles, where the full graph fits, the compositional and full-graph
+verdicts were compared on 2 128 property checks, mutants included, without a
+mismatch. A single decision tree has nothing to compose and is checked on its
+(small) full graph. Partial-order reduction (stubborn sets) remains available:
 
 ```python
 model.model_check(which="final", reduction="stubborn")
@@ -600,8 +632,7 @@ went over `max_nodes` -- is not a pass either. With `fail_on_inconclusive=True`
 pipeline goes on, but `result["passed"]` is still `False` and
 `result["inconclusive"]` lists the undecided property ids per stage
 (`{"initial": [...], "final": [...]}`). For ensembles, pass
-`reduction="stubborn"` (and a larger `max_nodes` if needed) so the properties
-get a verdict.
+`reduction="compositional"` so the properties get a verdict.
 
 The refinement counts rule usage on a validation split held out from the
 training data (`validation_size=0.25` by default; its size is reported as
@@ -614,10 +645,11 @@ An already-trained estimator skips the training step, and
 ```python
 from sklearn.ensemble import RandomForestClassifier
 
-# A forest's state space grows as 2^n_trees: keep it small and use the
-# stubborn-set reduction, or the gate stops on undecided properties.
-clf = RandomForestClassifier(n_estimators=10, max_depth=5).fit(X_train, y_train)
-result = verified_pipeline(X=X, y=y, sklearn_model=clf, reduction="stubborn",
+# A forest's full state space grows as 2^n_trees; compositional verification
+# checks each tree on its own, so a realistic forest gets every verdict.
+clf = RandomForestClassifier(n_estimators=50, max_depth=6).fit(X_train, y_train)
+result = verified_pipeline(X=X, y=y, sklearn_model=clf,
+                           reduction="compositional",
                            export_formats=("c", "arduino"))
 
 analyzer = PyRuleAnalyzer.from_sklearn(clf)       # outside the pipeline
@@ -657,13 +689,27 @@ does not exist) unless you give a path:
 | `execute_rule_refinement()` (analyzers) | `save_report` | `output_classifier_*.txt` | `True` |
 
 `PyRuleAnalyzer.execute_rule_refinement()` defaults both to `False`.
-`model.save(path)` and `PyRuleAnalyzer.load(path)` pickle a model, recompiling
-the native function on load.
+**Save and load a model.** `model.save_json(path)` and
+`PyRuleAnalyzer.load_json(path)` keep everything needed to go on working with
+it -- initial and refined rules (with their usage counts, leaf values and
+distributions; thresholds read back bit for bit), GBDT metadata, feature and
+class names, hyperparameters -- so a loaded model can be refined again, edited,
+model-checked and exported. `model.save(path)` and `PyRuleAnalyzer.load(path)`
+use this JSON format when the path ends in `.json` and pickle otherwise; both
+recompile the native function on load. The `.bin` export, by contrast, holds
+only the compiled arrays: it predicts, but has no rules to refine or export.
 
-**Security.** `PyRuleAnalyzer.load()`, `RuleClassifier.load()` and the
-`model_pkl` argument use `pickle`, and checking a `.cpn` file evaluates the
-inscriptions written in it: both can run arbitrary code. Only load models and
-nets you trust.
+```python
+model.save("files/model.json")
+model = PyRuleAnalyzer.load("files/model.json")
+```
+
+**Security.** Prefer JSON: loading a `.json` model only reads data (a versioned
+format, validated field by field; a malformed file raises `ValueError`), so it
+is safe on files from others. `PyRuleAnalyzer.load()` on any other path,
+`RuleClassifier.load()` and the `model_pkl` argument use `pickle`, and checking
+a `.cpn` file evaluates the inscriptions written in it: both can run arbitrary
+code. Only load pickles and nets you trust.
 
 ## API reference
 
@@ -685,15 +731,34 @@ The parameters are `model` and the hyperparameters of the scikit-learn
 estimator. `fit` trains and extracts the rules; refinement is a separate step
 (`execute_rule_refinement`), not part of a search or a cross-validation.
 
-**Labels.** Only integer class labels are supported (`0, 1, 2, ...` or any
-integers); string or other non-integer labels raise `ValueError`. Encode them
-first, e.g. with `sklearn.preprocessing.LabelEncoder`.
+**Labels.** Any labels scikit-learn accepts work. Integer labels (`0, 1, 2,
+...` or any integers) are used as they are. Other labels (`"cat"`/`"dog"`, or
+labels given as `class_names`) are encoded: the rules and every engine work on
+their codes `0..K-1` (their position in `classes_`), and the classifier keeps
+the table (`classifier.label_table`). `predict`, `classes_`, `score`,
+`compare_initial_final_results` and the `.py` export answer the original
+labels; the C header, the Arduino sketch and the `.bin` model answer the codes
+(the C and Arduino files list the table in a comment, the `.bin` and JSON files
+store it). The CPN and the model checker work on the codes too.
+
+**Missing values.** A decision tree or forest (also ExtraTrees) routes a
+missing value (NaN) as scikit-learn does: each split sends it to the side
+recorded in `tree_.missing_go_to_left` (learned when the tree was fitted on
+data with NaN; otherwise the child that received more training samples). The
+rules record that side per condition, and every engine and export follows it:
+`predict`, `predict_proba`, single samples, the `.py`, `.bin`, JSON, C header
+and Arduino exports. Refinement keeps it consistent (a merged split takes its
+routing with it). `GradientBoostingClassifier` refuses NaN, and so does a
+model extracted from it. The CPN models real-valued inputs: the net and its
+evaluator refuse a NaN sample instead of answering it differently. Rules that
+do not record the routing (read from text, an older JSON or `.bin` file, an
+added condition) refuse NaN as before.
 
 | Method | Description |
 |---|---|
 | `PyRuleAnalyzer.new_model(model, params=None)` | An untrained analyzer: `"Decision Tree"`, `"Random Forest"` or `"Gradient Boosting Decision Trees"` |
 | `.fit(X, y)` | Train the scikit-learn model and extract its rules |
-| `PyRuleAnalyzer.from_sklearn(model, feature_names=None, class_names=None)` | Wrap an already-fitted estimator |
+| `PyRuleAnalyzer.from_sklearn(model, feature_names=None, class_names=None)` | Wrap an already-fitted `DecisionTreeClassifier`, `RandomForestClassifier`, `ExtraTreesClassifier` (wrapped as a Random Forest; `get_params()["estimator"]` remembers the class, so refitting, also after `clone`, trains an `ExtraTreesClassifier` again) or `GradientBoostingClassifier` |
 | `PyRuleAnalyzer.create(train_path, test_path, model, params, refine)` | Same, from CSV files |
 | `.execute_rule_refinement(X, y, remove_below_n_classifications=-1, refine_between_trees=False, ...)` | Refine; returns `rules_before`, `rules_after`, `rules_removed`, `reduction_percent` |
 | `.compare_initial_final_results(X, y)` | Metrics and disagreements, initial against refined |
@@ -703,7 +768,10 @@ first, e.g. with `sklearn.preprocessing.LabelEncoder`.
 | `.export(base_name, formats, use_refined)` | Several formats at once, under `files/` |
 | `.export_hcpn(base_name, which, sample)` | Write `<base>_initial.cpn` / `<base>_final.cpn` |
 | `.model_check(which, samples, test_samples, reduction, askctl, ...)` | Export if needed and verify; `"both"` also compares |
-| `.edit_rules()`, `.save(path)`, `PyRuleAnalyzer.load(path)`, `PyRuleAnalyzer.load_binary(path)` | Editing and persistence |
+| `.edit_rules()` | Edit the rules by hand |
+| `.save_json(path)`, `PyRuleAnalyzer.load_json(path)` | Save/load as JSON -- safe on untrusted files, keeps the rules |
+| `.save(path)`, `PyRuleAnalyzer.load(path)` | JSON when `path` ends in `.json`, else pickle (trusted files only) |
+| `PyRuleAnalyzer.load_binary(path)` | Load a `.bin` export (predicts; no rules) |
 
 ### RuleClassifier (`.classifier`)
 
@@ -718,7 +786,8 @@ first, e.g. with `sklearn.preprocessing.LabelEncoder`.
 | `find_duplicated_rules()`, `merge_boundary_redundancy()` | The refinement building blocks |
 | `calculate_structural_complexity(rules, n_features_total)` | The Structural Complexity Score of a rule set |
 | `set_custom_rule_removal(func)`, `adjust_and_remove_rules(method)` | Custom refinement |
-| `RuleClassifier.load(path)`, `RuleClassifier.load_binary(path)` | Load a pickle or a `.bin` |
+| `to_json(path)`, `RuleClassifier.from_json(path)` (`to_dict()`/`from_dict()`) | Save/load as JSON (safe) |
+| `RuleClassifier.load(path)`, `RuleClassifier.load_binary(path)` | Load a pickle (trusted files only) or a `.bin` |
 
 ### Rule
 

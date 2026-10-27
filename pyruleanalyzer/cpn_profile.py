@@ -9,8 +9,9 @@ Options it reads (``CPNModelChecker(..., options={...})``):
 
 ``class_labels``
     The label domain for A6, as a list or ``"0,1,2"``. Without it the domain
-    is read off the net where it can be (boosting, forests); a decision tree
-    has none to read, and A6 is reported as skipped.
+    is read off the net where it can be (boosting: the ``Decide_k``
+    transitions); a decision tree or a forest has none to read, and A6 is
+    reported as skipped.
 ``feature_names``
     The field names of the input record, to map a named sample onto it.
 ``use_final``
@@ -60,8 +61,6 @@ from cpncheck.properties import Property, catalog
 from cpncheck.result import PropertyResult
 from cpncheck.structural import overlapping_guards
 from cpncheck.selectors import Explicit, Group, Places, Transitions
-
-from .cpn_semantics import safe_eval
 
 __all__ = ["TREE_CATALOG", "TreeStructure", "MLTreeProfile", "PROFILE",
            "detect_family"]
@@ -652,18 +651,10 @@ class MLTreeProfile(Profile):
                   if trans[ti]["name"].rsplit("_", 1)[-1].isdigit()]
             if ks:
                 return sorted(ks), "Decide transitions"
-        if detect_family(net) == "Random Forest":
-            for info in structure.trees.values():
-                for ti in info["leaves"]:
-                    for _p, terms in trans[ti]["out"]:
-                        # Never eval net text: safe_eval only interprets
-                        # whitelisted constructs.
-                        try:
-                            vec = safe_eval(terms[0][1], net.env)
-                        except Exception:
-                            continue
-                        if isinstance(vec, (tuple, list)) and vec:
-                            return list(range(len(vec))), "probability-vector width"
+        # A forest's net writes decide(vsum(...)), an index into the
+        # probability vector; the labels it stands for are not in the net, and
+        # range(width) would be wrong for any labels other than 0..K-1. So a
+        # forest, like a decision tree, needs class_labels for A6.
         return None, "undeclared"
 
 

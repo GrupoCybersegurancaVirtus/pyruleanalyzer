@@ -19,7 +19,7 @@ import os
 import sys
 import time
 import pickle
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -97,8 +97,13 @@ class DTAnalyzer:
         remove_below_n_classifications: int = -1,
         save_final_model: bool = True,
         save_report: bool = True,
+        max_error_increase: Optional[int] = None,
     ) -> None:
         """Evaluates DT rules on a dataset, detects redundancies, and refines.
+
+        A removed low-usage rule hands its region to the rest of the tree: its
+        sibling leaf is promoted, or its sibling sub-branch is grafted into the
+        parent's place. The rule set stays a partition (no holes).
 
         Args:
             file_path: Path to the CSV test file.
@@ -107,6 +112,13 @@ class DTAnalyzer:
             remove_below_n_classifications: Threshold for low-usage refinement (-1 disables).
             save_final_model: Whether to save the final model.
             save_report: Whether to save the analysis report.
+            max_error_increase: Error-aware refinement. None (default) removes
+                every rule used <= ``remove_below_n_classifications`` times.
+                An integer keeps a candidate whenever removing it would make
+                the misclassified samples of this dataset exceed the count
+                before the low-usage stage by more than this many; 0 is
+                reduced-error pruning (errors never increase). Use a large
+                threshold to let the error criterion alone decide.
 
         Returns:
             None
@@ -200,13 +212,14 @@ class DTAnalyzer:
                 if rule.usage_count <= remove_below_n_classifications:
                     clf.specific_rules.append(rule)
 
-            low_usage_count = len(clf.specific_rules)
-            self.redundancy_counts["low_usage"] = low_usage_count
-            print(f"Identified {low_usage_count} specific (low-usage) rules.")
+            print(f"Identified {len(clf.specific_rules)} specific (low-usage) rules.")
 
+            n_before = len(clf.final_rules)
             if clf.specific_rules:
-                clf.final_rules = clf._promote_siblings(clf.specific_rules, clf.final_rules)
+                clf._remove_low_usage(clf.specific_rules, X_test, y_test,
+                                      feature_names, max_error_increase)
                 print(f"Rules after promotion: {len(clf.final_rules)}")
+            self.redundancy_counts["low_usage"] = n_before - len(clf.final_rules)
 
             clf.update_native_model(clf.final_rules)
 
@@ -303,9 +316,10 @@ class DTAnalyzer:
                 # predict() must receive a DataFrame to avoid UserWarnings/Errors.
                 X_test_predict = pd.DataFrame(X_test_np, columns=feature_names_list)
                 
-                y_pred_sk = sk_model.predict(X_test_predict)
+                # The rules answer codes for labels that are not integers.
+                y_pred_sk = np.asarray(clf._encode_labels(sk_model.predict(X_test_predict)))
                 correct_sk = np.sum(y_pred_sk == y_true)
-                RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf.class_labels)
+                RuleClassifier.display_metrics(y_true, y_pred_sk, correct_sk, total_samples, f, clf._display_names())
             except Exception as e:
                 msg = f"Could not load/evaluate sklearn model: {e}"
                 print(msg)
@@ -333,7 +347,7 @@ class DTAnalyzer:
             correct_initial = np.sum(y_pred_initial_arr == y_true)
 
             print("\n--- Initial Rules Metrics ---")
-            RuleClassifier.display_metrics(y_true, y_pred_initial_arr, correct_initial, total_samples, f, clf.class_labels)
+            RuleClassifier.display_metrics(y_true, y_pred_initial_arr, correct_initial, total_samples, f, clf._display_names())
             print(f"Number of initial rules: {len(clf.initial_rules)}")
             f.write(f"\nNumber of initial rules: {len(clf.initial_rules)}\n")
 
@@ -342,7 +356,7 @@ class DTAnalyzer:
             correct_final = np.sum(y_pred_final_arr == y_true)
 
             print("\n--- Final Rules Metrics ---")
-            RuleClassifier.display_metrics(y_true, y_pred_final_arr, correct_final, total_samples, f, clf.class_labels)
+            RuleClassifier.display_metrics(y_true, y_pred_final_arr, correct_final, total_samples, f, clf._display_names())
             print(f"Number of final rules: {len(clf.final_rules)}")
             f.write(f"\nNumber of final rules: {len(clf.final_rules)}\n")
 
@@ -353,8 +367,9 @@ class DTAnalyzer:
             divergent_count = int(np.sum(divergent_mask))
             divergent_indices = np.where(divergent_mask)[0]
 
+            lab = clf._decode_labels   # original labels in the report
             for idx in divergent_indices:
-                f.write(f"Index: {idx}, Initial: {y_pred_initial_arr[idx]}, Final: {y_pred_final_arr[idx]}, Actual: {y_true[idx]}\n")
+                f.write(f"Index: {idx}, Initial: {lab(y_pred_initial_arr[idx])}, Final: {lab(y_pred_final_arr[idx])}, Actual: {lab(y_true[idx])}\n")
 
             print(f"\nTotal divergent cases: {divergent_count}")
             f.write(f"Total divergent cases: {divergent_count}\n")

@@ -184,7 +184,7 @@ A few readings that matter when the table is quoted:
 * **A3 is inevitability, not reachability.** Reachability would be :math:`EF\ pred`.
 * **A4 is not a home-marking property.** :math:`AG\ EF\ pred` holds if every marking can reach *some* marking with a prediction, possibly different ones. The home marking is A8, computed from the SCC graph, like CPN Tools' ``ListHomeMarkings``.
 * **B1 is per input**; B4 is for all inputs. A refinement can create an overlap that the tested input never reaches: B1 then holds and B4 fails.
-* **A6 needs a declared label domain.** Reading :math:`L` from the net's own outputs would make the property vacuous. For GBDT and Random Forest the domain follows from the net's structure (Decide transitions, probability-vector width); for a Decision Tree it must be passed as ``class_labels``, and A6 is skipped otherwise.
+* **A6 needs a declared label domain.** Reading :math:`L` from the net's own outputs would make the property vacuous. For GBDT the domain follows from the net's structure (the ``Decide_k`` transitions); a Random Forest net writes an index into its probability vector and a Decision Tree net writes no domain at all, so for both it must be passed as ``class_labels``, and A6 is skipped otherwise. (Taking ``range(K)`` of the vector width would be wrong for labels other than ``0..K-1``.)
 * **D1 refers to the trees' outputs**, not to Vote's input arcs; otherwise a Vote that stopped waiting for a tree would satisfy it.
 * **The temporal properties say the net behaves like a classifier, not that it is the right one.** A net predicting a wrong but valid class passes every CTL property; only PC notices.
 
@@ -213,9 +213,67 @@ Counterexamples are reported as the shortest occurrence sequence reaching the vi
 State-space explosion
 ^^^^^^^^^^^^^^^^^^^^^
 
-A :math:`K`-class GBDT with :math:`M` stages per class has :math:`(3M+3)^K + 2` reachable markings and :math:`K(3M+2)(3M+3)^{K-1} + 2` arcs, because the channels interleave freely; the test suite checks both formulas against generated nets. A three-class model with a hundred stages is out of reach for any explicit-state tool, CPN Tools included. When the graph exceeds ``max_nodes`` (200,000 by default) the state-space properties get **no verdict** — the structural analysis and the conformance test still run. An earlier version fell back to a compositional mode; it was removed because its preservation argument had not been proven, and an unproven reduction is not something to report results from.
+A :math:`K`-class GBDT with :math:`M` stages per class has :math:`(3M+3)^K + 2` reachable markings and :math:`K(3M+2)(3M+3)^{K-1} + 2` arcs, because the channels interleave freely; the test suite checks both formulas against generated nets. A three-class model with a hundred stages is out of reach for any explicit-state tool, CPN Tools included. When the graph exceeds ``max_nodes`` (200,000 by default) the state-space properties get **no verdict** — the structural analysis and the conformance test still run. An earlier version fell back to a compositional mode silently; it was removed because its preservation argument had not been proven, and an unproven reduction is not something to report results from. The compositional mode described below is opt-in, checks its preconditions on the net, and states its argument property by property.
 
 Random Forests reach that limit quickly, since :math:`n` independent trees give :math:`2^n + 2` markings: on a 20-tree forest, 14 of the 16 properties were reported as not decided at ``max_nodes=50_000``, and a 50-tree forest took about 12 minutes. For ensembles beyond a handful of trees, pass ``reduction="stubborn"`` (stubborn-set partial-order reduction in CPNCheck), which decides the same properties on much smaller graphs. B4 and PC are decided either way, but they largely hold by construction -- the leaves of a scikit-learn tree are disjoint and the net is generated from the classifier's own rules -- so on an unmodified model they confirm the export rather than add independent evidence.
+
+Stubborn sets still need the interleaved graph for D2a (:math:`AF\ EN(vote)`): on the 20-tree forest ``reduction="stubborn"`` leaves D2a undecided at ``max_nodes=50_000``.
+
+Compositional verification
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``reduction="compositional"`` decides the catalog without building the interleaving at all, from one small graph per tree (Random Forest) or class channel (GBDT) and the join layer (``Vote`` / ``Decide_k``) evaluated once per combination of the learners' outputs (:mod:`pyruleanalyzer.compositional`):
+
+.. code-block:: python
+
+   from pyruleanalyzer.model_checker import CPNModelChecker
+
+   mc = CPNModelChecker("files/rf50_final.cpn", class_labels=[0, 1, 2])
+   result = mc.check(samples=X_test.iloc[:3], reduction="compositional",
+                     classifier=analyzer.classifier, test_samples=X_test)
+   # also: analyzer.model_check(..., reduction="compositional")
+   #       verified_pipeline(..., reduction="compositional")
+
+The result is an ordinary :class:`ModelCheckResult` (the report's *decided on* line and every ``detail`` say ``compositional``), so the pipeline's gate reads it unchanged. Measured on generated nets, three inputs model checked and the whole test set for PC: a 20-tree forest in 1.5 s (20 graphs of 3 markings, instead of :math:`2^{20}+2`), a 50-tree forest in 7 s, a 3-class GBDT with 20 stages per class in 1.4 s (3 graphs of 64 markings, instead of :math:`63^3+2`) -- no property undecided.
+
+**What is checked, not assumed.** The decomposition is only used when the net has the shape that makes it sound, and the shape is verified on the net itself: untimed, no priorities, no inhibitor or reset arcs; one input place read by a single fork transition ``F`` (``Distribute``) on the top page that reads nothing else and is never refilled; *components* = the subpage transitions grouped by shared places (so components own disjoint place sets :math:`P_c`); ``F`` writes only into component places; every other top-page transition (a *join*) reads only the components' output places (their top-page places they never read) and writes only into places no component touches (``Prediction``). Per input, the initial marking holds one token, in the input place, and enables exactly one occurrence of ``F``.
+
+The local graph :math:`G_c` is the occurrence graph of the same net from the same initial marking in which only ``F`` and the component may occur. Two facts carry every argument: **lifting** -- a path of :math:`G_c` is an occurrence sequence of the net, so counterexamples found on it replay on the full net; **projection** -- removing from any occurrence sequence the occurrences outside ``F`` and :math:`c` leaves a path of :math:`G_c` reaching a marking that agrees on :math:`P_c`, except that output places may hold *more* tokens (only joins remove them, and the component never reads them).
+
+The combination properties additionally need every component *well behaved* (:math:`G_c` complete and acyclic, exactly one output place, never more than one token in it) and every join *synchronising* (one token from every component output). Then each component deposits at most one value, joins can occur only once all have, and at most one join occurs per run; every tuple :math:`\tau \in V_1 \times \dots \times V_n` of output values is reachable, and the join layer is evaluated on each (:math:`E(\tau)`: the enabled join bindings, :math:`post(\tau,b)`: what they deposit). A component is *silent* when :math:`G_c` has a dead marking with an empty output.
+
+.. list-table:: Soundness of the decomposition
+   :header-rows: 1
+   :widths: 12 88
+
+   * - Property
+     - Why the compositional verdict is the full graph's
+   * - A1
+     - An infinite run makes infinitely many occurrences of some component (``F`` occurs once; each join consumes a token a component produced); its projection is an infinite path of that :math:`G_c`, and a cycle of :math:`G_c` lifts. A1 holds iff every :math:`G_c` is acyclic.
+   * - A7
+     - Places of :math:`P_c`: a bound is anti-monotone, so :math:`G` and :math:`G_c` agree (projection, lifting). Result places: filled only by the one join occurrence, :math:`post(\tau,b)`. The initial marking holds one token.
+   * - B1, B3
+     - :math:`AG` of a proposition over one tree's leaves (whose enabling depends only on non-output places of :math:`P_c`) or token bounds: holds at a marking of :math:`G` iff at its projection.
+   * - B2
+     - False on :math:`G_c` lifts (the rest of the net cannot enable the tree's leaves). True transfers when every other component is acyclic: every maximal run of :math:`G` then projects onto a maximal run of :math:`G_c`.
+   * - C1, C2
+     - :math:`\neg E[\neg a\ U\ b]` with :math:`a` an accumulator (never an output place): witnesses lift, and the prefix of a witness of :math:`G` up to the first :math:`b` projects (``Marked`` is monotone).
+   * - D1
+     - Structural: when every ``Vote`` occurrence consumes a token from every tree output, :math:`EN(vote)` implies they are all marked. Otherwise D1 falls back.
+   * - A2, A3, A4
+     - The net is finite and acyclic and ``Prediction`` is never consumed, so all three equal "every dead marking holds a prediction": no silent component, and for every :math:`\tau`, :math:`E(\tau)` non-empty and every :math:`post(\tau,b)` marks ``Prediction``.
+   * - A5, D2b, A6
+     - ``Prediction`` is written only by the one join occurrence; the proposition is checked on every :math:`post(\tau,b)`.
+   * - A8
+     - Finite and acyclic: a home marking exists iff there is exactly one dead marking; the dead markings are enumerated from the product of the components' distinct dead markings.
+   * - C3a, D2a
+     - On every maximal run the joins become able to occur when the last output is deposited, with some :math:`\tau`, and the outputs stay until a join occurs: no silent component and :math:`E_V(\tau) \neq \emptyset` for every :math:`\tau`.
+   * - C3b
+     - A ``Decide`` is enabled only when every output is marked, and its bindings depend on the outputs alone: :math:`|E_{Decide}(\tau)| \le 1` for every :math:`\tau`.
+
+B4 and PC need no occurrence graph and run as usual. A property the decomposition cannot decide on a given net -- a decision tree (nothing to compose), a component with a cycle or emitting two tokens (combination properties), a ``Vote`` that does not consume every tree output (D1 and the combination properties), more than ``max_combinations`` output combinations (4096 by default) -- is handed to ``fallback`` (``"stubborn"`` by default, or ``"full"``; ``None`` leaves it undecided), and its ``detail`` names the reason; it is never reported as passed by the composition. With several inputs, a property undecided for one input is reported undecided, not passed.
+
+Validation: on random forests of 3, 4 and 6 trees, a binary and a 3-class GBDT, and a decision tree, initial and refined nets and every mutant of :func:`~pyruleanalyzer.cpn_mutants.make_mutants`, each for the net's own input and for two test inputs, every verdict the composition gives equals the full graph's, and with the stubborn fallback every verdict equals the full graph's. The mutants it hands to the fallback are ``cycle`` and ``tree_double`` (a component that is not well behaved) and ``partial_vote`` (a non-synchronising Vote); every other mutant, including all GBDT ones, is caught by the composition itself. ``tests/test_compositional.py`` checks this.
 
 
 .. _model-checking#validation:

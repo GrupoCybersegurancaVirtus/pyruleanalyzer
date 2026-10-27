@@ -68,7 +68,8 @@ Issues = "https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/issues"
 
 # Wheels with the compiled C extension, built by .github/workflows/release.yml.
 [tool.cibuildwheel]
-build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+# cp314-* does not match the free-threaded cp314t-* builds, which are not made.
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 # 32-bit and musl Linux have no numpy wheels to build against or test with.
 skip = "*-win32 *_i686 *-musllinux_*"
 # A wheel without the extension must fail the build, not ship.

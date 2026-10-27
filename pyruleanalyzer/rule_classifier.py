@@ -38,6 +38,137 @@ def _tree_sort_key(tid):
     """
     return [int(p) if p.isdigit() else p for p in re.split(r'(\d+)', str(tid))]
 
+
+# Class to represent a parsed condition whose missing-value routing is known
+class Condition(tuple):
+    """A parsed condition ``(feature, operator, threshold)`` that a missing
+    value (NaN) does NOT satisfy.
+
+    scikit-learn (>= 1.3) routes a NaN at every split to the side recorded in
+    ``tree_.missing_go_to_left``, so of the two conditions a split creates
+    (``f <= t`` and ``f > t``) exactly one is satisfied by NaN. Conditions
+    read from a fitted tree are `Condition` (NaN goes the other way) or
+    `MissingCondition` (NaN goes this way). A plain tuple -- a rule parsed
+    from text, an old pickle or JSON file -- has no known routing, and
+    the engines refuse NaN inputs for a rule set that contains one.
+
+    It is still a 3-tuple: ``var, op, value = cond``, slicing, hashing and
+    equality behave as before (equality ignores the routing; compare
+    `condition_signature` where it matters).
+    """
+
+    __slots__ = ()
+
+    # NaN does not satisfy this condition.
+    missing = False
+
+    # Method to execute __repr__
+    def __repr__(self):
+        """Show the condition like the tuple it is."""
+        return tuple.__repr__(self)
+
+
+# Class to represent a parsed condition that a missing value satisfies
+class MissingCondition(Condition):
+    """A parsed condition that a missing value (NaN) satisfies: the split
+    sends NaN to this side (see `Condition`)."""
+
+    __slots__ = ()
+
+    # NaN satisfies this condition.
+    missing = True
+
+
+# Function to build a condition with its missing-value routing
+def make_condition(var, op, value, missing=None):
+    """A parsed condition carrying its missing-value routing.
+
+    Args:
+        var (str): Feature name.
+        op (str): Operator.
+        value (float): Threshold.
+        missing (bool | None): Whether NaN satisfies the condition; None
+            for unknown (a plain tuple).
+
+    Returns:
+        tuple: A `MissingCondition`, a `Condition` or a plain tuple.
+    """
+    if missing is None:
+        return (var, op, value)
+    return (MissingCondition if missing else Condition)((var, op, value))
+
+
+# Function to read the missing-value routing of a condition
+def condition_missing(cond):
+    """Whether NaN satisfies `cond`: True, False, or None when unknown.
+
+    Args:
+        cond (tuple): A parsed condition.
+
+    Returns:
+        bool | None: The routing.
+    """
+    if isinstance(cond, Condition):
+        return cond.missing
+    return None
+
+
+# Function to compare conditions including their missing-value routing
+def condition_signature(cond):
+    """The condition with its routing, for comparisons where NaN matters.
+
+    Args:
+        cond (tuple): A parsed condition.
+
+    Returns:
+        tuple: ``(var, op, value, missing)``.
+    """
+    return (cond[0], cond[1], cond[2], condition_missing(cond))
+
+
+# Function to format a float as a Python literal
+def _py_float(value) -> str:
+    """`value` as a Python expression that evaluates to the same float.
+
+    ``repr(float('inf'))`` is ``inf``, which is not a Python literal; the
+    split that sends only the missing values to the right has threshold +inf.
+
+    Args:
+        value (float): The number.
+
+    Returns:
+        str: The literal.
+    """
+    value = float(value)
+    if value != value:
+        return "float('nan')"
+    if value in (float('inf'), float('-inf')):
+        return "float('inf')" if value > 0 else "float('-inf')"
+    return repr(value)
+
+
+# Function to generate the Python test of one split
+def _py_split_test(feat, threshold, missing_left) -> str:
+    """The Python test that sends a sample to the left child of a split.
+
+    ``x <= t`` is False for NaN, so NaN goes right; ``not (x > t)`` is the
+    same test for every number but True for NaN, so NaN goes left. One
+    lookup either way.
+
+    Args:
+        feat (str): Feature name.
+        threshold (float): Split threshold.
+        missing_left (bool | None): Whether NaN goes left.
+
+    Returns:
+        str: The condition, e.g. ``sample['f0'] <=0.5`` (the spacing the
+        generated code always had).
+    """
+    if missing_left:
+        return f"not (sample[{feat!r}] > {_py_float(threshold)})"
+    return f"sample[{feat!r}] <={_py_float(threshold)}"
+
+
 # Class to represent a rule
 class Rule:
     """
@@ -53,6 +184,9 @@ class Rule:
         usage_count (int): Number of times the rule matched during classification.
         error_count (int): Number of times the rule matched but the prediction was wrong.
         parsed_conditions (List[Tuple[str, str, float]]): Cached parsed conditions for faster access.
+            Conditions read from a fitted tree are `Condition` /
+            `MissingCondition` tuples, which also record whether a missing
+            value (NaN) satisfies them.
     """
 
     __slots__ = [
@@ -107,6 +241,243 @@ class Rule:
             Description of return value.
         """
         return f"Rule(name={self.name}, class={self.class_}, conditions={self.conditions})"
+
+    # Operators a parsed condition may use (see parse_conditions_static)
+    _JSON_OPERATORS = ('<=', '>', '<', '>=', '==')
+
+    # Method to check a JSON value is a finite number
+    @staticmethod
+    def _json_number(value, where, optional=False):
+        """A JSON number as a finite float.
+
+        Args:
+            value: The decoded JSON value.
+            where (str): Location of the value, for the error message.
+            optional (bool): Whether None is accepted.
+
+        Returns:
+            float | None: The value as a float (None only when `optional`).
+
+        Raises:
+            ValueError: If the value is not a finite number.
+        """
+        if value is None and optional:
+            return None
+        # bool is an int subclass: True is not a threshold.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f'{where}: expected a number, got {type(value).__name__}.')
+        try:
+            result = float(value)
+        except OverflowError:
+            raise ValueError(f'{where}: number out of range.') from None
+        if result != result or result in (float('inf'), float('-inf')):
+            raise ValueError(f'{where}: expected a finite number, got {value!r}.')
+        return result
+
+    # Method to check a JSON value is a non-negative count
+    @staticmethod
+    def _json_count(value, where):
+        """A JSON integer as a non-negative count below 2**63.
+
+        Args:
+            value: The decoded JSON value.
+            where (str): Location of the value, for the error message.
+
+        Returns:
+            int: The count.
+
+        Raises:
+            ValueError: If the value is not such an integer.
+        """
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < 2 ** 63:
+            raise ValueError(f'{where}: expected a non-negative integer, got {value!r:.40}.')
+        return value
+
+    # Method to check a JSON value is a class label
+    @staticmethod
+    def _json_label(value, where, optional=False):
+        """A class label (str or int) read from JSON.
+
+        Args:
+            value: The decoded JSON value.
+            where (str): Location of the value, for the error message.
+            optional (bool): Whether None is accepted.
+
+        Returns:
+            str | int | None: The label.
+
+        Raises:
+            ValueError: If the value is not a string or an integer.
+        """
+        if value is None and optional:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int) and not isinstance(value, bool) and abs(value) < 2 ** 63:
+            return value
+        raise ValueError(f'{where}: expected a class label (string or integer), got {value!r:.40}.')
+
+    # Method to check a JSON value is a list of strings
+    @staticmethod
+    def _json_str_list(value, where):
+        """A JSON list of strings.
+
+        Args:
+            value: The decoded JSON value.
+            where (str): Location of the value, for the error message.
+
+        Returns:
+            List[str]: A new list with the strings.
+
+        Raises:
+            ValueError: If the value is not a list of strings.
+        """
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError(f'{where}: expected a list of strings.')
+        return list(value)
+
+    # Method to serialise the rule as plain JSON types
+    def to_dict(self) -> dict:
+        """The rule as a dict of plain JSON types (see `RuleClassifier.to_json`).
+
+        Every slot is written. Thresholds and leaf values are Python floats,
+        which `json` writes with `repr`, so they read back bit for bit.
+
+        Returns:
+            dict: One key per slot of the rule.
+
+        Raises:
+            ValueError: If a slot holds a value JSON cannot represent.
+        """
+        def num(v):
+            """Python float of a (numpy) number, None kept."""
+            return None if v is None else float(v)
+
+        def label(v):
+            """A label as str, or int for integer (numpy) labels."""
+            if v is None or isinstance(v, str):
+                return v
+            if isinstance(v, (int, np.integer)) and not isinstance(v, bool):
+                return int(v)
+            return str(v)
+
+        parsed = []
+        for cond in self.parsed_conditions or []:
+            var, op, value = cond
+            if not isinstance(value, str):
+                value = float(value)
+                if value in (float('inf'), float('-inf')):
+                    # The split that isolates the missing values has
+                    # threshold +inf, which JSON has no number for.
+                    value = {'__float__': 'inf' if value > 0 else '-inf'}
+            entry = [str(var), str(op), value]
+            # Version 2: whether a missing value satisfies the condition.
+            missing = condition_missing(cond)
+            if missing is not None:
+                entry.append(bool(missing))
+            parsed.append(entry)
+        dist = self.class_distribution
+        out = {
+            'name': str(self.name),
+            'class_': label(self.class_),
+            'conditions': [str(c) for c in (self.conditions or [])],
+            'parsed_conditions': parsed,
+            'usage_count': int(self.usage_count or 0),
+            'error_count': int(self.error_count or 0),
+            'class_distribution': None if dist is None else [float(v) for v in dist],
+            'leaf_value': num(self.leaf_value),
+            'learning_rate': num(self.learning_rate),
+            'contribution': num(self.contribution),
+            'class_group': label(self.class_group),
+        }
+        # Slots added after this format was written: plain values only.
+        for slot in self.__slots__:
+            if slot not in out:
+                out[slot] = RuleClassifier._json_encode_plain(
+                    getattr(self, slot, None), f'rule {self.name!r}.{slot}')
+        return out
+
+    # Method to rebuild a rule from `to_dict` output
+    @classmethod
+    def from_dict(cls, data, where='rule') -> 'Rule':
+        """Rebuild a rule from `to_dict` output, validating every field.
+
+        Only plain values are read; nothing in `data` is evaluated.
+
+        Args:
+            data (dict): Output of `to_dict` (decoded from JSON).
+            where (str): Location of the rule, for error messages.
+
+        Returns:
+            Rule: The rule.
+
+        Raises:
+            ValueError: If a field is missing, unknown or of the wrong type.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f'{where}: expected an object, got {type(data).__name__}.')
+        known = ('name', 'class_', 'conditions', 'parsed_conditions', 'usage_count',
+                 'error_count', 'class_distribution', 'leaf_value', 'learning_rate',
+                 'contribution', 'class_group')
+        missing = [k for k in known if k not in data]
+        if missing:
+            raise ValueError(f'{where}: missing field(s) {missing}.')
+        unknown = [k for k in data if k not in cls.__slots__]
+        if unknown:
+            raise ValueError(f'{where}: unknown field(s) {sorted(map(str, unknown))[:10]}.')
+
+        rule = cls.__new__(cls)
+        if not isinstance(data['name'], str):
+            raise ValueError(f'{where}.name: expected a string.')
+        rule.name = data['name']
+        where = f'{where} {rule.name!r:.60}'
+        rule.class_ = cls._json_label(data['class_'], f'{where}.class_')
+        rule.conditions = cls._json_str_list(data['conditions'], f'{where}.conditions')
+
+        parsed = data['parsed_conditions']
+        if not isinstance(parsed, list):
+            raise ValueError(f'{where}.parsed_conditions: expected a list.')
+        rule.parsed_conditions = []
+        for i, cond in enumerate(parsed):
+            at = f'{where}.parsed_conditions[{i}]'
+            if (not isinstance(cond, list) or len(cond) not in (3, 4)
+                    or not isinstance(cond[0], str) or cond[1] not in cls._JSON_OPERATORS
+                    or (len(cond) == 4 and not isinstance(cond[3], bool))):
+                raise ValueError(
+                    f'{at}: expected [feature, operator, threshold] or '
+                    '[feature, operator, threshold, missing].')
+            raw = cond[2]
+            if isinstance(raw, str):
+                value = raw
+            elif isinstance(raw, dict):
+                # +/-inf only (a split isolating the missing values).
+                if (set(raw) != {'__float__'}
+                        or raw['__float__'] not in ('inf', '-inf')):
+                    raise ValueError(f'{at}: invalid threshold.')
+                value = float(raw['__float__'])
+            else:
+                value = cls._json_number(raw, at)
+            rule.parsed_conditions.append(make_condition(
+                cond[0], cond[1], value, cond[3] if len(cond) == 4 else None))
+
+        rule.usage_count = cls._json_count(data['usage_count'], f'{where}.usage_count')
+        rule.error_count = cls._json_count(data['error_count'], f'{where}.error_count')
+
+        dist = data['class_distribution']
+        if dist is not None:
+            if not isinstance(dist, list):
+                raise ValueError(f'{where}.class_distribution: expected a list or null.')
+            dist = [cls._json_number(v, f'{where}.class_distribution') for v in dist]
+        rule.class_distribution = dist
+        for key in ('leaf_value', 'learning_rate', 'contribution'):
+            setattr(rule, key, cls._json_number(data[key], f'{where}.{key}', optional=True))
+        rule.class_group = cls._json_label(data['class_group'], f'{where}.class_group',
+                                           optional=True)
+        for slot in cls.__slots__:
+            if slot not in known:
+                setattr(rule, slot, RuleClassifier._json_decode_plain(
+                    data.get(slot), f'{where}.{slot}'))
+        return rule
 
 # Helper function for memory estimation (used by export_to_arduino_ino)
 def _compute_memory_for_rule_classifier(rf_model) -> dict:
@@ -244,6 +615,19 @@ class RuleClassifier(RuleExporterMixin):
         # quantization exactly; None keeps full float64 comparison.
         self.input_dtype: Optional[str] = None
 
+        # --- LABEL TABLE ---
+        # Rules, engines and exports work on integer labels. Labels that are
+        # not integers ('cat', 0.5) are stored as their codes 0..K-1 (the
+        # position in the estimator's classes_) and `label_table[code]` is
+        # the original label; None when the labels are integers themselves.
+        self.label_table: Optional[list] = None
+
+        # --- ESTIMATOR CLASS ---
+        # Name of the scikit-learn class the rules were read from, when it is
+        # not the default one of `algorithm_type` (ExtraTreesClassifier for a
+        # 'Random Forest'), so a refit trains the same kind of model.
+        self.sklearn_estimator: Optional[str] = None
+
     # Method to execute _default_class_int
     def _default_class_int(self) -> int:
         """The default class as an int, for array/vectorized code paths.
@@ -280,39 +664,156 @@ class RuleClassifier(RuleExporterMixin):
                 out.append(i)
         return out
 
+    # Method to build the code -> label table of non-integer labels
+    @staticmethod
+    def _label_table_for(classes) -> Optional[list]:
+        """The original labels of `classes` when they are not integers.
+
+        Every engine and export works on integer labels (the C, binary and
+        Arduino targets have no other type). Integer labels (also integral
+        numbers such as ``1.0``, but not strings) are used as they are. Any
+        other set of labels -- strings, non-integral floats -- is encoded:
+        a label is stored as its position in `classes` (0..K-1) and the
+        table returned here maps the code back.
+
+        Args:
+            classes: The estimator's ``classes_`` (in that order).
+
+        Returns:
+            list | None: The labels as plain Python values (str, int, float,
+            bool), indexed by code; None when the labels are integers.
+
+        Raises:
+            ValueError: If a label is neither a string nor a number, or the
+                labels are not distinct.
+        """
+        values = list(classes)
+        integral = True
+        for c in values:
+            if isinstance(c, (str, bytes, np.str_, np.bytes_)):
+                integral = False
+                break
+            try:
+                value = float(c)
+            except (TypeError, ValueError):
+                integral = False
+                break
+            if not value.is_integer():
+                integral = False
+                break
+        if integral:
+            return None
+        table = []
+        for c in values:
+            if isinstance(c, (bool, np.bool_)):
+                table.append(bool(c))
+            elif isinstance(c, (str, np.str_)):
+                table.append(str(c))
+            elif isinstance(c, (int, np.integer)):
+                table.append(int(c))
+            elif isinstance(c, (float, np.floating)):
+                table.append(float(c))
+            else:
+                raise ValueError(
+                    f'Unsupported class label {c!r:.60} ({type(c).__name__}): '
+                    'labels must be strings or numbers.')
+        if len(set(table)) != len(table):
+            raise ValueError('Class labels must be distinct.')
+        return table
+
     # Method to read an estimator's classes as the labels the rules store
     @staticmethod
     def _label_names(classes) -> List[str]:
         """The labels of `classes` as the rules store them, e.g. ``'-1'``.
 
-        Every engine and export answers integer labels (the C, binary and
-        Arduino targets have no other type), so a label must be an integer
-        value. ``1.0`` becomes ``'1'``: ``str(1.0)`` would be ``'1.0'``, which
-        no engine can turn back into the label.
+        Integer labels are stored as themselves (``1.0`` becomes ``'1'``:
+        ``str(1.0)`` would be ``'1.0'``, which no engine can turn back into
+        the label). Other labels are stored as their codes ``'0'..'K-1'``;
+        see `_label_table_for` for the table that maps them back.
 
         Args:
             classes: The estimator's ``classes_``.
 
         Returns:
             List[str]: One label per class, in the same order.
+        """
+        if RuleClassifier._label_table_for(classes) is not None:
+            return [str(i) for i in range(len(list(classes)))]
+        return [str(int(float(c))) for c in classes]
+
+    # Method to translate original labels into the codes the engines use
+    def _encode_labels(self, values):
+        """Original labels -> the integer labels the engines answer.
+
+        The identity when the model has no label table.
+
+        Args:
+            values: An array-like of original labels.
+
+        Returns:
+            np.ndarray | list: The codes (unchanged input without a table).
 
         Raises:
-            ValueError: If a label is not an integer value.
+            ValueError: If a value is not one of the model's labels.
         """
+        table = getattr(self, 'label_table', None)
+        if table is None:
+            return values
+        code_of = {self._label_key(v): i for i, v in enumerate(table)}
         out = []
-        for c in classes:
-            try:
-                value = float(c)
-            except (TypeError, ValueError):
-                value = None
-            if value is None or not value.is_integer():
-                raise ValueError(
-                    f"pyruleanalyzer supports integer class labels only (got "
-                    f"{c!r}); encode them first, e.g. with "
-                    "sklearn.preprocessing.LabelEncoder."
-                )
-            out.append(str(int(value)))
-        return out
+        for v in (values.tolist() if hasattr(values, 'tolist') else list(values)):
+            key = self._label_key(v)
+            if key not in code_of:
+                raise ValueError(f'Unknown class label {v!r:.60}: the model '
+                                 f'knows {table!r:.200}.')
+            out.append(code_of[key])
+        return np.asarray(out, dtype=np.int64)
+
+    # Method to translate engine codes back into the original labels
+    def _decode_labels(self, codes):
+        """Integer labels answered by an engine -> the original labels.
+
+        The identity when the model has no label table.
+
+        Args:
+            codes: An integer or an array of integers.
+
+        Returns:
+            The original label(s): a scalar for a scalar, an array otherwise.
+        """
+        table = getattr(self, 'label_table', None)
+        if table is None:
+            return codes
+        if np.ndim(codes) == 0:
+            return table[int(codes)]
+        return np.asarray(table)[np.asarray(codes, dtype=np.int64)]
+
+    # Method to give the names to show for each integer label
+    def _display_names(self) -> list:
+        """The label shown for each class column in reports.
+
+        Returns:
+            list: `label_table` when there is one, else `class_labels`.
+        """
+        table = getattr(self, 'label_table', None)
+        return list(table) if table is not None else self.class_labels
+
+    # Method to make a label hashable for lookups
+    @staticmethod
+    def _label_key(value):
+        """A dict key under which numpy and Python spellings of a label meet.
+
+        Args:
+            value: A label.
+
+        Returns:
+            The key (np.str_ -> str, numpy numbers -> Python numbers).
+        """
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, bytes):
+            value = value.decode('utf-8', 'replace')
+        return value
 
     # Method to escape text placed inside a generated C comment
     @staticmethod
@@ -336,13 +837,12 @@ class RuleClassifier(RuleExporterMixin):
     def _assert_no_missing_values(X) -> None:
         """Reject inputs containing NaN.
 
-        A scikit-learn tree routes a missing value to a side chosen per node
-        (`missing_go_to_left`), which the rules cannot express: they only test
-        `feature <= threshold`, and every comparison against NaN is False, so
-        the sample matches no rule and silently falls back to `default_class`.
-        The two therefore disagree (measured: ~29% of samples on a tree fitted
-        with 15% missing values). Note that this affects any tree, not only
-        those fitted on data with NaN.
+        Used for rule sets whose missing-value routing is unknown (see
+        `_check_missing_values`). A scikit-learn tree routes a missing value
+        to a side chosen per node (``missing_go_to_left``); rules without
+        that information only test ``feature <= threshold``, every
+        comparison against NaN is False, and the sample would silently
+        match no rule.
 
         Args:
             X (np.ndarray): Input data.
@@ -354,11 +854,87 @@ class RuleClassifier(RuleExporterMixin):
         if arr.size and np.isnan(arr).any():
             n = int(np.isnan(arr).any(axis=-1).sum()) if arr.ndim > 1 else 1
             raise ValueError(
-                f'Input contains NaN in {n} sample(s). Rule-based prediction '
-                'cannot reproduce the missing-value routing of the original '
-                'tree model, so the result would silently differ from it. '
-                'Impute the missing values before prediction.'
+                f'Input contains NaN in {n} sample(s). This rule set does not '
+                'record the missing-value routing of the original tree model '
+                '(it was parsed from text, edited, or saved by an older '
+                'version), so the result would silently differ from it. '
+                'Impute the missing values, or extract the rules again from '
+                'the fitted estimator.'
             )
+
+    # Method to check whether a rule set records its missing-value routing
+    def _rules_route_missing(self, rules: list) -> bool:
+        """Whether every condition of `rules` knows where NaN goes.
+
+        True for rules read from a fitted tree (scikit-learn >= 1.3), and for
+        what refinement makes of them; False as soon as one condition is a
+        plain tuple (parsed from text, edited, old pickle/JSON). Cached per
+        rule list, like `_used_features`.
+
+        Args:
+            rules (List[Rule]): A rule set.
+
+        Returns:
+            bool: Whether NaN inputs can be answered faithfully.
+        """
+        cache = getattr(self, '_route_missing_cache', None)
+        if cache is not None and cache[0] is rules and cache[1] == len(rules):
+            return cache[2]
+        known = all(isinstance(c, Condition)
+                    for r in rules for c in (r.parsed_conditions or []))
+        self._route_missing_cache = (rules, len(rules), known)
+        return known
+
+    # Method to check whether compiled arrays record the missing-value routing
+    @staticmethod
+    def _trees_route_missing(trees: list) -> bool:
+        """Whether every compiled tree carries its ``missing_left`` array.
+
+        Args:
+            trees (List[dict]): Compiled tree arrays (GBDT init entries are
+                skipped).
+
+        Returns:
+            bool: Whether NaN inputs can be routed.
+        """
+        return all('missing_left' in t for t in trees if 'init_score' not in t)
+
+    # Method to refuse NaN inputs a model cannot answer faithfully
+    def _check_missing_values(self, X, routes_missing: bool) -> bool:
+        """Accept NaN in `X` only where the original model accepts it.
+
+        * Gradient Boosting: scikit-learn's GradientBoostingClassifier raises
+          on NaN (its trees route missing values, the ensemble does not
+          accept them), so NaN is refused, as there.
+        * Decision Tree / Random Forest (also ExtraTrees): NaN follows the
+          per-split routing recorded in the rules (`Condition`), exactly as
+          the fitted trees do; refused when that routing is unknown.
+
+        Args:
+            X (np.ndarray): Input data.
+            routes_missing (bool): Whether the rule set / arrays record the
+                routing.
+
+        Returns:
+            bool: Whether `X` contains NaN.
+
+        Raises:
+            ValueError: If `X` contains NaN the model cannot answer.
+        """
+        arr = np.asarray(X, dtype=np.float64)
+        if not (arr.size and np.isnan(arr).any()):
+            return False
+        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+            n = int(np.isnan(arr).any(axis=-1).sum()) if arr.ndim > 1 else 1
+            raise ValueError(
+                f'Input contains NaN in {n} sample(s). scikit-learn\'s '
+                'GradientBoostingClassifier does not accept missing values, '
+                'so neither does a model extracted from it. Impute them, or '
+                'use a Decision Tree / Random Forest / ExtraTrees model.'
+            )
+        if not routes_missing:
+            self._assert_no_missing_values(arr)
+        return True
 
     # Method to list the features a rule set tests
     def _used_features(self, rules: list) -> List[str]:
@@ -446,6 +1022,7 @@ class RuleClassifier(RuleExporterMixin):
         # on demand, not worth the size of the pickle.
         state['_array_states'] = []
         state.pop('_used_features_cache', None)
+        state.pop('_route_missing_cache', None)
         # Also remove custom_rule_removal if it's a lambda or local function
         if 'custom_rule_removal' in state:
              # Reset to default logic string or None to be safe, 
@@ -479,6 +1056,10 @@ class RuleClassifier(RuleExporterMixin):
             self.input_dtype = None
         if not hasattr(self, '_array_states'):
             self._array_states = []
+        if not hasattr(self, 'label_table'):
+            self.label_table = None
+        if not hasattr(self, 'sklearn_estimator'):
+            self.sklearn_estimator = None
         self._native_source = None
 
         # Auto-recompile the native model upon loading (classify only uses it
@@ -618,8 +1199,9 @@ class RuleClassifier(RuleExporterMixin):
             
             feat_name = node['f']
             # Use repr(float(t)) for precision. Index the sample directly: a
-            # missing feature raises KeyError instead of being read as 0.
-            code = f"{tab}if sample[{feat_name!r}] <={repr(float(node['t']))}:\n"
+            # missing feature raises KeyError instead of being read as 0. NaN
+            # goes where the split sends missing values.
+            code = f"{tab}if {_py_split_test(feat_name, node['t'], node.get('m'))}:\n"
             code += build_code(node['l'], indent + 1)
             code += f"{tab}else:\n"
             code += build_code(node['r'], indent + 1)
@@ -743,7 +1325,8 @@ class RuleClassifier(RuleExporterMixin):
                     if node['f'] == -2:
                         return f'{tab}return {repr(float(node["v"]))}\n'
                     feat = node['f']
-                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                    # GradientBoostingClassifier refuses NaN: no routing emitted.
+                    code = f"{tab}if {_py_split_test(feat, node['t'], None)}:\n"
                     code += _build_code(node['l'], indent + 1, td)
                     code += f'{tab}else:\n'
                     code += _build_code(node['r'], indent + 1, td)
@@ -885,7 +1468,7 @@ class RuleClassifier(RuleExporterMixin):
                     
                     feat = node['f']
                     # Use repr(float(t)) to ensure no numpy precision issues in literals
-                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                    code = f"{tab}if {_py_split_test(feat, node['t'], node.get('m'))}:\n"
                     code += build_rf_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_rf_code(node['r'], indent + 1)
@@ -974,7 +1557,7 @@ class RuleClassifier(RuleExporterMixin):
                 
                 feat = node['f']
                 # Use repr(float(t)) for precision
-                code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                code = f"{tab}if {_py_split_test(feat, node['t'], node.get('m'))}:\n"
                 code += build_dt_code(node['l'], indent + 1)
                 code += f"{tab}else:\n"
                 code += build_dt_code(node['r'], indent + 1)
@@ -1016,15 +1599,21 @@ class RuleClassifier(RuleExporterMixin):
                 - List of votes (Random Forest only).
                 - Class probabilities (Random Forest only).
         """
-        # Checked up front: the fast paths below swallow exceptions, so this
-        # must not be left to predict_batch or it would be silently masked.
-        for _v in data.values():
-            if _v != _v:   # NaN, whatever the numeric type
-                self._assert_no_missing_values(np.array([np.nan]))
-
         # Every path below must answer with the rule set `final` selects:
         # final_rules, or initial_rules when there are none yet.
         rules = self._rules_for(final)
+
+        # Checked up front: the fast paths below swallow exceptions, so this
+        # must not be left to predict_batch or it would be silently masked.
+        # NaN is answered (by every path) only when the rules record where
+        # each split sends it.
+        for _v in data.values():
+            if _v != _v:   # NaN, whatever the numeric type
+                self._check_missing_values(
+                    np.array([np.nan]),
+                    self._rules_route_missing(rules) if rules
+                    else self._trees_route_missing(self._tree_arrays))
+                break
 
         # A missing feature is an error on every engine (also checked before
         # the fast paths, which would swallow it or read it as 0).
@@ -1121,19 +1710,28 @@ class RuleClassifier(RuleExporterMixin):
         """
         for rule in rules:
             rule_satisfied = True
-            
+
             # Iterate over pre-parsed conditions for performance
-            for var, op, value in rule.parsed_conditions:
+            for cond in rule.parsed_conditions:
+                var, op, value = cond
                 # Use data.get() to avoid KeyErrors, defaulting to None implies failure
                 instance_value = data.get(var)
-                
+
                 if instance_value is None:
                     rule_satisfied = False
                     break
-                
+
+                if instance_value != instance_value:
+                    # NaN: satisfied only on the side its split sends
+                    # missing values to (unknown routing: not satisfied).
+                    if getattr(cond, 'missing', False):
+                        continue
+                    rule_satisfied = False
+                    break
+
                 # Note: 'value' is already a float from parse_conditions_static
                 # 'instance_value' should be float from process_data
-                
+
                 if op == '<=':
                     if not (instance_value <= value): 
                         rule_satisfied = False
@@ -1305,9 +1903,16 @@ class RuleClassifier(RuleExporterMixin):
 
                     # Check if rule matches
                     matched = True
-                    for var, op, value in rule.parsed_conditions:
+                    for cond in rule.parsed_conditions:
+                        var, op, value = cond
                         instance_value = data.get(var)
                         if instance_value is None:
+                            matched = False
+                            break
+                        if instance_value != instance_value:
+                            # NaN follows the routing of its split
+                            if getattr(cond, 'missing', False):
+                                continue
                             matched = False
                             break
                         if op == '<=':
@@ -1351,9 +1956,16 @@ class RuleClassifier(RuleExporterMixin):
                         continue
 
                     matched = True
-                    for var, op, value in rule.parsed_conditions:
+                    for cond in rule.parsed_conditions:
+                        var, op, value = cond
                         instance_value = data.get(var)
                         if instance_value is None:
+                            matched = False
+                            break
+                        if instance_value != instance_value:
+                            # NaN follows the routing of its split
+                            if getattr(cond, 'missing', False):
+                                continue
                             matched = False
                             break
                         if op == '<=':
@@ -1403,6 +2015,8 @@ class RuleClassifier(RuleExporterMixin):
     #   threshold[i]      float64 split threshold
     #   children_left[i]  int32   left child node index (-1 = none)
     #   children_right[i] int32   right child node index (-1 = none)
+    #   missing_left[i]   uint8   1 if a NaN goes left at this split (only
+    #                             when the rules record the routing)
     #   value[i]          varies  leaf payload:
     #       DT:   int32   class label
     #       RF:   float64 array of shape (n_classes,) — raw sample counts
@@ -1418,16 +2032,17 @@ class RuleClassifier(RuleExporterMixin):
         Every compiled engine (tree arrays, binary, C header, native function)
         routes a sample down this tree instead of testing the rules one by one,
         so it only computes what the rules say if the rules really are the
-        leaves of one tree. Three ways they can fail to be, each of which would
+        leaves of one tree. Four ways they can fail to be, each of which would
         otherwise make a compiled engine answer differently from the iterative
         engine and from the CPN, without any error:
 
         - two rules want different splits at a node they share;
         - a rule stops at a node other rules go past (its region contains
           theirs), or goes past a node where another rule stops;
-        - two rules stop at the same node (identical regions).
+        - two rules stop at the same node (identical regions);
+        - two rules disagree on where a shared split sends missing values.
 
-        The last two are overlaps: the iterative engine takes the first match,
+        The second and third are overlaps: the iterative engine takes the first match,
         the tree keeps one of them, and the CPN becomes nondeterministic.
 
         Args:
@@ -1436,8 +2051,10 @@ class RuleClassifier(RuleExporterMixin):
 
         Returns:
             Dict[int, dict]: Nodes keyed by id; internal nodes carry 'f', 't',
-            'l', 'r'; a leaf has ``f == -2`` and 'rule' set to the rule that
-            ends there, or None for a region no rule covers.
+            'l', 'r' and 'm' (whether NaN goes left: True/False, None when
+            the conditions do not record it); a leaf has ``f == -2`` and
+            'rule' set to the rule that ends there, or None for a region no
+            rule covers.
 
         Raises:
             ValueError: If `validate` is set and the rules are not the leaves
@@ -1453,7 +2070,13 @@ class RuleClassifier(RuleExporterMixin):
 
         for rule in rules:
             curr = 0
-            for var, op, val in rule.parsed_conditions:
+            for cond in rule.parsed_conditions:
+                var, op, val = cond
+                goes_left = op in ('<=', '<')
+                # Where the split sends NaN: True (left), False (right) or
+                # None (unknown: the condition is a plain tuple).
+                miss = condition_missing(cond)
+                m = None if miss is None else (miss if goes_left else not miss)
                 node = nodes[curr]
                 if node['f'] == -2:
                     if validate and node['rule'] is not None:
@@ -1463,7 +2086,7 @@ class RuleClassifier(RuleExporterMixin):
                             f'{_name(node["rule"])!r}, whose region therefore '
                             'contains it (overlapping rules).'
                         )
-                    node.update({'f': var, 't': val,
+                    node.update({'f': var, 't': val, 'm': m,
                                  'l': next_id, 'r': next_id + 1})
                     for child in (next_id, next_id + 1):
                         nodes[child] = {'l': -1, 'r': -1, 'f': -2, 't': -2.0,
@@ -1482,7 +2105,16 @@ class RuleClassifier(RuleExporterMixin):
                         'rule-removal function produced a rule set that is no '
                         'longer a tree.'
                     )
-                curr = node['l'] if op in ('<=', '<') else node['r']
+                elif node.get('m') != m:
+                    if validate and node.get('m') is not None and m is not None:
+                        raise ValueError(
+                            'Rule set is not a tree and cannot be compiled: rule '
+                            f'{_name(rule)!r} sends missing values (NaN) to the '
+                            f'other side of the split ({var} {op} {val}) than '
+                            'the rules sharing it.'
+                        )
+                    node['m'] = None   # unknown routing
+                curr = node['l'] if goes_left else node['r']
 
             node = nodes[curr]
             if validate and node['f'] != -2:
@@ -1539,7 +2171,9 @@ class RuleClassifier(RuleExporterMixin):
 
         Returns:
             Dict with keys: 'feature_idx', 'threshold', 'children_left',
-            'children_right', 'value', 'max_depth', 'is_hole'.  Each array is
+            'children_right', 'value', 'max_depth', 'is_hole', and
+            'missing_left' (uint8, 1 where a split sends NaN left) when the
+            rules record the missing-value routing.  Each array is
             indexed by node id; 'is_hole' marks leaves that no rule reached,
             i.e. uncovered regions of the feature space.
 
@@ -1616,6 +2250,11 @@ class RuleClassifier(RuleExporterMixin):
         # flagged here so callers can report how often they are hit.
         is_hole = np.zeros(n_nodes, dtype=bool)
 
+        # Where each split sends a missing value (1 = left). Kept only when
+        # every split knows it; leaves are 0 (both children are the leaf).
+        missing_left = np.zeros(n_nodes, dtype=np.uint8)
+        routing_known = True
+
         for node_id, node in tree_dict.items():
             feat = node['f']
             if feat == -2:
@@ -1648,6 +2287,10 @@ class RuleClassifier(RuleExporterMixin):
                 threshold[node_id] = float(node['t'])
                 children_left[node_id] = node['l']
                 children_right[node_id] = node['r']
+                if node.get('m') is None:
+                    routing_known = False
+                else:
+                    missing_left[node_id] = 1 if node['m'] else 0
 
         # Compute tree depth by BFS from root
         max_depth = 0
@@ -1667,7 +2310,7 @@ class RuleClassifier(RuleExporterMixin):
                 stack.append((node['l'], d + 1))
                 stack.append((node['r'], d + 1))
 
-        return {
+        out = {
             'feature_idx': feature_idx,
             'threshold': threshold,
             'children_left': children_left,
@@ -1676,6 +2319,9 @@ class RuleClassifier(RuleExporterMixin):
             'max_depth': max_depth,
             'is_hole': is_hole,
         }
+        if routing_known:
+            out['missing_left'] = missing_left
+        return out
 
     # Method to pick the rule set a prediction should use
     def _rules_for(self, use_final: bool) -> list:
@@ -2004,7 +2650,7 @@ class RuleClassifier(RuleExporterMixin):
             col_order = [list(feature_names).index(f) for f in st['feature_names']]
             X = X[:, col_order]
 
-        self._assert_no_missing_values(X)
+        self._check_missing_values(X, self._trees_route_missing(trees))
         X = self._quantize_input(X)
         n_samples = X.shape[0]
 
@@ -2014,7 +2660,7 @@ class RuleClassifier(RuleExporterMixin):
             leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
-                tree['max_depth'],
+                tree['max_depth'], tree.get('missing_left'),
             )
             # Uncovered regions already carry `default_class` in `value`; count
             # them so the loss of coverage is reported, not silently absorbed.
@@ -2032,7 +2678,8 @@ class RuleClassifier(RuleExporterMixin):
             # Build list of tree tuples for multi-tree C traversal
             tree_tuples = [
                 (t['feature_idx'], t['threshold'],
-                 t['children_left'], t['children_right'], t['max_depth'])
+                 t['children_left'], t['children_right'], t['max_depth'],
+                 t.get('missing_left'))
                 for t in trees
             ]
             # all_leaf_ids: shape (n_trees, n_samples), int32
@@ -2082,7 +2729,7 @@ class RuleClassifier(RuleExporterMixin):
                     tree_tuples.append((
                         tree['feature_idx'], tree['threshold'],
                         tree['children_left'], tree['children_right'],
-                        tree['max_depth'],
+                        tree['max_depth'], tree.get('missing_left'),
                     ))
 
             # Batch traverse all real trees at once
@@ -2190,7 +2837,7 @@ class RuleClassifier(RuleExporterMixin):
 
         # Same input handling as predict_batch, so the probabilities describe
         # the leaves predict_batch routes the samples to.
-        self._assert_no_missing_values(X)
+        self._check_missing_values(X, self._trees_route_missing(trees))
         X = self._quantize_input(X)
         n_samples = X.shape[0]
 
@@ -2200,14 +2847,20 @@ class RuleClassifier(RuleExporterMixin):
             leaf_ids = _accel_traverse(
                 X, tree['feature_idx'], tree['threshold'],
                 tree['children_left'], tree['children_right'],
-                tree['max_depth'],
+                tree['max_depth'], tree.get('missing_left'),
             )
             preds = tree['value'][leaf_ids]
-            # One-hot encode
+            # One-hot encode, in the column of each predicted *label*
+            # (classes_ order): labels 1..3 are columns 0..2, and labels
+            # 10/20/30 are not column indices at all.
             n_classes = self.num_classes
             proba = np.zeros((n_samples, n_classes), dtype=np.float64)
-            for i in range(n_samples):
-                proba[i, int(preds[i])] = 1.0
+            col_of = {lab: j for j, lab in enumerate(self._rf_labels(n_classes))}
+            uniq, inverse = np.unique(preds, return_inverse=True)
+            cols = np.array([col_of.get(int(u), -1) for u in uniq],
+                            dtype=np.int64)[inverse.reshape(-1)]
+            rows = np.flatnonzero(cols >= 0)
+            proba[rows, cols[rows]] = 1.0
             return proba
 
         # --- Random Forest ---
@@ -2219,7 +2872,8 @@ class RuleClassifier(RuleExporterMixin):
             # Batch traverse all trees at once
             tree_tuples = [
                 (t['feature_idx'], t['threshold'],
-                 t['children_left'], t['children_right'], t['max_depth'])
+                 t['children_left'], t['children_right'], t['max_depth'],
+                 t.get('missing_left'))
                 for t in trees
             ]
             all_leaf_ids = _accel_traverse_multi(X, tree_tuples)
@@ -2257,7 +2911,7 @@ class RuleClassifier(RuleExporterMixin):
                     tree_tuples_gbdt.append((
                         tree['feature_idx'], tree['threshold'],
                         tree['children_left'], tree['children_right'],
-                        tree['max_depth'],
+                        tree['max_depth'], tree.get('missing_left'),
                     ))
 
             if tree_tuples_gbdt:
@@ -2287,6 +2941,37 @@ class RuleClassifier(RuleExporterMixin):
     # BINARY / C HEADER EXPORT
     # =========================================================================
 
+    # Method to serialise the code -> label table for the binary format
+    @staticmethod
+    def _pack_label_table(table: list) -> bytes:
+        """The label table as the bytes of the binary format (version 4).
+
+        Args:
+            table (list): Original labels (str, float, int, bool), by code.
+
+        Returns:
+            bytes: ``n_labels`` (uint16) then one typed entry per label.
+
+        Raises:
+            ValueError: If a label cannot be written.
+        """
+        out = [struct.pack('<H', len(table))]
+        for lab in table:
+            if isinstance(lab, bool):
+                out.append(struct.pack('<BB', 3, 1 if lab else 0))
+            elif isinstance(lab, str):
+                encoded = lab.encode('utf-8')
+                if len(encoded) > 0xFFFF:
+                    raise ValueError('A class label is too long for the binary format.')
+                out.append(struct.pack('<BH', 0, len(encoded)) + encoded)
+            elif isinstance(lab, int):
+                out.append(struct.pack('<Bq', 2, lab))
+            elif isinstance(lab, float):
+                out.append(struct.pack('<Bd', 1, lab))
+            else:
+                raise ValueError(f'Cannot write class label {lab!r:.60} to a binary model.')
+        return b''.join(out)
+
     # Method to execute export_to_binary
     def export_to_binary(self, filepath: str = 'model.bin') -> None:
         """
@@ -2295,7 +2980,9 @@ class RuleClassifier(RuleExporterMixin):
         File format (all little-endian):
             Header:
                 4 bytes  magic: b'PYRA'
-                1 byte   version: 1, or 2 when the input precision is set
+                1 byte   version: 1, or 2 when the input precision is set,
+                         3 with column labels, 4 with missing-value routing
+                         or a label table (see the flags)
                 1 byte   algorithm_type: 0=DT, 1=RF, 2=GBDT
                 2 bytes  n_features (uint16)
                 2 bytes  n_classes (uint16)
@@ -2303,9 +2990,20 @@ class RuleClassifier(RuleExporterMixin):
                 4 bytes  default_class (int32)
             Version 2 and later:
                 1 byte   flags: bit 0 = compare inputs rounded to float32
-                         (``input_dtype='float32'``, as scikit-learn does)
-            Version 3 only (a Random Forest whose labels are not 0..K-1):
+                         (``input_dtype='float32'``, as scikit-learn does).
+                         Version 4 also: bit 1 = per-node missing-value
+                         routing stored with each tree; bit 2 = column
+                         labels follow; bit 3 = label table follows.
+            Version 3 (a Random Forest whose labels are not 0..K-1), or
+            version 4 with flag bit 2:
                 n_classes * 4 bytes  label of each distribution column (int32)
+            Version 4 with flag bit 3 (labels that are not integers; the
+            model answers their codes 0..K-1, the table names them):
+                2 bytes  n_labels (uint16)
+                For each label, in code order:
+                    1 byte  type: 0 = text, 1 = float64, 2 = int64, 3 = bool
+                    text:   2 bytes length (uint16) + utf-8 bytes
+                    float64 / int64: 8 bytes; bool: 1 byte
             For GBDT additionally:
                 1 byte   is_binary (bool)
                 2 bytes  n_gbdt_classes (uint16)
@@ -2329,10 +3027,16 @@ class RuleClassifier(RuleExporterMixin):
                 threshold:     n_nodes * 8 bytes (float64)
                 children_left: n_nodes * 4 bytes (int32)
                 children_right:n_nodes * 4 bytes (int32)
+                missing_left:  n_nodes * 1 byte (uint8, 1 = a NaN goes
+                               left; version 4 with flag bit 1 only)
                 value:
                     DT:   n_nodes * 4 bytes (int32)
                     RF:   n_nodes * n_classes * 8 bytes (float64)
                     GBDT: n_nodes * 8 bytes (float64)
+                max_depth:     4 bytes (int32)
+
+        Models that record no missing-value routing and whose labels are
+        integers are written exactly as before (versions 1 to 3).
 
         Args:
             filepath (str): Output file path.
@@ -2368,7 +3072,24 @@ class RuleClassifier(RuleExporterMixin):
                          if self.algorithm_type == 'Random Forest' else None)
             has_labels = (rf_labels is not None
                           and rf_labels != list(range(self.num_classes)))
-            version = 3 if has_labels else (2 if f32 else 1)
+            # Version 4: the missing-value routing of every split, the code
+            # -> label table, and the column labels of a Decision Tree too
+            # (predict_proba of a reloaded tree needs them).
+            routes_missing = self._c_routes_missing()
+            table = getattr(self, 'label_table', None)
+            col_labels = self._rf_labels(self.num_classes)
+            dt_labels = (self.algorithm_type == 'Decision Tree'
+                         and col_labels != list(range(self.num_classes)))
+            if routes_missing or table is not None or dt_labels:
+                version = 4
+                has_labels = has_labels or dt_labels
+                rf_labels = col_labels
+            else:
+                version = 3 if has_labels else (2 if f32 else 1)
+            flags = ((1 if f32 else 0)
+                     | (2 if version == 4 and routes_missing else 0)
+                     | (4 if version == 4 and has_labels else 0)
+                     | (8 if version == 4 and table is not None else 0))
             f.write(b'PYRA')                                      # magic
             f.write(struct.pack('<B', version))                    # version
             f.write(struct.pack('<B', algo_byte))                  # algorithm_type
@@ -2377,10 +3098,12 @@ class RuleClassifier(RuleExporterMixin):
             f.write(struct.pack('<H', n_trees))                    # n_trees
             f.write(struct.pack('<i', default_cls))                # default_class
             if version >= 2:
-                f.write(struct.pack('<B', 1 if f32 else 0))        # flags
+                f.write(struct.pack('<B', flags))                  # flags
             if has_labels:
                 for lab in rf_labels:
                     f.write(struct.pack('<i', lab))                # class labels
+            if flags & 8:
+                f.write(self._pack_label_table(table))             # label table
 
             # --- GBDT metadata ---
             if self.algorithm_type == 'Gradient Boosting Decision Trees':
@@ -2423,6 +3146,9 @@ class RuleClassifier(RuleExporterMixin):
                 f.write(tree['threshold'].tobytes())
                 f.write(tree['children_left'].tobytes())
                 f.write(tree['children_right'].tobytes())
+                if flags & 2:
+                    f.write(np.ascontiguousarray(
+                        tree['missing_left'], dtype=np.uint8).tobytes())
                 f.write(tree['value'].tobytes())
                 f.write(struct.pack('<i', tree.get('max_depth', 50)))
 
@@ -2480,7 +3206,7 @@ class RuleClassifier(RuleExporterMixin):
         if magic != b'PYRA':
             raise ValueError(f'Invalid binary model file (magic={magic!r})')
         version = _unpack('<B')
-        if version not in (1, 2, 3):
+        if version not in (1, 2, 3, 4):
             raise ValueError(f'Unsupported binary model version: {version}')
         algo_byte = _unpack('<B')
         if algo_byte not in algo_names:
@@ -2491,9 +3217,39 @@ class RuleClassifier(RuleExporterMixin):
         n_trees = _unpack('<H')
         default_cls = _unpack('<i')
         flags = _unpack('<B') if version >= 2 else 0
+        known_flags = 0x0F if version >= 4 else 0x01
+        if flags & ~known_flags:
+            raise ValueError(f'Invalid binary model file: unknown flags {flags:#04x}.')
         class_labels = list(range(n_classes))
-        if version >= 3:
+        if version == 3 or flags & 4:
             class_labels = [_unpack('<i') for _ in range(n_classes)]
+        label_table = None
+        if flags & 8:
+            n_labels = _unpack('<H')
+            if n_labels != n_classes:
+                raise ValueError('Invalid binary model file: the label table '
+                                 f'has {n_labels} labels for {n_classes} classes.')
+            label_table = []
+            for _ in range(n_labels):
+                kind = _unpack('<B')
+                if kind == 0:
+                    try:
+                        label_table.append(_read(_unpack('<H')).decode('utf-8'))
+                    except UnicodeDecodeError as e:
+                        raise ValueError(f'Invalid binary model file: label '
+                                         f'is not utf-8 ({e}).') from None
+                elif kind == 1:
+                    label_table.append(_unpack('<d'))
+                elif kind == 2:
+                    label_table.append(_unpack('<q'))
+                elif kind == 3:
+                    label_table.append(bool(_unpack('<B')))
+                else:
+                    raise ValueError(f'Invalid binary model file: unknown '
+                                     f'label type {kind}.')
+            if len(set(label_table)) != len(label_table):
+                raise ValueError('Invalid binary model file: repeated class labels.')
+        has_missing = bool(flags & 2)
 
         algorithm_type = algo_names[algo_byte]
         if algorithm_type == 'Random Forest' and n_classes < 1:
@@ -2525,7 +3281,7 @@ class RuleClassifier(RuleExporterMixin):
         # Bytes per node: feature_idx, threshold, both children, value.
         value_size = {'Decision Tree': 4, 'Random Forest': n_classes * 8,
                       'Gradient Boosting Decision Trees': 8}[algorithm_type]
-        node_size = 4 + 8 + 4 + 4 + value_size
+        node_size = 4 + 8 + 4 + 4 + value_size + (1 if has_missing else 0)
 
         # Trees
         tree_arrays = []
@@ -2561,6 +3317,9 @@ class RuleClassifier(RuleExporterMixin):
             threshold_arr = np.frombuffer(_read(n_nodes * 8), dtype='<f8').astype(np.float64)
             children_left = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
             children_right = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
+            missing_left = None
+            if has_missing:
+                missing_left = np.frombuffer(_read(n_nodes), dtype=np.uint8).copy()
 
             if algorithm_type == 'Decision Tree':
                 value_arr = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
@@ -2579,6 +3338,8 @@ class RuleClassifier(RuleExporterMixin):
                 'value': value_arr,
                 'max_depth': _unpack('<i'),
             }
+            if missing_left is not None:
+                tree['missing_left'] = missing_left
             cls._validate_tree_arrays(tree, n_features, t)
             tree_arrays.append(tree)
 
@@ -2615,6 +3376,8 @@ class RuleClassifier(RuleExporterMixin):
         obj._native_source = None
         obj.fallback_activations = 0
         obj.input_dtype = 'float32' if flags & 1 else None
+        obj.label_table = label_table
+        obj.sklearn_estimator = None
 
         return obj
 
@@ -2632,7 +3395,12 @@ class RuleClassifier(RuleExporterMixin):
           `_build_single_tree_arrays` writes it;
         - any other node has ``0 <= feature_idx < n_features`` and both
           children in ``[0, n_nodes)``, neither being the node itself;
-        - ``0 <= max_depth <= n_nodes``.
+        - ``0 <= max_depth <= n_nodes``;
+        - the split nodes form a tree rooted at node 0: no node is reached
+          twice (no cycle, no child shared by two splits), every node is
+          reachable from the root, and no leaf is deeper than ``max_depth``
+          (the traversal runs exactly ``max_depth`` steps, so a deeper leaf
+          would leave samples on a split node).
 
         Args:
             tree (dict): 'feature_idx', 'threshold', 'children_left',
@@ -2659,6 +3427,14 @@ class RuleClassifier(RuleExporterMixin):
         if n_nodes < 1 or not (len(thr) == len(left) == len(right) == n_nodes):
             raise ValueError(f'Invalid tree arrays (tree {tree_no}): '
                              'arrays are empty or of different lengths.')
+        missing = tree.get('missing_left')
+        if missing is not None:
+            if len(missing) != n_nodes:
+                raise ValueError(f'Invalid tree arrays (tree {tree_no}): '
+                                 'missing_left has the wrong length.')
+            bad = np.asarray(missing) > 1
+            if bad.any():
+                _fail('missing_left must be 0 or 1', bad)
         ids = np.arange(n_nodes)
         is_leaf = (left == ids) & (right == ids)
         bad = is_leaf & ((feat != 0) | ~np.isneginf(thr))
@@ -2679,6 +3455,166 @@ class RuleClassifier(RuleExporterMixin):
         if not 0 <= depth <= n_nodes:
             raise ValueError(f'Invalid tree arrays (tree {tree_no}): '
                              f'max_depth={depth} not in [0, {n_nodes}].')
+
+        # The split nodes must form a tree rooted at node 0: walk it level by
+        # level, so a child pointing back to an ancestor (a cycle) or to a
+        # node another split already reached shows up as a node seen twice.
+        # Such arrays stay in bounds but route samples wrongly.
+        seen = np.zeros(n_nodes, dtype=bool)
+        seen[0] = True
+        frontier = np.zeros(1, dtype=np.intp)
+        level = 0
+        while True:
+            frontier = frontier[inner[frontier]]
+            if frontier.size == 0:
+                break
+            level += 1
+            if level > depth:
+                # The traversal runs exactly max_depth steps, so a sample
+                # deeper than that would stop on a split node and read its
+                # (meaningless) value.
+                raise ValueError(
+                    f'Invalid tree arrays (tree {tree_no}): max_depth={depth} '
+                    f'is smaller than the depth of the tree (> {depth}).')
+            kids = np.concatenate((left[frontier], right[frontier]))
+            if seen[kids].any() or np.unique(kids).size != kids.size:
+                counts = np.bincount(kids, minlength=n_nodes)
+                _fail('node reached twice (a cycle or a child shared by two '
+                      'splits): the split nodes do not form a tree',
+                      (counts > 1) | (seen & (counts > 0)))
+            seen[kids] = True
+            frontier = kids
+        # `_build_single_tree_arrays` numbers only the nodes it creates while
+        # walking from the root, so every node is reachable.
+        if not seen.all():
+            _fail('node not reachable from the root', ~seen)
+
+    # Method to check whether the C exports route missing values
+    def _c_routes_missing(self) -> bool:
+        """Whether the C/Arduino exports carry the missing-value routing.
+
+        Gradient Boosting never does: scikit-learn's GradientBoostingClassifier
+        refuses NaN, so its exports are written as before.
+
+        Returns:
+            bool: True when every compiled tree has its ``missing_left``
+            array and there is at least one tree to traverse.
+        """
+        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+            return False
+        trees = self._tree_arrays
+        return (self._trees_route_missing(trees)
+                and any('init_score' not in t for t in trees))
+
+    # Method to generate the C function that walks one tree
+    def _c_traverse_function(self, name: str, routes_missing: bool,
+                             leaf_comment: str = '') -> List[str]:
+        """The C source of the tree traversal of the C/Arduino exports.
+
+        Without missing-value routing it is the function the exports always
+        had (``x <= t`` goes left, so a NaN goes right). With it, a NaN goes
+        to the side the split recorded (``missing_left``), as in
+        scikit-learn.
+
+        Args:
+            name (str): Function name.
+            routes_missing (bool): Emit the ``missing_left`` parameter and
+                the ``isnan`` test.
+            leaf_comment (str): Comment appended to the leaf test.
+
+        Returns:
+            List[str]: The lines, followed by an empty line.
+        """
+        f32 = getattr(self, 'input_dtype', None) == 'float32'
+        # scikit-learn casts X to float32 before comparing.
+        value = ('(double)(float)features[feat_idx[node]]' if f32
+                 else 'features[feat_idx[node]]')
+        out = [
+            f'static inline int32_t {name}(',
+            '    const double *features,',
+            '    const int32_t *feat_idx,',
+            '    const double *thresh,',
+            '    const int32_t *left,',
+            '    const int32_t *right,',
+        ]
+        if routes_missing:
+            out.append('    const uint8_t *missing_left,')
+        out += [
+            '    int max_depth',
+            ') {',
+            '    int32_t node = 0;',
+            '    int d;',
+            '    for (d = 0; d < max_depth; d++) {',
+            f'        if (left[node] == node) break;{leaf_comment}',
+        ]
+        if routes_missing:
+            out += [
+                f'        double x = {value};',
+                '        if (isnan(x))  /* missing value: the side the split recorded */',
+                '            node = missing_left[node] ? left[node] : right[node];',
+                '        else if (x <= thresh[node])',
+            ]
+        else:
+            out.append(f'        if ({value} <= thresh[node])')
+        out += [
+            '            node = left[node];',
+            '        else',
+            '            node = right[node];',
+            '    }',
+            '    return node;',
+            '}',
+            '',
+        ]
+        return out
+
+    # Method to pass each tree's missing-value routing to the traversal
+    @staticmethod
+    def _c_with_missing_args(source: str, routes_missing: bool) -> str:
+        """Add ``treeN_missing_left`` to every traversal call of `source`.
+
+        Args:
+            source (str): Generated C source.
+            routes_missing (bool): Whether the traversal takes the argument.
+
+        Returns:
+            str: The source, unchanged when `routes_missing` is False.
+        """
+        if not routes_missing:
+            return source
+        return re.sub(r'tree(\d+)_right, TREE\1_DEPTH\)',
+                      r'tree\1_right, tree\1_missing_left, TREE\1_DEPTH)', source)
+
+    # Method to document the code -> label table in generated C
+    def _c_label_table_comment(self, line_comment: bool = False) -> List[str]:
+        """Comment lines naming the original label of each integer code.
+
+        The C, Arduino and binary targets answer integer codes; for labels
+        that are not integers the code is the position in ``classes_``.
+
+        Args:
+            line_comment (bool): ``//`` comments (Arduino) instead of a block.
+
+        Returns:
+            List[str]: The lines (none when the labels are integers).
+        """
+        table = getattr(self, 'label_table', None)
+        if table is None:
+            return []
+
+        def show(lab):
+            """A label on one ASCII comment line."""
+            text = repr(lab) if not isinstance(lab, str) else lab
+            return self._c_comment(text.encode('ascii', 'backslashreplace').decode('ascii'))
+
+        if line_comment:
+            out = ['// Class labels: pyra_predict() returns the code; original labels:']
+            out += [f'//   {i} = {show(lab)}' for i, lab in enumerate(table)]
+        else:
+            out = ['/* Class labels: predict() returns the code; original labels:']
+            out += [f'   {i} = {show(lab)}' for i, lab in enumerate(table)]
+            out.append('*/')
+        out.append('')
+        return out
 
     # Method to execute export_to_c_header
     def export_to_c_header(
@@ -2709,6 +3645,7 @@ class RuleClassifier(RuleExporterMixin):
 
         lines: List[str] = []
         a = lines.append
+        routes_missing = self._c_routes_missing()
 
         a(f'#ifndef {guard_name}')
         a(f'#define {guard_name}')
@@ -2716,6 +3653,10 @@ class RuleClassifier(RuleExporterMixin):
         a('/* Auto-generated by pyruleanalyzer — do not edit */')
         a('')
         a('#include <stdint.h>')
+        if routes_missing:
+            a('#include <math.h>  /* HUGE_VAL; isnan: missing values (NaN) */')
+        else:
+            a('#include <math.h>  /* HUGE_VAL */')
         a('')
         a(f'#define N_FEATURES {len(self._array_feature_names)}')
         a(f'#define N_CLASSES  {self.num_classes}')
@@ -2729,6 +3670,8 @@ class RuleClassifier(RuleExporterMixin):
             a(f'   [{i}] {self._c_comment(name)}')
         a('*/')
         a('')
+        for line in self._c_label_table_comment():
+            a(line)
 
         # Emit per-tree arrays
         for t_idx, tree in enumerate(self._tree_arrays):
@@ -2748,21 +3691,21 @@ class RuleClassifier(RuleExporterMixin):
             def _format_c_float(v):
                 """Format a float value as a C-compatible literal.
 
-                Special values (inf, -inf, nan) are mapped to standard C99
-                macros or safe finite substitutes that behave identically in
-                tree traversal comparisons:
-                  * +inf  → "1e500"       (larger than any realistic feature)
-                  * -inf  → "-1e500"      (smaller than any realistic feature)
-                  * nan   → "-1e500"      (fallback; treated as -inf)
+                Special values (inf, -inf, nan) are mapped to the C89
+                ``HUGE_VAL`` macro of <math.h> (+infinity on IEEE targets,
+                avr-libc included):
+                  * +inf  → "HUGE_VAL"   (the split isolating missing values)
+                  * -inf  → "-HUGE_VAL"  (leaves; never compared)
+                  * nan   → "-HUGE_VAL"  (fallback; treated as -inf)
 
-                Using finite substitutes avoids linker errors on targets that
-                do not support <math.h> INFINITY / NAN macros.
+                A literal such as ``1e500`` is out of range: GCC turns it
+                into infinity with a warning, MSVC refuses to compile it.
                 """
                 import math
                 if math.isinf(v):
-                    return "1e500" if v > 0 else "-1e500"
+                    return "HUGE_VAL" if v > 0 else "-HUGE_VAL"
                 if math.isnan(v):
-                    return "-1e500"  # safe finite fallback
+                    return "-HUGE_VAL"  # safe fallback
                 return f'{v:.17g}'
 
             vals = ', '.join(_format_c_float(v) for v in tree['threshold'])
@@ -2775,6 +3718,11 @@ class RuleClassifier(RuleExporterMixin):
             # children_right
             vals = ', '.join(str(v) for v in tree['children_right'])
             a(f'static const int32_t tree{t_idx}_right[{n_nodes}] = {{{vals}}};')
+
+            # missing_left: 1 where a split sends a missing value (NaN) left
+            if routes_missing:
+                vals = ', '.join(str(int(v)) for v in tree['missing_left'])
+                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}] = {{{vals}}};')
 
             # value
             if self.algorithm_type == 'Decision Tree':
@@ -2791,30 +3739,8 @@ class RuleClassifier(RuleExporterMixin):
             a('')
 
         # Predict function
-        a('static inline int32_t traverse_tree(')
-        a('    const double *features,')
-        a('    const int32_t *feat_idx,')
-        a('    const double *thresh,')
-        a('    const int32_t *left,')
-        a('    const int32_t *right,')
-        a('    int max_depth')
-        a(') {')
-        a('    int32_t node = 0;')
-        a('    int d;')
-        a('    for (d = 0; d < max_depth; d++) {')
-        a('        if (left[node] == node) break;  /* leaf: self-loop */')
-        if getattr(self, 'input_dtype', None) == 'float32':
-            # scikit-learn casts X to float32 before comparing.
-            a('        if ((double)(float)features[feat_idx[node]] <= thresh[node])')
-        else:
-            a('        if (features[feat_idx[node]] <= thresh[node])')
-        a('            node = left[node];')
-        a('        else')
-        a('            node = right[node];')
-        a('    }')
-        a('    return node;')
-        a('}')
-        a('')
+        lines.extend(self._c_traverse_function(
+            'traverse_tree', routes_missing, '  /* leaf: self-loop */'))
 
         # Main predict function depends on algorithm type
         if self.algorithm_type == 'Decision Tree':
@@ -2904,7 +3830,7 @@ class RuleClassifier(RuleExporterMixin):
         a('')
 
         with open(filepath, 'w') as f:
-            f.write('\n'.join(lines))
+            f.write(self._c_with_missing_args('\n'.join(lines), routes_missing))
 
         print(f'[EXPORT] C header saved to {filepath} '
               f'({os.path.getsize(filepath)} bytes)')
@@ -3036,7 +3962,12 @@ class RuleClassifier(RuleExporterMixin):
         
         # Generate inline header (same logic as export_to_c_header but without #ifndef guards)
         default_cls_inline = default_cls
-        
+        routes_missing = self._c_routes_missing()
+
+        if routes_missing:
+            a('#include <math.h>  // HUGE_VAL; isnan: missing values (NaN)')
+        else:
+            a('#include <math.h>  // HUGE_VAL')
         a(f'#define N_FEATURES {len(self._array_feature_names)}')
         a(f'#define N_CLASSES  {self.num_classes}')
         a(f'#define N_TREES    {len(self._tree_arrays)}')
@@ -3048,6 +3979,8 @@ class RuleClassifier(RuleExporterMixin):
         for i, name in enumerate(self._array_feature_names):
             a(f'//   [{i}] {self._c_comment(name)}')
         a('')
+        for line in self._c_label_table_comment(line_comment=True):
+            a(line)
 
         # Per-tree arrays (same format as C header)
         for t_idx, tree in enumerate(self._tree_arrays):
@@ -3065,11 +3998,12 @@ class RuleClassifier(RuleExporterMixin):
 
             # threshold with C-compatible float formatting
             def _format_c_float_inline(v):
+                # HUGE_VAL, not 1e500, which MSVC refuses (see the C header).
                 import math
                 if math.isinf(v):
-                    return "1e500" if v > 0 else "-1e500"
+                    return "HUGE_VAL" if v > 0 else "-HUGE_VAL"
                 if math.isnan(v):
-                    return "-1e500"
+                    return "-HUGE_VAL"
                 return f'{v:.17g}'
 
             vals = ', '.join(_format_c_float_inline(v) for v in tree['threshold'])
@@ -3082,6 +4016,11 @@ class RuleClassifier(RuleExporterMixin):
             # children_right
             vals = ', '.join(str(v) for v in tree['children_right'])
             a(f'static const int32_t tree{t_idx}_right[{n_nodes}] = {{{vals}}};')
+
+            # missing_left: 1 where a split sends a missing value (NaN) left
+            if routes_missing:
+                vals = ', '.join(str(int(v)) for v in tree['missing_left'])
+                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}] = {{{vals}}};')
 
             # value
             if self.algorithm_type == 'Decision Tree':
@@ -3102,30 +4041,7 @@ class RuleClassifier(RuleExporterMixin):
         a('// PREDICTION ENGINE (C inline — no library needed)')
         a('// ============================================================')
         a('')
-        a('static inline int32_t pyra_traverse_tree(')
-        a('    const double *features,')
-        a('    const int32_t *feat_idx,')
-        a('    const double *thresh,')
-        a('    const int32_t *left,')
-        a('    const int32_t *right,')
-        a('    int max_depth')
-        a(') {')
-        a('    int32_t node = 0;')
-        a('    int d;')
-        a('    for (d = 0; d < max_depth; d++) {')
-        a('        if (left[node] == node) break;')
-        if getattr(self, 'input_dtype', None) == 'float32':
-            # scikit-learn casts X to float32 before comparing.
-            a('        if ((double)(float)features[feat_idx[node]] <= thresh[node])')
-        else:
-            a('        if (features[feat_idx[node]] <= thresh[node])')
-        a('            node = left[node];')
-        a('        else')
-        a('            node = right[node];')
-        a('    }')
-        a('    return node;')
-        a('}')
-        a('')
+        lines.extend(self._c_traverse_function('pyra_traverse_tree', routes_missing))
 
         # Main predict function based on algorithm type
         if self.algorithm_type == 'Decision Tree':
@@ -3287,7 +4203,7 @@ class RuleClassifier(RuleExporterMixin):
             os.makedirs(ino_dir, exist_ok=True)
         
         with open(filepath, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(self._c_with_missing_args('\n'.join(lines), routes_missing))
 
         # Print memory report to stdout
         avr_pct_flash = (est_flash / max_flash) * 100 if max_flash > 0 else 0
@@ -3478,7 +4394,11 @@ class RuleClassifier(RuleExporterMixin):
             
             # signature format: (class_label, tuple_of_sorted_conditions)
             # condition format: (var, op, value) - already float from parsing
-            sorted_conditions = tuple(sorted(rule.parsed_conditions))
+            # The missing-value routing is part of the region: two trees
+            # with the same thresholds may send NaN different ways.
+            sorted_conditions = tuple(sorted(
+                (condition_signature(c) for c in rule.parsed_conditions),
+                key=lambda s: (s[0], s[1], s[2], str(s[3]))))
             signature = (rule.class_, sorted_conditions)
             
             rules_by_signature[signature].append(rule)
@@ -3557,7 +4477,7 @@ class RuleClassifier(RuleExporterMixin):
 
                     # Check 2: Must refer to the same threshold value
                     # Using a small epsilon for float comparison safety
-                    if abs(val1 - val2) > 1e-9:
+                    if val1 != val2 and not abs(val1 - val2) <= 1e-9:
                         continue
                     
                     # Check 3: Complementary operators, (<= vs >) or (< vs >=),
@@ -3817,34 +4737,58 @@ class RuleClassifier(RuleExporterMixin):
 
             # Check last condition: same variable, same threshold, complementary op
             c_var, c_op, c_val = candidate.parsed_conditions[-1]
-            if c_var == last_var and c_op == expected_op and abs(c_val - last_val) < 1e-9:
+            if (c_var == last_var and c_op == expected_op
+                    and (c_val == last_val or abs(c_val - last_val) < 1e-9)):
                 return candidate
 
         return None
 
     # Method to promote sibling when removing specific rules
-    def _promote_siblings(self, rules_to_remove, all_rules):
+    def _promote_siblings(self, rules_to_remove, all_rules, accept=None,
+                          fill_holes=None):
         """
-        Promotes sibling rules when their counterparts are removed.
+        Removes rules and hands each removed region to what is left of its tree.
 
-        When a low-usage rule is removed, its sibling (the other child of
-        the same parent node) becomes the sole representative of that region.
-        The sibling's last condition (which only existed to distinguish it
-        from the removed rule) is stripped, effectively promoting it to the
-        parent node's level.
+        Removing a leaf removes the split above it: the parent node is replaced
+        by the leaf's other child, which now answers for the whole parent
+        region. Concretely, every rule on the other side of that split drops
+        the split's condition (the condition at the parent's depth):
 
-        **Critical**: Rules are processed from deepest to shallowest. This
-        ensures that when a removed rule's sibling is not a direct leaf but
-        a sub-branch (i.e., its sibling at the same depth doesn't exist as
-        a single rule), the deeper removals and promotions happen first,
-        potentially creating the sibling that the shallower removal needs.
+        * **Sibling leaf** (promotion): the sibling drops its last condition
+          and becomes the parent. Its class distribution absorbs the removed
+          rule's, and its class is the majority of the sum.
+        * **Sibling sub-branch** (grafting): every live leaf of the sub-branch
+          drops the parent's condition, so the sub-branch is raised into the
+          parent's place and its own splits route the removed region. Leaf
+          outputs are unchanged (the removed rule's training distribution
+          cannot be attributed to individual leaves without data).
 
-        **Performance**: Uses a hash-based sibling index for O(1) lookups
-        instead of O(n) linear scans. The index is keyed by
-        (prefix, variable, complementary_operator, threshold) so that
-        looking up a rule's sibling is a direct dictionary access. When a
-        sibling is promoted (its conditions change), the index is updated
-        incrementally to reflect the new state.
+        Either way the rules of each tree remain a partition: no region is
+        left uncovered (no `default_class` fallback) and no two rules overlap.
+        A rule that is the only rule of its tree (no conditions) is never
+        removed, since that would leave the tree without an answer anywhere.
+
+        Usage counts move with promotion (the sibling covers the union of the
+        two regions). After grafting, the removed rule's samples spread over
+        the raised leaves, which cannot be known without data: the analyzers
+        recount usage and errors on the refinement set afterwards
+        (`_refinement_evaluator(...).recount()`).
+
+        **Gradient Boosting** (``fill_holes=False``, its default): a removed
+        leaf whose sibling is a sub-branch is removed without grafting, and the
+        tree adds 0.0 to the score on its region. In an additive model a tree
+        that does not answer simply contributes nothing (it is not a fallback
+        to `default_class`; the other trees and the init score still decide),
+        whereas grafting would apply leaf values fitted to the residuals of a
+        different region.
+
+        **Critical**: Rules are processed from deepest to shallowest, so deeper
+        removals and promotions happen first and may create the sibling a
+        shallower removal needs.
+
+        **Performance**: sibling leaves are found through a hash index keyed by
+        (tree, prefix, variable, operator, threshold); only the sub-branch case
+        scans the rules of one tree.
 
         Example:
             Given tree:
@@ -3862,16 +4806,30 @@ class RuleClassifier(RuleExporterMixin):
             1. Remove B (depth 3) -> promote sibling C: becomes "x<=5 AND y>3 -> C"
             2. Remove A (depth 2) -> now promoted C is A's sibling -> promote C: becomes "x<=5 -> C"
 
-            If processed shallowest first, step 2 would fail (no direct sibling found).
+            Removing only A instead grafts the [z <= 7] sub-branch: B becomes
+            "x<=5 AND z<=7" and C "x<=5 AND z>7", and A's region is routed by
+            the z split instead of falling back to default_class.
 
         Args:
             rules_to_remove (List[Rule]): Rules identified for removal.
             all_rules (List[Rule]): The complete set of current rules.
+            accept (Callable[[Rule, List[Rule], List[Rule]], bool], optional):
+                Called before each removal with the rule to remove, the rules
+                whose regions the removal changes (as they are now) and those
+                rules as they would become; the removal happens only if it
+                returns True. Used for error-aware refinement (see
+                `_refinement_evaluator`). Default: every removal happens.
+            fill_holes (bool, optional): Graft sub-branches (True) or leave the
+                region uncovered (False). Default: True, except for Gradient
+                Boosting.
 
         Returns:
-            List[Rule]: The adjusted rule set after promotions.
+            List[Rule]: The adjusted rule set (copies; the input rules are not
+            modified).
         """
         complement = {'<=': '>', '>': '<=', '<': '>=', '>=': '<'}
+        if fill_holes is None:
+            fill_holes = self.algorithm_type != 'Gradient Boosting Decision Trees'
 
         # Siblings only exist *within* one tree. Ensemble trees routinely split
         # on the same feature at the same threshold, so a key that ignores the
@@ -3904,21 +4862,42 @@ class RuleClassifier(RuleExporterMixin):
         # gain the generalized regions, start overlapping each other, and stop
         # reproducing the original tree. Clone first, so refinement only ever
         # touches its own copies.
-        clones = {}
-        for r in all_rules:
+        def _clone(r):
             c = copy.copy(r)
             c.conditions = list(r.conditions)
             c.parsed_conditions = list(r.parsed_conditions)
             dist = getattr(r, 'class_distribution', None)
             if dist is not None:
                 c.class_distribution = list(dist)
-            clones[id(r)] = c
+            return c
+
+        clones = {id(r): _clone(r) for r in all_rules}
         all_rules = [clones[id(r)] for r in all_rules]
         rules_to_remove = [clones[id(r)] for r in rules_to_remove if id(r) in clones]
 
         # --- Build sibling index: key -> list of rules with that key ---
         sibling_index: dict = {}
+        rules_of_tree: dict = defaultdict(list)
         for r in all_rules:
+            key = _make_key(r)
+            if key is not None:
+                sibling_index.setdefault(key, []).append(r)
+            rules_of_tree[_tree_id(r)].append(r)
+
+        # Method to _unindex.
+        def _unindex(r):
+            """Drop `r` from the sibling index (before its conditions change)."""
+            key = _make_key(r)
+            if key is not None and key in sibling_index:
+                lst = [x for x in sibling_index[key] if x is not r]
+                if lst:
+                    sibling_index[key] = lst
+                else:
+                    del sibling_index[key]
+
+        # Method to _reindex.
+        def _reindex(r):
+            """Insert `r` in the sibling index under its current conditions."""
             key = _make_key(r)
             if key is not None:
                 sibling_index.setdefault(key, []).append(r)
@@ -3926,6 +4905,9 @@ class RuleClassifier(RuleExporterMixin):
         # Work on a mutable copy
         working_rules = list(all_rules)
         promoted_count = 0
+        grafted_count = 0
+        kept_count = 0
+        rejected_count = 0
 
         # Sort rules to remove by depth (deepest first)
         sorted_to_remove = sorted(
@@ -3937,79 +4919,115 @@ class RuleClassifier(RuleExporterMixin):
         # Track which rules have been removed by identity
         removed_ids: set = set()
 
-        total = len(sorted_to_remove)
-        start_time = time.time()
-
-        for idx, rule in enumerate(sorted_to_remove):
+        for rule in sorted_to_remove:
             if id(rule) in removed_ids:
                 continue
 
+            if not rule.parsed_conditions:
+                # The rule is its whole tree: nothing could take over.
+                kept_count += 1
+                continue
+
+            tid = _tree_id(rule)
+            prefix = tuple(rule.parsed_conditions[:-1])
+            depth = len(prefix)
+            last_var, last_op, last_val = rule.parsed_conditions[-1]
+            expected_op = complement.get(last_op)
+
             # --- O(1) sibling lookup via index ---
             sibling = None
-            if rule.parsed_conditions:
-                prefix = tuple(rule.parsed_conditions[:-1])
-                last_var, last_op, last_val = rule.parsed_conditions[-1]
-                expected_op = complement.get(last_op)
-                if expected_op is not None:
-                    # The sibling has the complementary operator, in the same tree
-                    sib_key = (_tree_id(rule), prefix, last_var,
-                               expected_op, round(last_val, 9))
-                    candidates = sibling_index.get(sib_key, [])
-                    for c in candidates:
-                        if c is not rule and id(c) not in removed_ids:
-                            sibling = c
-                            break
+            branch = []
+            if expected_op is not None:
+                # The sibling has the complementary operator, in the same tree
+                sib_key = (tid, prefix, last_var, expected_op, round(last_val, 9))
+                for c in sibling_index.get(sib_key, []):
+                    if c is not rule and id(c) not in removed_ids:
+                        sibling = c
+                        break
+                if sibling is None and fill_holes:
+                    # The other child is a sub-branch: its live leaves extend
+                    # the prefix with the complementary condition.
+                    branch = [
+                        r for r in rules_of_tree[tid]
+                        if r is not rule and id(r) not in removed_ids
+                        and len(r.parsed_conditions) > depth + 1
+                        and tuple(r.parsed_conditions[:depth]) == prefix
+                        and r.parsed_conditions[depth][0] == last_var
+                        and r.parsed_conditions[depth][1] == expected_op
+                        and (r.parsed_conditions[depth][2] == last_val
+                             or abs(r.parsed_conditions[depth][2] - last_val) < 1e-9)
+                    ]
 
+            if sibling is None and not branch:
+                if fill_holes:
+                    # No other side to hand the region to (the rules are not
+                    # the leaves of a tree here): keep the rule rather than
+                    # open a hole.
+                    kept_count += 1
+                    continue
+                # Gradient Boosting: the tree abstains (adds 0.0) on the
+                # removed region.
+                if accept is not None and not accept(rule, [rule], []):
+                    rejected_count += 1
+                    continue
+                _unindex(rule)
+                removed_ids.add(id(rule))
+                continue
+
+            # Proposal: the rules on the other side of the split, without the
+            # split's condition.
             if sibling is not None:
-                # Remove sibling's old key from the index before mutation
-                old_sib_key = _make_key(sibling)
-                if old_sib_key is not None and old_sib_key in sibling_index:
-                    lst = sibling_index[old_sib_key]
-                    sibling_index[old_sib_key] = [r for r in lst if r is not sibling]
-                    if not sibling_index[old_sib_key]:
-                        del sibling_index[old_sib_key]
-
-                # Promote the sibling: remove its last condition
-                sibling.conditions = sibling.conditions[:-1]
-                sibling.parsed_conditions = sibling.parsed_conditions[:-1]
-
-                # Re-insert sibling with its new key
-                new_sib_key = _make_key(sibling)
-                if new_sib_key is not None:
-                    sibling_index.setdefault(new_sib_key, []).append(sibling)
-
+                new = _clone(sibling)
+                new.conditions = sibling.conditions[:-1]
+                new.parsed_conditions = sibling.parsed_conditions[:-1]
                 # Combine class_distribution: the promoted sibling now covers
                 # the region of the removed rule as well, so add their counts
-                if (hasattr(rule, 'class_distribution') and rule.class_distribution is not None
-                        and hasattr(sibling, 'class_distribution') and sibling.class_distribution is not None):
-                    sibling.class_distribution = [
+                if (getattr(rule, 'class_distribution', None) is not None
+                        and getattr(sibling, 'class_distribution', None) is not None):
+                    new.class_distribution = [
                         a + b for a, b in zip(sibling.class_distribution, rule.class_distribution)
                     ]
                     # Update class_ to match the new majority class (a label,
                     # not the index into the distribution)
-                    dist = sibling.class_distribution
-                    sibling.class_ = self._label_at(dist.index(max(dist)), len(dist))
+                    dist = new.class_distribution
+                    new.class_ = self._label_at(dist.index(max(dist)), len(dist))
+                if "_promoted" not in new.name:
+                    new.name = f"{new.name}_promoted"
+                plan = [(sibling, new)]
+            else:
+                plan = []
+                for r in branch:
+                    new = _clone(r)
+                    new.conditions = r.conditions[:depth] + r.conditions[depth + 1:]
+                    new.parsed_conditions = (r.parsed_conditions[:depth]
+                                             + r.parsed_conditions[depth + 1:])
+                    if "_grafted" not in new.name:
+                        new.name = f"{new.name}_grafted"
+                    plan.append((r, new))
+
+            if accept is not None and not accept(
+                    rule, [rule] + [old for old, _ in plan], [new for _, new in plan]):
+                rejected_count += 1
+                continue
+
+            for old, new in plan:
+                _unindex(old)
+                old.conditions = new.conditions
+                old.parsed_conditions = new.parsed_conditions
+                old.class_distribution = new.class_distribution
+                old.class_ = new.class_
+                old.name = new.name
+                _reindex(old)
+
+            if sibling is not None:
                 sibling.usage_count += rule.usage_count
                 sibling.error_count += rule.error_count
-
-                # Update its name to indicate promotion
-                if "_promoted" not in sibling.name:
-                    sibling.name = f"{sibling.name}_promoted"
-
                 promoted_count += 1
-            # If no sibling is found, the rule is simply removed.
-            # Samples that would have matched it will fall through to
-            # default_class (existing fallback behavior).
+            else:
+                grafted_count += 1
 
-            # Remove the rule's key from the index
-            rule_key = _make_key(rule)
-            if rule_key is not None and rule_key in sibling_index:
-                lst = sibling_index[rule_key]
-                sibling_index[rule_key] = [r for r in lst if r is not rule]
-                if not sibling_index[rule_key]:
-                    del sibling_index[rule_key]
-
-            # Mark removed (deferred filtering at the end)
+            # Remove the rule from the index; mark removed (deferred filtering)
+            _unindex(rule)
             removed_ids.add(id(rule))
 
         # Single-pass filtering instead of per-iteration list rebuild
@@ -4017,9 +5035,254 @@ class RuleClassifier(RuleExporterMixin):
 
         if promoted_count > 0:
             print(f"Promoted {promoted_count} sibling rule(s) after specific rule removal.")
+        if grafted_count > 0:
+            print(f"Grafted {grafted_count} sibling sub-branch(es) into the "
+                  "place of their parent after specific rule removal.")
+        if kept_count > 0:
+            print(f"Kept {kept_count} low-usage rule(s) that no other rule of "
+                  "their tree could take over.")
+        if rejected_count > 0:
+            print(f"Kept {rejected_count} low-usage rule(s) whose removal "
+                  "would add errors on the refinement set.")
+        if promoted_count or grafted_count:
             self._warn_promotions_that_overlap(working_rules, tree_of=_tree_id)
 
         return working_rules
+
+    # Method to run the low-usage stage on the refinement set
+    def _remove_low_usage(self, rules_to_remove, X, y, feature_names,
+                          max_error_increase=None):
+        """Remove `rules_to_remove` from `final_rules`, then recount usage.
+
+        The low-usage stage of the analyzers. Each removal hands the rule's
+        region to the rest of its tree (`_promote_siblings`); with
+        `max_error_increase` set, a removal happens only while the
+        refinement-set errors stay within that many samples of the errors
+        before the stage (0: reduced-error pruning, errors never increase).
+        Usage and error counts of the resulting rules are then recounted on
+        the refinement set, since grafting spreads a removed region over
+        several leaves.
+
+        Args:
+            rules_to_remove (List[Rule]): Candidates (rules of `final_rules`).
+            X (np.ndarray): Refinement samples (from `_prepare_test_data`).
+            y (array-like): True labels.
+            feature_names (List[str]): Column names of `X`.
+            max_error_increase (int, optional): Error budget; None (default)
+                removes every candidate (usage-only criterion).
+
+        Returns:
+            List[Rule]: The refined rule set (also stored in `final_rules`).
+        """
+        accept = None
+        if max_error_increase is not None:
+            if max_error_increase < 0:
+                raise ValueError("max_error_increase must be >= 0 or None.")
+            evaluator = self._refinement_evaluator(
+                X, y, feature_names, self.final_rules, max_error_increase)
+            accept = evaluator.accept
+        self.final_rules = self._promote_siblings(
+            rules_to_remove, self.final_rules, accept=accept)
+        if max_error_increase is not None:
+            print(f"Refinement-set errors: {evaluator.base_errors} -> "
+                  f"{evaluator.errors()} (budget +{max_error_increase}).")
+        self._refinement_evaluator(
+            X, y, feature_names, self.final_rules).recount(self.final_rules)
+        return self.final_rules
+
+    # Method to build an evaluator of rule-set changes on the refinement set
+    def _refinement_evaluator(self, X, y, feature_names, rules, max_error_increase=0):
+        """Predictions and errors of `rules` on a refinement set, kept up to date.
+
+        Backs error-aware refinement (reduced-error pruning on the refinement
+        set) and the recount of usage/error statistics after refinement. The
+        semantics are those of the compiled engines: DT, the label of the
+        matching rule (`default_class` when none matches); RF, the argmax of
+        the sum of the matching leaves' normalised distributions
+        (`default_class` when every tree abstains); GBDT, init score plus the
+        matching contributions (binary: score >= 0).
+
+        Each change touches one tree, and only on the samples that the changed
+        rules cover, so a candidate is evaluated on those samples alone.
+
+        Args:
+            X (np.ndarray): Refinement samples, already prepared like the
+                analyzers do (`_prepare_test_data`, which applies the input
+                precision).
+            y (array-like): True labels.
+            feature_names (List[str]): Column names of `X`.
+            rules (List[Rule]): Current rule set.
+            max_error_increase (int): How many more refinement samples the
+                accepted changes may misclassify, in total, than `rules` do.
+
+        Returns:
+            types.SimpleNamespace: ``accept(rule, old_rules, new_rules)``, the
+            callback for `_promote_siblings` (commits the change when the
+            error budget allows it); ``recount(rules)``, which sets
+            `usage_count`/`error_count` of `rules` from the current state (call
+            on the rules the state describes); ``errors()``, the current
+            number of misclassified samples; ``base_errors``.
+        """
+        import types
+
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y)
+        n = len(y)
+        col = {f: i for i, f in enumerate(feature_names)}
+        ops = {'<=': np.less_equal, '>': np.greater, '<': np.less, '>=': np.greater_equal}
+        algo = self.algorithm_type
+        is_gbdt = algo == 'Gradient Boosting Decision Trees'
+        default = self._default_class_int()
+
+        # Method to _lab.
+        def _lab(v):
+            """A rule label as the analyzers compare it with y."""
+            try:
+                return int(str(v).replace('Class', '').strip())
+            except (ValueError, AttributeError):
+                return v
+
+        y = np.array([_lab(v) for v in y])
+
+        # Method to _tree_id.
+        def _tree_id(r):
+            """Tree of a rule (a Decision Tree is one tree)."""
+            if algo == 'Decision Tree':
+                return '_all'
+            return r.name.split('_')[0] if '_' in r.name else r.name
+
+        # Method to _is_init.
+        def _is_init(r):
+            """GBDT init score: not a leaf (scored via `_gbdt_init_scores`)."""
+            return is_gbdt and not r.parsed_conditions
+
+        # Method to _mask.
+        def _mask(r, rows):
+            """Which of `rows` satisfy every condition of `r` (a NaN
+            satisfies the side its split sends missing values to)."""
+            m = np.ones(len(rows), dtype=bool)
+            for cond in r.parsed_conditions:
+                var, op, thr = cond
+                values = X[rows, col[var]]
+                hit = ops[op](values, thr)
+                if getattr(cond, 'missing', False):
+                    hit |= np.isnan(values)
+                m &= hit
+            return m
+
+        if algo == 'Random Forest':
+            k = next((len(r.class_distribution) for r in rules
+                      if r.class_distribution is not None), self.num_classes or 0)
+            rf_labels = np.asarray(self._rf_labels(k))
+        elif is_gbdt:
+            classes = list(self._gbdt_classes or [])
+            k = len(classes)
+            gcol = {c: i for i, c in enumerate(classes)}
+            init = np.array([self._gbdt_init_scores.get(c, 0.0) for c in classes],
+                            dtype=np.float64)
+        else:
+            k = 1
+
+        # Method to _output.
+        def _output(tree_rules, rows):
+            """One tree's output on `rows`: (len(rows), k), zero = abstains."""
+            out = np.zeros((len(rows), k), dtype=np.float64)
+            label = np.full(len(rows), default, dtype=object) if algo == 'Decision Tree' else None
+            for r in tree_rules:
+                m = _mask(r, rows)
+                if not m.any():
+                    continue
+                if algo == 'Decision Tree':
+                    label[m] = _lab(r.class_)
+                elif algo == 'Random Forest':
+                    d = np.asarray(r.class_distribution if r.class_distribution is not None
+                                   else [0.0] * k, dtype=np.float64)
+                    if r.class_distribution is None:
+                        # No distribution: a vote for the rule's class.
+                        hit = np.flatnonzero(rf_labels == _lab(r.class_))
+                        if len(hit):
+                            d[hit[0]] = 1.0
+                    s = d.sum()
+                    out[m] = d / s if s > 0 else d
+                else:
+                    out[m, gcol[r.class_group]] = r.contribution or 0.0
+            return label if algo == 'Decision Tree' else out
+
+        # Method to _predict.
+        def _predict(agg):
+            """Labels from the aggregated outputs of every tree."""
+            if algo == 'Decision Tree':
+                return agg
+            if algo == 'Random Forest':
+                pred = rf_labels[np.argmax(agg, axis=1)].astype(object)
+                pred[agg.sum(axis=1) == 0.0] = default
+                return pred
+            score = agg + init
+            if self._gbdt_is_binary:
+                return np.where(score[:, 1] >= 0, _lab(classes[1]),
+                                _lab(classes[0])).astype(object)
+            return np.array([_lab(classes[i]) for i in np.argmax(score, axis=1)],
+                            dtype=object)
+
+        all_rows = np.arange(n)
+        trees: dict = defaultdict(list)
+        for r in rules:
+            if not _is_init(r):
+                trees[_tree_id(r)].append(r)
+        outs = {t: _output(rs, all_rows) for t, rs in trees.items()}
+        if algo == 'Decision Tree':
+            agg = outs.get('_all', np.full(n, default, dtype=object))
+        else:
+            agg = np.zeros((n, k), dtype=np.float64)
+            for o in outs.values():
+                agg += o
+        state = {'agg': agg, 'pred': _predict(agg)}
+        state['errors'] = int(np.sum(state['pred'] != y))
+        base_errors = state['errors']
+        limit = base_errors + max_error_increase
+
+        # Method to accept.
+        def accept(rule, old_rules, new_rules):
+            """Commit the change if the error budget allows it."""
+            covered = np.zeros(n, dtype=bool)
+            for r in old_rules:
+                covered[_mask(r, all_rows)] = True
+            rows = np.flatnonzero(covered)
+            if len(rows) == 0:
+                return True
+            tid = _tree_id(rule)
+            new_out = _output(new_rules, rows)
+            if algo == 'Decision Tree':
+                new_agg = new_out
+            else:
+                new_agg = state['agg'][rows] - outs[tid][rows] + new_out
+            new_pred = _predict(new_agg)
+            delta = (int(np.sum(new_pred != y[rows]))
+                     - int(np.sum(state['pred'][rows] != y[rows])))
+            if state['errors'] + delta > limit:
+                return False
+            outs[tid][rows] = new_out
+            state['agg'][rows] = new_agg
+            state['pred'][rows] = new_pred
+            state['errors'] += delta
+            return True
+
+        # Method to recount.
+        def recount(target_rules):
+            """Usage = samples matched; errors as the analyzers count them."""
+            for r in target_rules:
+                if _is_init(r):
+                    continue
+                m = _mask(r, all_rows)
+                r.usage_count = int(m.sum())
+                if is_gbdt:
+                    r.error_count = int(np.sum(state['pred'][m] != y[m]))
+                else:
+                    r.error_count = int(np.sum(y[m] != _lab(r.class_)))
+
+        return types.SimpleNamespace(
+            accept=accept, recount=recount,
+            errors=lambda: state['errors'], base_errors=base_errors)
 
     # Method to report promotions that swallowed still-live rules
     @staticmethod
@@ -4055,7 +5318,8 @@ class RuleClassifier(RuleExporterMixin):
         """
         import bisect
 
-        promoted = [r for r in rules if r.name.endswith('_promoted')]
+        promoted = [r for r in rules
+                    if r.name.endswith('_promoted') or r.name.endswith('_grafted')]
         if not promoted:
             return 0
 
@@ -4158,7 +5422,8 @@ class RuleClassifier(RuleExporterMixin):
                         if node['f'] == -2:
                             return f'{tab}return {repr(float(node["v"]))}\n'
                         feat = node['f']
-                        code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                        # GradientBoostingClassifier refuses NaN: no routing emitted.
+                        code = f"{tab}if {_py_split_test(feat, node['t'], None)}:\n"
                         code += _build_export_code(node['l'], indent + 1, td)
                         code += f'{tab}else:\n'
                         code += _build_export_code(node['r'], indent + 1, td)
@@ -4275,7 +5540,7 @@ class RuleClassifier(RuleExporterMixin):
                         
                         feat = node['f']
                         # Use repr(float(t)) for precision
-                        code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                        code = f"{tab}if {_py_split_test(feat, node['t'], node.get('m'))}:\n"
                         code += build_rf_code(node['l'], indent + 1)
                         code += f"{tab}else:\n"
                         code += build_rf_code(node['r'], indent + 1)
@@ -4358,7 +5623,7 @@ class RuleClassifier(RuleExporterMixin):
                     
                     feat = node['f']
                     # Use repr(float(t)) for precision
-                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
+                    code = f"{tab}if {_py_split_test(feat, node['t'], node.get('m'))}:\n"
                     code += build_dt_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_dt_code(node['r'], indent + 1)
@@ -4367,24 +5632,36 @@ class RuleClassifier(RuleExporterMixin):
                 f.write("def predict(sample):\n")
                 f.write(build_dt_code(0, 1))
 
-        if getattr(self, 'input_dtype', None) == 'float32':
+        f32 = getattr(self, 'input_dtype', None) == 'float32'
+        table = getattr(self, 'label_table', None)
+        if f32 or table is not None:
             # scikit-learn casts X to float32 before comparing it with the
-            # thresholds; the standalone file must too (without numpy).
+            # thresholds; the standalone file must too (without numpy). And
+            # the trees answer label codes; a table names the original labels.
             with open(filename) as f:  # same encoding it was written with
                 code = f.read()
             assert code.count("def predict(sample):\n") == 1
             code = code.replace("def predict(sample):\n", "def _predict(sample):\n")
-            code += (
-                "\n\nimport struct as _struct\n\n\n"
-                "def _f32(v):\n"
-                "    \"\"\"Round v to float32, as scikit-learn does before comparing.\"\"\"\n"
-                "    try:\n"
-                "        return _struct.unpack('f', _struct.pack('f', v))[0]\n"
-                "    except (OverflowError, TypeError, _struct.error):\n"
-                "        return v\n\n\n"
-                "def predict(sample):\n"
-                "    return _predict({k: _f32(v) for k, v in sample.items()})\n"
-            )
+            call = "_predict(sample)"
+            if f32:
+                code += (
+                    "\n\nimport struct as _struct\n\n\n"
+                    "def _f32(v):\n"
+                    "    \"\"\"Round v to float32, as scikit-learn does before comparing.\"\"\"\n"
+                    "    try:\n"
+                    "        return _struct.unpack('f', _struct.pack('f', v))[0]\n"
+                    "    except (OverflowError, TypeError, _struct.error):\n"
+                    "        return v\n"
+                )
+                call = "_predict({k: _f32(v) for k, v in sample.items()})"
+            if table is not None:
+                # ascii(): the file is written in the platform encoding.
+                code += (
+                    "\n\n# Original class label of each code the trees answer.\n"
+                    f"_LABELS = {ascii(list(table))}\n"
+                )
+                call = f"_LABELS[{call}]"
+            code += f"\n\ndef predict(sample):\n    return {call}\n"
             with open(filename, "w") as f:
                 f.write(code)
 
@@ -4842,8 +6119,15 @@ class RuleClassifier(RuleExporterMixin):
                     if "_edited" not in selected_rule.name:
                         selected_rule.name += "_edited"
                         
-                    # Re-validate structure just in case
-                    selected_rule.parsed_conditions = self.parse_conditions_static(selected_rule.conditions)
+                    # Re-validate structure just in case. Conditions kept
+                    # from the tree keep their missing-value routing; an
+                    # added one has none (NaN is then refused).
+                    known = {tuple(c): c for c in selected_rule.parsed_conditions}
+                    selected_rule.parsed_conditions = [
+                        known.get(tuple(c), c)
+                        for c in self.parse_conditions_static(selected_rule.conditions)]
+                    self._route_missing_cache = None
+                    self._used_features_cache = None
                     
                     self.update_native_model(self.final_rules if self.final_rules else self.initial_rules)
                     
@@ -4906,6 +6190,489 @@ class RuleClassifier(RuleExporterMixin):
         with open(path, 'rb') as f:
             return pickle.load(f)
 
+    # Identification of the JSON model format (see to_json)
+    _JSON_FORMAT = 'pyruleanalyzer.RuleClassifier'
+    # Version 2: missing-value routing of each condition, label table,
+    # estimator class. Version 1 files are still read.
+    _JSON_VERSION = 2
+    _JSON_ESTIMATORS = {
+        'Decision Tree': ('DecisionTreeClassifier', 'ExtraTreeClassifier'),
+        'Random Forest': ('RandomForestClassifier', 'ExtraTreesClassifier'),
+        'Gradient Boosting Decision Trees': ('GradientBoostingClassifier',),
+    }
+    _JSON_MAX_DEPTH = 64
+    _JSON_ALGORITHMS = ('Decision Tree', 'Random Forest', 'Gradient Boosting Decision Trees')
+
+    # Method to encode a plain value (model parameters) for JSON
+    @staticmethod
+    def _json_encode_plain(value, where='value', depth=0):
+        """Encode a plain Python value (None, bool, number, str, list, dict) for JSON.
+
+        Used for `model_parameters`. Non-finite floats become
+        ``{"__float__": "inf"}`` and dicts whose keys are not plain strings
+        (``class_weight={0: 1.0}``) become ``{"__items__": [[key, value], ...]}``,
+        so they read back with their types. Anything else (an object, a
+        function) is refused rather than written in a form that could only be
+        read back by executing code.
+
+        Args:
+            value: The value to encode.
+            where (str): Location of the value, for the error message.
+            depth (int): Nesting depth (internal).
+
+        Returns:
+            A value made of JSON types only.
+
+        Raises:
+            ValueError: If the value is not plain data.
+        """
+        if depth > RuleClassifier._JSON_MAX_DEPTH:
+            raise ValueError(f'{where}: nested too deeply to be saved as JSON.')
+        if value is None or isinstance(value, (bool, str)):
+            return value
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+        if isinstance(value, (float, np.floating)):
+            value = float(value)
+            if value != value:
+                return {'__float__': 'nan'}
+            if value in (float('inf'), float('-inf')):
+                return {'__float__': 'inf' if value > 0 else '-inf'}
+            return value
+        if isinstance(value, (list, tuple)):
+            return [RuleClassifier._json_encode_plain(v, f'{where}[{i}]', depth + 1)
+                    for i, v in enumerate(value)]
+        if isinstance(value, dict):
+            if all(isinstance(k, str) and not k.startswith('__') for k in value):
+                return {k: RuleClassifier._json_encode_plain(v, f'{where}[{k!r}]', depth + 1)
+                        for k, v in value.items()}
+            return {'__items__': [
+                [RuleClassifier._json_encode_plain(k, f'{where} key', depth + 1),
+                 RuleClassifier._json_encode_plain(v, f'{where}[{k!r}]', depth + 1)]
+                for k, v in value.items()]}
+        raise ValueError(
+            f'{where}: a {type(value).__name__} cannot be saved as JSON (only '
+            'None, bool, numbers, strings, lists and dicts can).'
+        )
+
+    # Method to decode a plain value written by _json_encode_plain
+    @staticmethod
+    def _json_decode_plain(value, where='value', depth=0):
+        """Decode a value written by `_json_encode_plain`.
+
+        Args:
+            value: The decoded JSON value.
+            where (str): Location of the value, for the error message.
+            depth (int): Nesting depth (internal).
+
+        Returns:
+            The plain Python value.
+
+        Raises:
+            ValueError: If the value is malformed.
+        """
+        if depth > RuleClassifier._JSON_MAX_DEPTH:
+            raise ValueError(f'{where}: nested too deeply.')
+        if value is None or isinstance(value, (bool, str, int)):
+            return value
+        if isinstance(value, float):
+            if value != value or value in (float('inf'), float('-inf')):
+                raise ValueError(f'{where}: number out of range.')
+            return value
+        if isinstance(value, list):
+            return [RuleClassifier._json_decode_plain(v, f'{where}[{i}]', depth + 1)
+                    for i, v in enumerate(value)]
+        if isinstance(value, dict):
+            if set(value) == {'__float__'}:
+                special = {'nan': float('nan'), 'inf': float('inf'), '-inf': float('-inf')}
+                if not isinstance(value['__float__'], str) or value['__float__'] not in special:
+                    raise ValueError(f'{where}: invalid special float.')
+                return special[value['__float__']]
+            if set(value) == {'__items__'}:
+                items = value['__items__']
+                if not isinstance(items, list):
+                    raise ValueError(f'{where}: invalid __items__.')
+                out = {}
+                for item in items:
+                    if not isinstance(item, list) or len(item) != 2:
+                        raise ValueError(f'{where}: invalid __items__ entry.')
+                    key = RuleClassifier._json_decode_plain(item[0], f'{where} key', depth + 1)
+                    if isinstance(key, (list, dict)):
+                        raise ValueError(f'{where}: invalid dict key.')
+                    out[key] = RuleClassifier._json_decode_plain(item[1], where, depth + 1)
+                return out
+            if any(k.startswith('__') for k in value):
+                raise ValueError(f'{where}: unknown tagged value {sorted(value)[:5]}.')
+            return {k: RuleClassifier._json_decode_plain(v, f'{where}[{k!r}]', depth + 1)
+                    for k, v in value.items()}
+        raise ValueError(f'{where}: unexpected {type(value).__name__}.')
+
+    # Method to write a class label as a JSON value
+    @staticmethod
+    def _json_label_out(value):
+        """A label (or feature name) as str, or int for integer (numpy) labels."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+            return int(value)
+        return str(value)
+
+    # Method to parse JSON text without evaluating anything
+    @staticmethod
+    def _json_loads(text):
+        """Parse JSON text into plain values, refusing NaN/Infinity.
+
+        `json` only builds dicts, lists, strings, numbers, booleans and None;
+        nothing in the text is imported or executed.
+
+        Args:
+            text (str | bytes): The JSON text.
+
+        Returns:
+            The decoded value.
+
+        Raises:
+            ValueError: If the text is not valid JSON.
+        """
+        import json
+
+        def reject(constant):
+            """Refuse the non-standard constants NaN, Infinity and -Infinity."""
+            raise ValueError(f'Invalid JSON: non-standard constant {constant}.')
+
+        try:
+            return json.loads(text, parse_constant=reject)
+        except RecursionError:
+            raise ValueError('Invalid JSON: nested too deeply.') from None
+
+    # Method to read a JSON file without evaluating anything
+    @staticmethod
+    def _json_read_file(path):
+        """Read and parse a JSON model file (see `_json_loads`).
+
+        Args:
+            path (str): Path to the file.
+
+        Returns:
+            The decoded value.
+
+        Raises:
+            ValueError: If the file is not valid UTF-8 JSON.
+        """
+        with open(path, 'rb') as f:
+            data = f.read()
+        try:
+            text = data.decode('utf-8-sig')
+        except UnicodeDecodeError as exc:
+            raise ValueError(f'Invalid JSON model file: {exc}') from None
+        return RuleClassifier._json_loads(text)
+
+    # Method to serialise the classifier as plain JSON types
+    def to_dict(self) -> dict:
+        """The classifier as a dict of plain JSON types (the JSON model format).
+
+        Rules are stored once in ``"rules"``; ``"initial_rules"``,
+        ``"final_rules"`` and ``"specific_rules"`` list indices into it, so a
+        rule shared by the initial and refined sets stays one object after
+        loading, as it does with pickle. Compiled caches (native function,
+        tree arrays) are not stored; they are rebuilt on loading.
+
+        Returns:
+            dict: The model; see `to_json`.
+
+        Raises:
+            ValueError: If the classifier has no rules (one loaded with
+                `load_binary`) or a value cannot be represented in JSON.
+        """
+        if not self.initial_rules and not self.final_rules and getattr(self, '_arrays_compiled', False):
+            raise ValueError(
+                'This classifier has no rules (it was loaded from a binary '
+                'model); the JSON format stores rules. Save it with to_binary().'
+            )
+        pool, index = [], {}
+
+        def refs(rules):
+            """Indices of `rules` in the pool, adding the new ones."""
+            out = []
+            for rule in rules or []:
+                if id(rule) not in index:
+                    index[id(rule)] = len(pool)
+                    pool.append(rule)
+                out.append(index[id(rule)])
+            return out
+
+        initial = refs(self.initial_rules)
+        final = refs(self.final_rules)
+        specific = refs(getattr(self, 'specific_rules', None))
+        label = RuleClassifier._json_label_out
+        init_scores = getattr(self, '_gbdt_init_scores', None)
+        gbdt_classes = getattr(self, '_gbdt_classes', None)
+        params = getattr(self, 'model_parameters', None)
+        table = getattr(self, 'label_table', None)
+        estimator = getattr(self, 'sklearn_estimator', None)
+        # Version 2 adds the missing-value routing of the conditions, the
+        # label table and the estimator class; a model without any of them
+        # is written as version 1, exactly as before.
+        v2 = (table is not None or estimator is not None
+              or any(isinstance(c, Condition)
+                     for r in pool for c in (r.parsed_conditions or [])))
+        out = {
+            'format': RuleClassifier._JSON_FORMAT,
+            'version': RuleClassifier._JSON_VERSION if v2 else 1,
+            'algorithm_type': self.algorithm_type,
+            'rules': [rule.to_dict() for rule in pool],
+            'initial_rules': initial,
+            'final_rules': final,
+            'specific_rules': specific,
+            'class_labels': [label(c) for c in self.class_labels],
+            'num_classes': int(self.num_classes),
+            'default_class': label(self.default_class),
+            'gbdt_init_scores': None if init_scores is None else
+                [[label(k), float(v)] for k, v in init_scores.items()],
+            'gbdt_is_binary': bool(getattr(self, '_gbdt_is_binary', False)),
+            'gbdt_classes': None if gbdt_classes is None else [label(c) for c in gbdt_classes],
+            'array_feature_names': [label(f) for f in getattr(self, '_array_feature_names', None) or []],
+            'input_dtype': getattr(self, 'input_dtype', None),
+            'fallback_activations': int(getattr(self, 'fallback_activations', 0) or 0),
+            'model_parameters': None if params is None else
+                RuleClassifier._json_encode_plain(params, 'model_parameters'),
+        }
+        if v2:
+            out['label_table'] = None if table is None else [
+                RuleClassifier._json_table_label(v) for v in table]
+            out['sklearn_estimator'] = estimator
+        return out
+
+    # Method to write one entry of the label table as JSON
+    @staticmethod
+    def _json_table_label(value):
+        """A label of the code -> label table as a JSON value.
+
+        Args:
+            value: The label (str, int, float or bool).
+
+        Returns:
+            The label as str, int, float or bool.
+
+        Raises:
+            ValueError: If the label cannot be written (not finite, other type).
+        """
+        if isinstance(value, (bool, str, int)):
+            return value
+        if isinstance(value, float) and value == value and abs(value) != float('inf'):
+            return value
+        raise ValueError(f'label_table: {value!r:.60} cannot be saved as JSON.')
+
+    # Method to rebuild a classifier from to_dict output
+    @classmethod
+    def from_dict(cls, data) -> 'RuleClassifier':
+        """Rebuild a classifier from `to_dict` output, validating every field.
+
+        The result is in the state unpickling leaves a classifier in: the
+        native function is recompiled for the refined (else initial) rules and
+        the tree arrays are compiled on the first batch prediction.
+
+        Args:
+            data (dict): Output of `to_dict` (decoded from JSON).
+
+        Returns:
+            RuleClassifier: The classifier.
+
+        Raises:
+            ValueError: If the format, version or any field is invalid.
+        """
+        if not isinstance(data, dict):
+            raise ValueError('Invalid JSON model: expected an object at the top level.')
+        if data.get('format') != cls._JSON_FORMAT:
+            raise ValueError(
+                f'Invalid JSON model: format {data.get("format")!r:.60} is not '
+                f'{cls._JSON_FORMAT!r}.'
+            )
+        version = data.get('version')
+        if isinstance(version, bool) or version not in (1, cls._JSON_VERSION):
+            raise ValueError(
+                f'Unsupported JSON model version {version!r:.40} (this version of '
+                f'pyruleanalyzer reads versions 1 to {cls._JSON_VERSION}).'
+            )
+        keys = ('format', 'version', 'algorithm_type', 'rules', 'initial_rules',
+                'final_rules', 'specific_rules', 'class_labels', 'num_classes',
+                'default_class', 'gbdt_init_scores', 'gbdt_is_binary', 'gbdt_classes',
+                'array_feature_names', 'input_dtype', 'fallback_activations',
+                'model_parameters')
+        if version >= 2:
+            keys += ('label_table', 'sklearn_estimator')
+        missing = [k for k in keys if k not in data]
+        if missing:
+            raise ValueError(f'Invalid JSON model: missing field(s) {missing}.')
+        unknown = [k for k in data if k not in keys]
+        if unknown:
+            raise ValueError(f'Invalid JSON model: unknown field(s) {sorted(unknown)[:10]}.')
+
+        algorithm_type = data['algorithm_type']
+        if algorithm_type not in cls._JSON_ALGORITHMS:
+            raise ValueError(f'Invalid JSON model: unknown algorithm_type {algorithm_type!r:.60}.')
+        if not isinstance(data['rules'], list):
+            raise ValueError('Invalid JSON model: rules must be a list.')
+        pool = [Rule.from_dict(r, f'rules[{i}]') for i, r in enumerate(data['rules'])]
+
+        def rule_list(key):
+            """The rules a list of pool indices refers to."""
+            refs = data[key]
+            if not isinstance(refs, list):
+                raise ValueError(f'Invalid JSON model: {key} must be a list of indices.')
+            out = []
+            for i in refs:
+                if isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(pool):
+                    raise ValueError(f'Invalid JSON model: {key} has an invalid rule index {i!r:.40}.')
+                out.append(pool[i])
+            return out
+
+        def label_list(key, optional=False):
+            """A list of labels (strings or integers)."""
+            value = data[key]
+            if value is None and optional:
+                return None
+            if not isinstance(value, list):
+                raise ValueError(f'Invalid JSON model: {key} must be a list.')
+            return [Rule._json_label(v, key) for v in value]
+
+        init_scores = data['gbdt_init_scores']
+        if init_scores is not None:
+            if not isinstance(init_scores, list):
+                raise ValueError('Invalid JSON model: gbdt_init_scores must be a list of pairs.')
+            pairs = {}
+            for pair in init_scores:
+                if not isinstance(pair, list) or len(pair) != 2:
+                    raise ValueError('Invalid JSON model: gbdt_init_scores must be a list of pairs.')
+                pairs[Rule._json_label(pair[0], 'gbdt_init_scores')] = \
+                    Rule._json_number(pair[1], 'gbdt_init_scores')
+            init_scores = pairs
+        if not isinstance(data['gbdt_is_binary'], bool):
+            raise ValueError('Invalid JSON model: gbdt_is_binary must be true or false.')
+        if data['input_dtype'] not in (None, 'float32'):
+            raise ValueError(f'Invalid JSON model: unsupported input_dtype {data["input_dtype"]!r:.40}.')
+        params = data['model_parameters']
+        if params is not None:
+            if not isinstance(params, dict):
+                raise ValueError('Invalid JSON model: model_parameters must be an object.')
+            params = cls._json_decode_plain(params, 'model_parameters')
+            if not isinstance(params, dict) or not all(isinstance(k, str) for k in params):
+                raise ValueError('Invalid JSON model: model_parameters must map names to values.')
+
+        table = data.get('label_table')
+        if table is not None:
+            if not isinstance(table, list) or not table:
+                raise ValueError('Invalid JSON model: label_table must be a non-empty list or null.')
+            for v in table:
+                if not isinstance(v, (str, int, float, bool)) or (
+                        isinstance(v, float) and (v != v or abs(v) == float('inf'))):
+                    raise ValueError('Invalid JSON model: label_table holds a value '
+                                     'that is not a string or a finite number.')
+            if len(set(table)) != len(table):
+                raise ValueError('Invalid JSON model: label_table repeats a label.')
+        estimator = data.get('sklearn_estimator')
+        if estimator is not None and estimator not in cls._JSON_ESTIMATORS[algorithm_type]:
+            raise ValueError(f'Invalid JSON model: sklearn_estimator {estimator!r:.60} '
+                             f'is not one of {cls._JSON_ESTIMATORS[algorithm_type]}.')
+
+        obj = cls.__new__(cls)
+        obj.algorithm_type = algorithm_type
+        obj.initial_rules = rule_list('initial_rules')
+        obj.final_rules = rule_list('final_rules')
+        obj.specific_rules = rule_list('specific_rules')
+        obj.duplicated_rules = []
+        obj.class_labels = label_list('class_labels')
+        obj.num_classes = Rule._json_count(data['num_classes'], 'num_classes')
+        obj.default_class = Rule._json_label(data['default_class'], 'default_class')
+        obj._gbdt_init_scores = init_scores
+        obj._gbdt_is_binary = data['gbdt_is_binary']
+        obj._gbdt_classes = label_list('gbdt_classes', optional=True)
+        obj._array_feature_names = label_list('array_feature_names')
+        obj.input_dtype = data['input_dtype']
+        obj.fallback_activations = Rule._json_count(data['fallback_activations'],
+                                                    'fallback_activations')
+        if params is not None:
+            obj.model_parameters = params
+        obj.label_table = table
+        obj.sklearn_estimator = estimator
+        if table is not None and len(table) != obj.num_classes:
+            raise ValueError('Invalid JSON model: label_table must have one '
+                             'label per class (num_classes).')
+        # Compiled caches: rebuilt below / on first use, as after unpickling.
+        obj._tree_arrays = []
+        obj._tree_class_groups = None
+        obj._tree_is_init = None
+        obj._arrays_compiled = False
+        obj._arrays_source = None
+        obj._arrays_source_len = None
+        obj._array_states = []
+        obj.native_fn = None
+        obj._native_source = None
+        rules_to_compile = obj.final_rules if obj.final_rules else obj.initial_rules
+        if rules_to_compile:
+            obj.update_native_model(rules_to_compile)
+            # A pickle keeps the arrays compiled last; compile the default
+            # set so predict_batch() without use_final works the same way.
+            if obj._array_feature_names:
+                try:
+                    obj._set_array_state(obj._array_state_for_rules(
+                        rules_to_compile, list(obj._array_feature_names)))
+                except (ValueError, KeyError, IndexError, RuntimeError):
+                    pass  # compiled on first use, which reports the problem
+        return obj
+
+    # Method to save the classifier as JSON
+    def to_json(self, path, indent=None):
+        """Save the classifier to a JSON file (the safe alternative to pickle).
+
+        Loading a JSON model (`from_json`) only reads data: unlike a pickle,
+        a JSON file from an untrusted source cannot execute code. Unlike the
+        `.bin` format it keeps the `Rule` objects, so a loaded model can still
+        be refined, edited, model-checked and exported.
+
+        The file is an object with ``"format": "pyruleanalyzer.RuleClassifier"``
+        and ``"version": 2`` (1 when the model records no missing-value
+        routing, label table or estimator class, as files written before
+        those existed); see `to_dict` for the fields. Version 2 adds
+        ``"label_table"`` (original labels by code, or null),
+        ``"sklearn_estimator"`` (e.g. ``"ExtraTreesClassifier"``, or null)
+        and a fourth element to each parsed condition: whether a missing
+        value satisfies it. Thresholds are
+        written with ``repr`` and read back bit for bit.
+
+        Args:
+            path (str): Path to the .json file.
+            indent (int, optional): Indentation passed to `json.dump`.
+
+        Raises:
+            ValueError: If the classifier cannot be represented (see `to_dict`).
+        """
+        import json
+        text = json.dumps(self.to_dict(), allow_nan=False, indent=indent)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+
+    # Method to load a classifier saved with to_json
+    @classmethod
+    def from_json(cls, path) -> 'RuleClassifier':
+        """Load a classifier saved with `to_json`.
+
+        Safe on untrusted files: the file is parsed as JSON and validated;
+        nothing in it is imported or executed.
+
+        Args:
+            path (str): Path to the .json file.
+
+        Returns:
+            RuleClassifier: The classifier.
+
+        Raises:
+            ValueError: If the file is not a valid JSON model.
+        """
+        return cls.from_dict(cls._json_read_file(path))
+
     # Method to apply the input precision to test rows
     @staticmethod
     def _quantize_rows(X_test, clf):
@@ -4948,6 +6715,18 @@ class RuleClassifier(RuleExporterMixin):
                 feature_names = clf._array_feature_names if clf and hasattr(clf, '_array_feature_names') else [f"Feature_{i}" for i in range(len(X[0]))]
                 X_test = X.tolist() if hasattr(X, 'tolist') else list(X)
             y_test = y.tolist() if hasattr(y, 'tolist') else list(y)
+            if clf is not None:
+                # The rules answer label codes: compare y as codes too.
+                if getattr(clf, 'label_table', None) is not None:
+                    y_test = clf._encode_labels(y_test).tolist()
+                # NaN only where every engine can answer it like the model.
+                try:
+                    arr = np.asarray(X_test, dtype=np.float64)
+                except (TypeError, ValueError):
+                    arr = None
+                if arr is not None:
+                    rules = clf.final_rules or clf.initial_rules
+                    clf._check_missing_values(arr, clf._rules_route_missing(rules))
             return RuleClassifier._quantize_rows(X_test, clf), y_test, feature_names
 
         if file_path:
@@ -5075,6 +6854,30 @@ class RuleClassifier(RuleExporterMixin):
 
         return X_train, y_train, X_test, y_test, class_names, target_name, feature_names
 
+    # Method to read where each split of a fitted tree sends missing values
+    @staticmethod
+    def _missing_go_to_left(tree_):
+        """The per-node missing-value routing of a fitted scikit-learn tree.
+
+        scikit-learn >= 1.3 sends a NaN to the left child of a split where
+        ``missing_go_to_left`` is set. A split learned from data with NaN
+        records the side chosen during training; any other split sends NaN
+        to the child that received more training samples. Every split has
+        a side, so a NaN is never left unrouted.
+
+        Args:
+            tree_: A fitted ``sklearn.tree._tree.Tree``.
+
+        Returns:
+            np.ndarray | None: One bool per node, or None for an older
+            scikit-learn without the attribute (the routing stays unknown
+            and NaN inputs are refused).
+        """
+        flags = getattr(tree_, 'missing_go_to_left', None)
+        if flags is None:
+            return None
+        return np.asarray(flags).astype(bool)
+
     # Method to extract rules from a tree model
     @staticmethod
     def get_rules(tree, feature_names, class_names):
@@ -5103,7 +6906,10 @@ class RuleClassifier(RuleExporterMixin):
             feature_names[i] if i != -2 else "undefined!"
             for i in tree_.feature
         ]
-        
+        # Where each split sends a missing value (scikit-learn >= 1.3); the
+        # conditions record it (see `Condition`).
+        missing_left = RuleClassifier._missing_go_to_left(tree_)
+
         rules = []
 
         # We pass two lists down the recursion:
@@ -5124,21 +6930,23 @@ class RuleClassifier(RuleExporterMixin):
                 
                 # CRITICAL: Use str(threshold) to preserve precision in the string representation
                 # e.g., prevents 1.16e-7 from being rounded to 0.000000 in text output
-                threshold_str = f"{threshold}" 
-                
+                threshold_str = f"{threshold}"
+                nan_left = None if missing_left is None else bool(missing_left[node])
+
                 # Left child (<=)
                 # We append the exact float 'threshold' to the parsed list, avoiding string-to-float conversion errors later
                 recurse(
-                    tree_.children_left[node], 
+                    tree_.children_left[node],
                     conditions_str + [f"{name} <= {threshold_str}"],
-                    conditions_parsed + [(name, '<=', threshold)] 
+                    conditions_parsed + [make_condition(name, '<=', threshold, nan_left)]
                 )
-                
+
                 # Right child (>)
                 recurse(
-                    tree_.children_right[node], 
+                    tree_.children_right[node],
                     conditions_str + [f"{name} > {threshold_str}"],
-                    conditions_parsed + [(name, '>', threshold)]
+                    conditions_parsed + [make_condition(
+                        name, '>', threshold, None if nan_left is None else not nan_left)]
                 )
             else:
                 # Leaf node
@@ -5307,6 +7115,7 @@ class RuleClassifier(RuleExporterMixin):
             estimator_col = class_idx if not is_binary else 0
             for tree_idx, estimator in enumerate(model.estimators_[:, estimator_col]):
                 tree_ = estimator.tree_
+                missing_left = RuleClassifier._missing_go_to_left(tree_)
                 tree_rules = []
 
                 # Method to recurse.
@@ -5343,18 +7152,25 @@ class RuleClassifier(RuleExporterMixin):
                     feat_name = feature_names[feat_idx]
                     threshold = float(tree_.threshold[node_id])
                     threshold_str = f'{threshold}'
+                    # Recorded although GradientBoostingClassifier refuses
+                    # NaN: the regions are those of the fitted trees.
+                    nan_left = (None if missing_left is None
+                                else bool(missing_left[node_id]))
 
                     # Left child (<=)
                     recurse(
                         left,
                         conditions_str + [f'{feat_name} <= {threshold_str}'],
-                        conditions_parsed + [(feat_name, '<=', threshold)],
+                        conditions_parsed + [make_condition(
+                            feat_name, '<=', threshold, nan_left)],
                     )
                     # Right child (>)
                     recurse(
                         right,
                         conditions_str + [f'{feat_name} > {threshold_str}'],
-                        conditions_parsed + [(feat_name, '>', threshold)],
+                        conditions_parsed + [make_condition(
+                            feat_name, '>', threshold,
+                            None if nan_left is None else not nan_left)],
                     )
 
                 recurse(0, [], [])

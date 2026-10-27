@@ -32,7 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build and test the wheels
-        uses: pypa/cibuildwheel@v2.23.3
+        # 3.x builds CPython 3.14 by default (from 3.1.0) and still 3.9.
+        uses: pypa/cibuildwheel@v3.4.1
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}

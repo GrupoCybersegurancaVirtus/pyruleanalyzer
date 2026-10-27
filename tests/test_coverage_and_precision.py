@@ -5,7 +5,8 @@ touched it:
 
 * a sample matching no rule resolves to ``default_class`` in *every* engine,
   and is counted rather than silently absorbed into the metrics;
-* an input containing ``NaN`` is rejected instead of being answered wrongly;
+* an input containing ``NaN`` follows the fitted tree's routing, and is
+  rejected instead of being answered wrongly when the rules do not record it;
 * a rule set that is no longer a tree is rejected instead of being compiled
   into a structure that routes rules to the wrong leaf;
 * rules whose regions overlap are detected, since accuracy cannot reveal them;
@@ -133,8 +134,29 @@ def test_rf_total_abstention_resolves_to_default_class():
 # Missing values
 # ---------------------------------------------------------------------------
 
-def test_nan_input_is_rejected():
+def test_nan_input_follows_the_tree_routing():
+    # NaN used to be rejected; rules read from a fitted tree now record
+    # where each split sends it, as scikit-learn does.
+    clf, m, X, _y = _dt_classifier()
+    with contextlib.redirect_stdout(io.StringIO()):
+        clf.compile_tree_arrays(clf.initial_rules, feature_names=FEATS)
+
+    bad = X[:20].copy()
+    bad[:, 0] = np.nan
+    expected = m.predict(bad)
+    np.testing.assert_array_equal(clf.predict_batch(bad, feature_names=FEATS), expected)
+    for row, exp in zip(bad, expected):
+        assert clf.classify(dict(zip(FEATS, row)))[0] == exp
+
+
+def test_nan_input_is_rejected_without_recorded_routing():
     clf, _m, X, _y = _dt_classifier()
+    # Rules whose conditions do not record the routing (parsed from text,
+    # edited, older files): NaN cannot be answered faithfully.
+    for rule in clf.initial_rules:
+        rule.parsed_conditions = [tuple(c) for c in rule.parsed_conditions]
+    clf._route_missing_cache = None
+    clf.update_native_model(clf.initial_rules)
     with contextlib.redirect_stdout(io.StringIO()):
         clf.compile_tree_arrays(clf.initial_rules, feature_names=FEATS)
 

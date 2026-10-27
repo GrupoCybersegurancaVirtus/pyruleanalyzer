@@ -402,8 +402,19 @@ def evaluate(net, x, default_class=0):
 
     Raises:
         AssertionError: If the net's guards are inconsistent for this sample.
-        ValueError: If the net does not match any supported topology.
+        ValueError: If the net does not match any supported topology, or the
+            sample holds a missing value (NaN): the net's input is a record
+            of REALs, which models real-valued inputs only. Every guard
+            would be false on NaN, so the answer would silently differ from
+            the classifier's, which routes NaN per split.
     """
+    missing = [k for k, v in (x or {}).items()
+               if isinstance(v, float) and v != v]
+    if missing:
+        raise ValueError(
+            f"Sample has missing values (NaN) in {sorted(missing)[:10]}: the "
+            "CPN models real-valued inputs only."
+        )
     top = next((p for p in net.pages.values()
                 if any(pl["name"] == "Prediction" for pl in p["places"].values())),
                None)

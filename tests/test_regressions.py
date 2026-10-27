@@ -163,11 +163,14 @@ def test_label_minus_one_is_not_taken_for_an_uncovered_region(tmp_path):
 
 
 @pytest.mark.parametrize("est", sorted(ESTIMATORS))
-def test_non_integer_labels_are_refused_not_replaced(est):
+def test_non_integer_labels_are_answered_not_replaced(est):
+    # Used to be refused; now encoded internally and answered as themselves
+    # (see tests/test_labels_and_nan.py).
     X, y0 = _data()
     sk = ESTIMATORS[est]().fit(X, np.array(["cat", "dog", "fox"])[y0])
-    with pytest.raises(ValueError, match="integer class labels"):
-        PyRuleAnalyzer.from_sklearn(sk)
+    a = _quiet(PyRuleAnalyzer.from_sklearn, sk)
+    np.testing.assert_array_equal(a.predict(X), sk.predict(X))
+    np.testing.assert_array_equal(a.classes_, sk.classes_)
 
 
 # ---------------------------------------------------------------------------

@@ -35,30 +35,69 @@ from .rule_classifier import RuleClassifier
 
 
 # Function to return the scikit-learn estimator class of a model type.
-def _sklearn_estimator_class(algorithm_type: str):
+def _sklearn_estimator_class(algorithm_type: str, estimator: Optional[str] = None):
     """The scikit-learn classifier trained for ``algorithm_type``.
 
     Args:
         algorithm_type: "Decision Tree", "Random Forest" or
             "Gradient Boosting Decision Trees".
+        estimator: Name of the scikit-learn class to train instead of the
+            default one of the model type: "ExtraTreesClassifier" for a
+            "Random Forest", "ExtraTreeClassifier" for a "Decision Tree".
+            None (default) for the default class.
 
     Returns:
         type: The scikit-learn estimator class.
 
     Raises:
-        ValueError: If the model type is not supported.
+        ValueError: If the model type is not supported, or `estimator` is
+            not a class of that type.
     """
-    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.ensemble import (ExtraTreesClassifier,
+                                  GradientBoostingClassifier,
+                                  RandomForestClassifier)
+    from sklearn.tree import DecisionTreeClassifier, ExtraTreeClassifier
 
     classes = {
-        'Decision Tree': DecisionTreeClassifier,
-        'Random Forest': RandomForestClassifier,
-        'Gradient Boosting Decision Trees': GradientBoostingClassifier,
+        'Decision Tree': (DecisionTreeClassifier, ExtraTreeClassifier),
+        'Random Forest': (RandomForestClassifier, ExtraTreesClassifier),
+        'Gradient Boosting Decision Trees': (GradientBoostingClassifier,),
     }
     if algorithm_type not in classes:
         raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
-    return classes[algorithm_type]
+    if estimator is None:
+        return classes[algorithm_type][0]
+    for cls in classes[algorithm_type]:
+        if cls.__name__ == estimator:
+            return cls
+    raise ValueError(
+        f"Unsupported estimator {estimator!r} for model {algorithm_type!r}: "
+        f"expected one of {[c.__name__ for c in classes[algorithm_type]]}."
+    )
+
+
+# Function to name the estimator class of a fitted model, if not the default.
+def _estimator_name(algorithm_type: str, model) -> Optional[str]:
+    """The class name to remember for ``model``, None for the default class.
+
+    Args:
+        algorithm_type: The model type ``model`` was wrapped as.
+        model: The fitted scikit-learn estimator.
+
+    Returns:
+        str | None: "ExtraTreesClassifier" / "ExtraTreeClassifier", or None
+        when a refit with the default class trains the same kind of model.
+    """
+    default = _sklearn_estimator_class(algorithm_type)
+    for cls in type(model).__mro__:
+        if cls is default:
+            return None
+        try:
+            _sklearn_estimator_class(algorithm_type, cls.__name__)
+            return cls.__name__
+        except ValueError:
+            continue
+    return None
 
 
 class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
@@ -80,8 +119,9 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         classifier (RuleClassifier): The underlying RuleClassifier instance.
         feature_names (list): Names of features used by the model.
         class_names (list): Names of target classes.
-        classes_ (np.ndarray): The integer class labels, as returned by
-            ``predict`` (fitted analyzers only).
+        classes_ (np.ndarray): The class labels, as returned by ``predict``
+            (fitted analyzers only). Labels that are not integers are
+            encoded internally (``classifier.label_table``).
 
     Example:
         >>> analyzer = PyRuleAnalyzer.create(
@@ -103,6 +143,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         class_names: Optional[List[str]] = None,
         *,
         model: Optional[str] = None,
+        estimator: Optional[str] = None,
         **params,
     ):
         """
@@ -120,21 +161,31 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             class_names: List of class names.
             model: Model type of an untrained analyzer - "Decision Tree"
                 (default), "Random Forest" or "Gradient Boosting Decision Trees".
+            estimator: scikit-learn class an untrained analyzer trains when
+                it is not the default of ``model``: "ExtraTreesClassifier"
+                (a "Random Forest") or "ExtraTreeClassifier" (a "Decision
+                Tree"). ``get_params`` reports it for an analyzer wrapping
+                such a model, so ``clone`` then ``fit`` trains it again.
             **params: Hyperparameters of the scikit-learn estimator of an
                 untrained analyzer, passed as they are.
 
         Raises:
-            TypeError: If ``model`` or hyperparameters are given together
-                with ``classifier``.
+            TypeError: If ``model``, ``estimator`` or hyperparameters are
+                given together with ``classifier``.
         """
         if classifier is None:
-            classifier = RuleClassifier([], algorithm_type=model or "Decision Tree")
+            algorithm_type = model or "Decision Tree"
+            if estimator is not None:
+                _sklearn_estimator_class(algorithm_type, estimator)  # validate
+            classifier = RuleClassifier([], algorithm_type=algorithm_type)
             # fit() trains the scikit-learn estimator with these.
             classifier.model_parameters = params
-        elif model is not None or params:
+            classifier.sklearn_estimator = estimator
+        elif model is not None or estimator is not None or params:
             raise TypeError(
-                "model and hyperparameters only apply to an untrained "
-                "analyzer (classifier=None); use PyRuleAnalyzer.new_model()."
+                "model, estimator and hyperparameters only apply to an "
+                "untrained analyzer (classifier=None); use "
+                "PyRuleAnalyzer.new_model()."
             )
         self.classifier = classifier
         self.feature_names = feature_names if feature_names is not None else []
@@ -153,11 +204,17 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             deep: Ignored (the analyzer holds no nested estimator).
 
         Returns:
-            Dictionary with ``model`` (the model type) and the hyperparameters
-            of the scikit-learn estimator.
+            Dictionary with ``model`` (the model type), ``estimator`` when
+            the wrapped scikit-learn class is not the default of the model
+            type (e.g. "ExtraTreesClassifier"), and the hyperparameters of
+            the scikit-learn estimator.
         """
         params = getattr(self.classifier, 'model_parameters', None) or {}
-        return {"model": self.classifier.algorithm_type, **params}
+        out = {"model": self.classifier.algorithm_type}
+        estimator = getattr(self.classifier, 'sklearn_estimator', None)
+        if estimator is not None:
+            out["estimator"] = estimator
+        return {**out, **params}
 
     # Method to set params.
     def set_params(self, **params) -> "PyRuleAnalyzer":
@@ -165,42 +222,57 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         Set the model type and/or hyperparameters; they apply at the next fit.
 
         Changing ``model`` replaces the classifier with an untrained one of
-        that type (keeping the hyperparameters).
+        that type (keeping the hyperparameters), which trains the default
+        class of that type unless ``estimator`` is given too.
 
         Args:
-            **params: ``model`` and/or hyperparameters of the scikit-learn
-                estimator.
+            **params: ``model``, ``estimator`` and/or hyperparameters of the
+                scikit-learn estimator.
 
         Returns:
             self
 
         Raises:
-            ValueError: If a hyperparameter is not one of the estimator's.
+            ValueError: If a hyperparameter is not one of the estimator's,
+                or ``estimator`` is not a class of the model type.
         """
         current = self.get_params()
         model = params.pop("model", current.pop("model"))
-        valid = _sklearn_estimator_class(model)().get_params(deep=False)
+        estimator = current.pop("estimator", None)
+        if model != self.classifier.algorithm_type:
+            estimator = None   # a new model type trains its default class
+        estimator = params.pop("estimator", estimator)
+        valid = _sklearn_estimator_class(model, estimator)().get_params(deep=False)
         invalid = [k for k in params if k not in valid]
         if invalid:
             raise ValueError(
                 f"Invalid parameter(s) {invalid} for estimator "
                 f"{type(self).__name__} with model={model!r}. Valid "
-                f"parameters are: {['model'] + sorted(valid)}."
+                f"parameters are: {['model', 'estimator'] + sorted(valid)}."
             )
         current.update(params)
         if model != self.classifier.algorithm_type:
             self.classifier = RuleClassifier([], algorithm_type=model)
         self.classifier.model_parameters = current
+        self.classifier.sklearn_estimator = estimator
         return self
 
     # Method to return the integer class labels.
     @property
     def classes_(self) -> np.ndarray:
-        """The class labels of a fitted analyzer, as ``predict`` returns them."""
+        """The class labels of a fitted analyzer, as ``predict`` returns them.
+
+        Integer labels as integers; other labels ('cat', 0.5) as the
+        estimator had them (the rules work on their codes, see
+        ``RuleClassifier.label_table``).
+        """
         if not self.class_names:
             raise AttributeError(
                 "This PyRuleAnalyzer is not fitted yet; it has no classes_."
             )
+        table = getattr(self.classifier, 'label_table', None)
+        if table is not None:
+            return np.asarray(table)
         try:
             return np.asarray([int(c) for c in self.class_names])
         except (TypeError, ValueError):
@@ -218,15 +290,20 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
 
         Args:
             X: Test samples (DataFrame or 2-D array).
-            y: True integer labels.
+            y: True labels.
             sample_weight: Optional sample weights.
 
         Returns:
             float: The accuracy.
         """
         from sklearn.metrics import accuracy_score
-        return accuracy_score(np.asarray(y), np.asarray(self.predict(X)),
-                              sample_weight=sample_weight)
+        y_true, y_pred = np.asarray(y), np.asarray(self.predict(X))
+        if getattr(self.classifier, 'label_table', None) is not None:
+            # Compared as codes: labels such as 0.5 are not a classification
+            # target type scikit-learn's metrics accept.
+            y_true = self.classifier._encode_labels(y_true)
+            y_pred = self.classifier._encode_labels(y_pred)
+        return accuracy_score(y_true, y_pred, sample_weight=sample_weight)
 
     # ==========================================================================
     # FACTORY METHODS
@@ -325,7 +402,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                     for var, _, _ in rule.parsed_conditions}
             if not used.issubset(feature_names):
                 feature_names = []
-        class_names = classifier.class_labels
+        class_names = PyRuleAnalyzer._class_names_of(classifier)
         
         # Create PyRuleAnalyzer instance
         analyzer = PyRuleAnalyzer(classifier, feature_names, class_names)
@@ -381,12 +458,33 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         grid search result, someone else's pipeline -- and only the rule
         extraction, refinement, verification and export steps are needed.
 
+        An ``ExtraTreesClassifier`` is wrapped as a "Random Forest": once
+        fitted it is the same thing (``estimators_`` of classification trees
+        whose ``predict_proba`` is averaged); randomized splits and
+        ``bootstrap`` only change how it is trained. The analyzer remembers
+        the class (``get_params()["estimator"]``), so refitting it (``fit``,
+        or ``clone`` then ``fit``) trains an ``ExtraTreesClassifier`` again;
+        likewise for an ``ExtraTreeClassifier`` wrapped as a "Decision Tree".
+
+        Labels that are not integers ('cat'/'dog', 0.5) are supported: the
+        rules and every engine work on their codes (position in
+        ``classes_``), and ``predict``, ``classes_``, ``score`` and the
+        Python export answer the original labels; the C, Arduino and binary
+        exports answer the codes and document the table.
+
+        Missing values (NaN) are routed at every split as scikit-learn does
+        (``tree_.missing_go_to_left``), by every engine and export, for
+        decision trees and forests. ``GradientBoostingClassifier`` refuses
+        NaN, and so does a model extracted from it.
+
         Args:
-            model: A fitted ``DecisionTreeClassifier``, ``RandomForestClassifier``
-                or ``GradientBoostingClassifier``.
+            model: A fitted ``DecisionTreeClassifier`` (or ``ExtraTreeClassifier``),
+                ``RandomForestClassifier``, ``ExtraTreesClassifier`` or
+                ``GradientBoostingClassifier``.
             feature_names: Ordered feature names. Defaults to the estimator's
                 ``feature_names_in_``, then to ``feature_0 ... feature_n``.
-            class_names: Class labels. Defaults to the estimator's ``classes_``.
+            class_names: Class labels, in ``classes_`` order. Defaults to the
+                estimator's ``classes_``.
 
         Returns:
             PyRuleAnalyzer: An analyzer holding the extracted rules.
@@ -399,20 +497,24 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             >>> clf = RandomForestClassifier(n_estimators=10).fit(X, y)
             >>> analyzer = PyRuleAnalyzer.from_sklearn(clf, list(X.columns))
         """
-        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+        from sklearn.ensemble import (ExtraTreesClassifier,
+                                      GradientBoostingClassifier,
+                                      RandomForestClassifier)
         from sklearn.tree import DecisionTreeClassifier
 
         if isinstance(model, GradientBoostingClassifier):
             algorithm_type = 'Gradient Boosting Decision Trees'
-        elif isinstance(model, RandomForestClassifier):
+        elif isinstance(model, (RandomForestClassifier, ExtraTreesClassifier)):
+            # Not a subclass of RandomForestClassifier, but fitted the same
+            # way: a soft vote over DecisionTreeClassifier-like estimators_.
             algorithm_type = 'Random Forest'
         elif isinstance(model, DecisionTreeClassifier):
             algorithm_type = 'Decision Tree'
         else:
             raise ValueError(
                 f"Unsupported estimator {type(model).__name__}: expected a "
-                "DecisionTreeClassifier, RandomForestClassifier or "
-                "GradientBoostingClassifier."
+                "DecisionTreeClassifier, RandomForestClassifier, "
+                "ExtraTreesClassifier or GradientBoostingClassifier."
             )
 
         if feature_names is None:
@@ -425,10 +527,11 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         feature_names = list(feature_names)
 
         if class_names is None:
-            # Raises on labels the engines cannot answer (strings, 0.5, ...)
-            # instead of predicting column indices for them.
-            class_names = RuleClassifier._label_names(getattr(model, 'classes_', []))
-        class_names = [str(c) for c in class_names]
+            class_names = list(getattr(model, 'classes_', []))
+        # Integer labels are kept; any other labels are replaced by their
+        # codes 0..K-1 (classes_ order) and remembered in a table.
+        label_table = RuleClassifier._label_table_for(class_names)
+        class_names = RuleClassifier._label_names(class_names)
 
         if algorithm_type == 'Gradient Boosting Decision Trees':
             rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
@@ -446,9 +549,12 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
 
         classifier.class_labels = class_names
         classifier.num_classes = len(class_names)
+        classifier.label_table = label_table
         classifier._array_feature_names = feature_names
-        # get_params() (and so clone) reproduces the estimator's settings.
+        # get_params() (and so clone) reproduces the estimator's settings,
+        # and its class (ExtraTrees is wrapped as a 'Random Forest').
         classifier.model_parameters = model.get_params(deep=False)
+        classifier.sklearn_estimator = _estimator_name(algorithm_type, model)
         # scikit-learn casts X to float32 before comparing it with the
         # thresholds; comparing in float64 routes a sample lying within one
         # float32 ULP above a threshold to the other child.
@@ -458,17 +564,41 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         if algorithm_type == 'Random Forest':
             classifier.update_native_model(classifier.initial_rules)
 
-        return PyRuleAnalyzer(classifier, feature_names, class_names)
+        return PyRuleAnalyzer(classifier, feature_names,
+                              PyRuleAnalyzer._class_names_of(classifier))
+
+    # Method to give the class names an analyzer shows for a classifier.
+    @staticmethod
+    def _class_names_of(classifier: RuleClassifier) -> list:
+        """The labels ``predict`` answers: the label table, else the labels.
+
+        Args:
+            classifier: The RuleClassifier.
+
+        Returns:
+            list: Original labels when the classifier encodes them, else its
+            ``class_labels``.
+        """
+        table = getattr(classifier, 'label_table', None)
+        if table is not None:
+            return list(table)
+        return list(classifier.class_labels)
 
     # Method to fit.
     def fit(self, X, y) -> "PyRuleAnalyzer":
         """
         Fit the model according to the given training data.
-        
+
+        Trains the scikit-learn class the analyzer wraps (the default of the
+        model type, or the one ``get_params()["estimator"]`` names, e.g. an
+        ``ExtraTreesClassifier``) and extracts its rules. ``y`` may hold any
+        labels scikit-learn accepts (strings too), and ``X`` missing values
+        where the estimator accepts them (decision trees and forests).
+
         Args:
             X: Training vectors (e.g. pandas DataFrame or numpy array).
             y: Target values.
-            
+
         Returns:
             self
         """
@@ -476,9 +606,10 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         if params is None:
             params = self._get_default_params(self.classifier.algorithm_type)
         algorithm_type = self.classifier.algorithm_type
+        estimator = getattr(self.classifier, 'sklearn_estimator', None)
 
         # Train the new Scikit-Learn model
-        model = _sklearn_estimator_class(algorithm_type)(**params)
+        model = _sklearn_estimator_class(algorithm_type, estimator)(**params)
         model.fit(X, y)
         
         # Determine feature names and class names
@@ -502,16 +633,22 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
     def load(path: str) -> "PyRuleAnalyzer":
         """
         Load a PyRuleAnalyzer from a saved file.
-        
+
+        A path ending in ``.json`` is read with :meth:`load_json`, which is
+        safe on untrusted files. Any other path is unpickled: **loading a
+        pickle executes code, so only load .pkl files you trust.**
+
         Args:
-            path: Path to saved .pkl file.
-        
+            path: Path to a saved .json or .pkl file.
+
         Returns:
             PyRuleAnalyzer: The loaded PyRuleAnalyzer instance.
-        
+
         Example:
-            >>> analyzer = PyRuleAnalyzer.load("files/my_analyzer.pkl")
+            >>> analyzer = PyRuleAnalyzer.load("files/my_analyzer.json")
         """
+        if str(path).lower().endswith('.json'):
+            return PyRuleAnalyzer.load_json(path)
         loaded = RuleClassifier.load(path)
         # save() pickles the analyzer itself; a bare RuleClassifier (written
         # by the analyzers' save_final_model, for instance) is wrapped.
@@ -519,9 +656,76 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             return loaded
         classifier = loaded
         feature_names = classifier._array_feature_names if hasattr(classifier, '_array_feature_names') else []
-        class_names = classifier.class_labels
+        class_names = PyRuleAnalyzer._class_names_of(classifier)
         return PyRuleAnalyzer(classifier, feature_names, class_names)
-    
+
+    # Identification of the analyzer's JSON format (see save_json)
+    _JSON_FORMAT = 'pyruleanalyzer.PyRuleAnalyzer'
+    _JSON_VERSION = 1
+
+    # Method to load an analyzer saved with save_json.
+    @staticmethod
+    def load_json(path: str) -> "PyRuleAnalyzer":
+        """
+        Load a PyRuleAnalyzer saved with :meth:`save_json`.
+
+        Safe on untrusted files: the file is parsed as JSON and every field is
+        validated; nothing in it is imported or executed. A file written by
+        ``RuleClassifier.to_json`` is accepted too and wrapped.
+
+        Args:
+            path: Path to the .json file.
+
+        Returns:
+            PyRuleAnalyzer: The loaded analyzer, ready to predict, refine,
+            edit, model-check and export.
+
+        Raises:
+            ValueError: If the file is not a valid JSON model.
+
+        Example:
+            >>> analyzer = PyRuleAnalyzer.load_json("files/my_analyzer.json")
+        """
+        data = RuleClassifier._json_read_file(path)
+        if isinstance(data, dict) and data.get('format') == RuleClassifier._JSON_FORMAT:
+            classifier = RuleClassifier.from_dict(data)
+            return PyRuleAnalyzer(classifier, list(classifier._array_feature_names),
+                                  PyRuleAnalyzer._class_names_of(classifier))
+        if not isinstance(data, dict) or data.get('format') != PyRuleAnalyzer._JSON_FORMAT:
+            raise ValueError(
+                'Invalid JSON model: expected an object with "format": '
+                f'{PyRuleAnalyzer._JSON_FORMAT!r}.'
+            )
+        version = data.get('version')
+        if isinstance(version, bool) or version != PyRuleAnalyzer._JSON_VERSION:
+            raise ValueError(
+                f'Unsupported JSON model version {version!r:.40} (this version of '
+                f'pyruleanalyzer reads version {PyRuleAnalyzer._JSON_VERSION}).'
+            )
+        keys = {'format', 'version', 'feature_names', 'class_names', 'classifier'}
+        if set(data) != keys:
+            raise ValueError(
+                f'Invalid JSON model: expected the fields {sorted(keys)}, got '
+                f'{sorted(data)[:10]}.'
+            )
+        names = {}
+        for key in ('feature_names', 'class_names'):
+            if not isinstance(data[key], list):
+                raise ValueError(f'Invalid JSON model: {key} must be a list.')
+            names[key] = list(data[key])
+            for v in names[key]:
+                if isinstance(v, bool) or not isinstance(v, (str, int)):
+                    raise ValueError(
+                        f'Invalid JSON model: {key} must hold strings or integers.'
+                    )
+        classifier = RuleClassifier.from_dict(data['classifier'])
+        class_names = names['class_names']
+        if getattr(classifier, 'label_table', None) is not None:
+            # The classifier's table keeps the labels' types (0.5 stays a
+            # float; class_names is written as strings and integers).
+            class_names = list(classifier.label_table)
+        return PyRuleAnalyzer(classifier, names['feature_names'], class_names)
+
     # Method to get default params.
     @staticmethod
     def _get_default_params(model: str) -> Dict:
@@ -547,6 +751,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         save_final_model: bool = False,
         save_report: bool = False,
         refine_between_trees: bool = False,
+        max_error_increase: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Refine the classifier by removing redundant and low-usage rules.
@@ -568,7 +773,11 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 so the score is unchanged). Refused for Random Forest, where
                 it would change the soft vote; no effect on a Decision Tree.
                 Default is False.
-        
+            max_error_increase: Error-aware refinement: remove a low-usage
+                rule only while the refinement-set errors stay within this
+                many samples of those before the stage (0 = never more
+                errors). None (default) = usage only.
+
         Returns:
             Dictionary with refinement statistics:
             - rules_before: Number of rules before refinement
@@ -594,6 +803,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 file_path=test_path,
                 X=X, y=y,
                 remove_below_n_classifications=remove_below_n_classifications,
+                max_error_increase=max_error_increase,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -605,6 +815,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 X=X, y=y,
                 remove_below_n_classifications=remove_below_n_classifications,
                 refine_between_trees=refine_between_trees,
+                max_error_increase=max_error_increase,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -616,6 +827,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 X=X, y=y,
                 remove_below_n_classifications=remove_below_n_classifications,
                 refine_between_trees=refine_between_trees,
+                max_error_increase=max_error_increase,
                 save_final_model=save_final_model,
                 save_report=save_report
             )
@@ -670,24 +882,28 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         import pandas as pd
         import numpy as np
         
+        # The engines answer integer labels (codes, for labels that are not
+        # integers); translate them back to the estimator's labels.
+        decode = self.classifier._decode_labels
+
         # Single sample prediction (dict)
         if isinstance(X, dict):
             predicted_class, _, _ = self.classifier.classify(X, final=use_refined)
-            return predicted_class
-            
+            return decode(predicted_class)
+
         # Single sample prediction (Pandas Series)
         if isinstance(X, pd.Series):
             predicted_class, _, _ = self.classifier.classify(X.to_dict(), final=use_refined)
-            return predicted_class
-            
+            return decode(predicted_class)
+
         # Batch prediction. predict_batch compiles (once) and uses the arrays
         # of the requested rule set.
         X, names = self._batch_input(X)
-        return self.classifier.predict_batch(
+        return decode(self.classifier.predict_batch(
             X,
             feature_names=names,
             use_final=use_refined
-        )
+        ))
 
     # Method to turn a batch into an array and the names of its columns.
     def _batch_input(self, X):
@@ -957,8 +1173,10 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             path = paths.get(stage)
             if path is None:
                 continue
+            # The net answers the integer labels the rules hold (codes, for
+            # labels that are not integers), so the label domain is theirs.
             try:
-                labels = [int(c) for c in self.class_names]
+                labels = [int(c) for c in self.classifier.class_labels]
             except (TypeError, ValueError):
                 labels = None
             checker = CPNModelChecker(path, feature_names=self.feature_names,
@@ -991,16 +1209,65 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
     def save(self, path: str) -> None:
         """
         Save the PyRuleAnalyzer to a file.
-        
+
+        A path ending in ``.json`` is written with :meth:`save_json`, the
+        safe format; any other path is pickled (kept for backward
+        compatibility: loading a pickle executes code, so only share or load
+        .pkl files you trust).
+
         Args:
-            path: Path to save the PyRuleAnalyzer (.pkl file).
-        
+            path: Path to save the PyRuleAnalyzer (.json or .pkl file).
+
         Example:
-            >>> analyzer.save("files/my_analyzer.pkl")
+            >>> analyzer.save("files/my_analyzer.json")
         """
+        if str(path).lower().endswith('.json'):
+            return self.save_json(path)
         with open(path, 'wb') as f:
             pickle.dump(self, f)
-    
+
+    # Method to save as JSON.
+    def save_json(self, path: str, indent: Optional[int] = None) -> None:
+        """
+        Save the PyRuleAnalyzer to a JSON file -- the safe format.
+
+        Unlike a pickle, the file holds only data, so :meth:`load_json` can
+        read one from an untrusted source without executing code. Unlike the
+        ``.bin`` export it keeps the rules (initial, refined, their usage and
+        error counts, leaf values and distributions), the GBDT metadata, the
+        feature and class names and the hyperparameters, so the loaded
+        analyzer can be refined again, edited, model-checked and exported.
+        Thresholds read back bit for bit.
+
+        The file is an object with ``"format": "pyruleanalyzer.PyRuleAnalyzer"``,
+        ``"version": 1``, ``"feature_names"``, ``"class_names"`` and
+        ``"classifier"`` (the ``RuleClassifier.to_dict`` format).
+
+        Args:
+            path: Path to the .json file.
+            indent: Indentation for a human-readable file. Default None
+                (compact).
+
+        Raises:
+            ValueError: If a value cannot be represented in JSON (an object
+                passed as a hyperparameter, a classifier with no rules).
+
+        Example:
+            >>> analyzer.save_json("files/my_analyzer.json")
+        """
+        import json
+        label = RuleClassifier._json_label_out
+        data = {
+            'format': PyRuleAnalyzer._JSON_FORMAT,
+            'version': PyRuleAnalyzer._JSON_VERSION,
+            'feature_names': [label(f) for f in self.feature_names],
+            'class_names': [label(c) for c in self.class_names],
+            'classifier': self.classifier.to_dict(),
+        }
+        text = json.dumps(data, allow_nan=False, indent=indent)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+
     # ==========================================================================
     # INSPECTION
     # ==========================================================================
@@ -1100,7 +1367,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         """Proxy to RuleClassifier.load_binary() wrapped in PyRuleAnalyzer"""
         classifier = RuleClassifier.load_binary(file_path)
         feature_names = classifier._array_feature_names if hasattr(classifier, '_array_feature_names') else []
-        class_names = classifier.class_labels
+        class_names = cls._class_names_of(classifier)
         return cls(classifier, feature_names, class_names)
 
     # Method to edit rules.

@@ -356,6 +356,14 @@ class CPNToolsExporter:
                     vals[i] = float(seq[i])
         except (TypeError, ValueError):
             pass
+        if any(v != v for v in vals):
+            # A REAL token cannot be NaN (sml_real would write 0.0, a
+            # different sample that may take other branches).
+            raise ValueError(
+                "The sample contains a missing value (NaN). The CPN models "
+                "real-valued inputs only; pass a sample without NaN as the "
+                "initial marking."
+            )
         # Match the classifier's input precision, so the marking the net starts
         # from is the same value the classifier would compare against. Without
         # this, a sample within one float32 ULP of a threshold can take
@@ -375,6 +383,15 @@ class CPNToolsExporter:
     # ------------------------------------------------------------------
 
     def _leaf_guard(self, rule) -> str:
+        """The guard of a leaf: the conjunction of its rule's conditions.
+
+        The net's input is a record of REALs, so it models the real-valued
+        (NaN-free) inputs exactly; missing values have no token and are
+        refused (see ``_resolve_sample`` and ``cpn_semantics.evaluate``).
+        An infinite threshold -- scikit-learn's split that isolates the
+        missing values, ``x <= inf`` -- is decided here over the reals
+        (``true`` / ``false``) instead of being written as a number.
+        """
         terms = []
         for var, op, val in getattr(rule, "parsed_conditions", []) or []:
             field = self.field.get(var)
@@ -382,6 +399,13 @@ class CPNToolsExporter:
                 # Unknown feature -> register a new field defensively.
                 field = f"f{len(self.field)}"
                 self.field[var] = field
+            v = float(val)
+            if v in (float("inf"), float("-inf")):
+                # For a real x: x <= inf and x > -inf always hold; x > inf
+                # and x <= -inf never do.
+                holds = {"<=": v > 0, "<": v > 0, ">": v < 0, ">=": v < 0}[op]
+                terms.append("true" if holds else "false")
+                continue
             terms.append(f"#{field} x {op} {_ml_val(val)}")
         return " andalso ".join(terms) if terms else "true"
 

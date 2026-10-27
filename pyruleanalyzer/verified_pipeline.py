@@ -226,7 +226,8 @@ def _gate(results, result, stage, fail_on_violation, fail_on_inconclusive):
             raise VerificationError(
                 f"the {stage} model could not be verified: {undecided} got no "
                 "verdict (occurrence graph over budget). Raise max_nodes or "
-                "use reduction='stubborn', or pass fail_on_inconclusive=False "
+                "use reduction='compositional' (ensembles) or "
+                "reduction='stubborn', or pass fail_on_inconclusive=False "
                 "to export it unverified.", result, stage)
 
 
@@ -387,11 +388,16 @@ def verified_pipeline(
             get no verdict.
         reduction: ``"stubborn"`` to model check on stubborn-set reduced
             occurrence graphs (same verdicts, far fewer markings for forests
-            and multiclass boosting); None for the full graph. CPNCheck's
-            other reductions (``"sweep"``, ``"equivalence"``,
+            and multiclass boosting); ``"compositional"`` to decide each
+            property from one graph per tree or boosting channel plus the
+            join layer (linear in the number of learners, so forests of tens
+            of trees get verdicts; see
+            :mod:`pyruleanalyzer.compositional`); None for the full graph.
+            CPNCheck's other reductions (``"sweep"``, ``"equivalence"``,
             ``"symmetry"``) are accepted too.
         reduction_options: Their settings (``progress``, ``equivalence``,
-            ``symmetry``), passed to the model checker.
+            ``symmetry``; for ``"compositional"``, ``fallback`` and
+            ``max_combinations``), passed to the model checker.
         check_consistency: Compare the class the net computes against the
             classifier's own prediction (property PC) on the whole test set.
         export_askctl: Also write the ASK-CTL (SML) script of each net, ready to

@@ -45,7 +45,6 @@ from cpncheck.mutation import CPNDocument, Mutant
 from cpncheck.mutation import make_mutants as _make_mutants
 from cpncheck.net import CPNNet
 from .cpn_profile import detect_family
-from .cpn_semantics import safe_eval
 from cpncheck.statespace import build_state_space
 
 __all__ = ["CPNDocument", "Mutant", "MUTANTS", "TREE_MUTANTS", "analyse",
@@ -88,26 +87,47 @@ def analyse(path: str) -> Dict[str, object]:
                     if trans[ti]["name"].startswith("Decide")]
     channels = sorted({t["page"] for t in trans if t["name"] == "Finalize"})
     labels = sorted({tok for d in ss.dead for tok in ss.markings[d][pred_idx]})
-    domain = set()
-    for t in trans:
-        for p, terms in t["out"]:
-            if p != pred_idx:
-                continue
-            for _count, code in terms:
-                # Never eval net text: safe_eval only interprets whitelisted
-                # constructs (and rejects cpncheck's compiled terms, which
-                # are not source text).
-                try:
-                    value = safe_eval(code, cnet.env)
-                except Exception:
-                    continue
-                if isinstance(value, int):
-                    domain.add(value)
-    return {"family": family, "top": top, "trees": trees, "labels": sorted(domain),
+    return {"family": family, "top": top, "trees": trees,
+            "labels": _constant_labels(cnet, pred_idx),
             "producer": producers[0]["name"] if producers else None,
             "producer_page": producers[0]["page"] if producers else None,
             "decides": decides, "live_decides": live_decides,
             "channels": channels, "prediction": labels}
+
+
+# Function to read the label domain off the constant prediction producers.
+def _constant_labels(cnet, pred_idx: int) -> List[int]:
+    """The integer constants the correct net can deposit in Prediction.
+
+    The output terms are cpncheck's compiled CPN ML (closures over its own
+    interpreter, never Python ``eval``), so a term is evaluated with an empty
+    binding: a constant (a ``Decide_k`` writing ``k``, a decision-tree leaf
+    writing its class) yields its value, and a term over arc variables (the
+    forest's ``decide(vsum([...]))``) raises and contributes nothing. A
+    forest therefore gets no domain here, rather than a guessed ``0..K-1``.
+    The domain comes from the correct net and is applied to its mutants, so it
+    is not vacuous for them: a mutant writing a label outside it fails A6.
+
+    Args:
+        cnet (ColouredNet): The correct net.
+        pred_idx (int): The Prediction place.
+
+    Returns:
+        list: Sorted labels, empty when no producer writes a constant.
+    """
+    domain = set()
+    for t in cnet.transitions:
+        for p, terms in t["out"]:
+            if p != pred_idx:
+                continue
+            for _count, code in terms:
+                try:
+                    value = code({}) if callable(code) else code
+                except Exception:          # a term over unbound variables
+                    continue
+                if isinstance(value, int) and not isinstance(value, bool):
+                    domain.add(value)
+    return sorted(domain)
 
 
 # Function to pick the first tree page with a live leaf.
