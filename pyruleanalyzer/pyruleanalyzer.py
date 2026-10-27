@@ -103,7 +103,7 @@ class PyRuleAnalyzer:
             refine: If True, automatically refine rules after creation.
                    Default is False.
             refine_params: Parameters for refinement. Ignored if refine=False.
-                         See PyRuleAnalyzer.refine() for details.
+                         See PyRuleAnalyzer.execute_rule_refinement().
             save_models: If True, save intermediate models to files/. Default is False.
         
         Returns:
@@ -143,7 +143,7 @@ class PyRuleAnalyzer:
         if refine:
             if refine_params is None:
                 refine_params = {}
-            analyzer.refine(test_path, **refine_params)
+            analyzer.execute_rule_refinement(test_path=test_path, **refine_params)
         
         return analyzer
     
@@ -239,7 +239,9 @@ class PyRuleAnalyzer:
         feature_names = list(feature_names)
 
         if class_names is None:
-            class_names = [str(c) for c in getattr(model, 'classes_', [])]
+            # Raises on labels the engines cannot answer (strings, 0.5, ...)
+            # instead of predicting column indices for them.
+            class_names = RuleClassifier._label_names(getattr(model, 'classes_', []))
         class_names = [str(c) for c in class_names]
 
         if algorithm_type == 'Gradient Boosting Decision Trees':
@@ -263,6 +265,10 @@ class PyRuleAnalyzer:
         # thresholds; comparing in float64 routes a sample lying within one
         # float32 ULP above a threshold to the other child.
         classifier.input_dtype = 'float32'
+        # The constructor compiled the native function before the labels
+        # above were known; a forest maps its argmax through them.
+        if algorithm_type == 'Random Forest':
+            classifier.update_native_model(classifier.initial_rules)
 
         return PyRuleAnalyzer(classifier, feature_names, class_names)
 
@@ -305,13 +311,11 @@ class PyRuleAnalyzer:
         else:
             self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
             
-        # Get class names from y
-        self.class_names = [str(c) for c in sorted(np.unique(np.asarray(y)))]
-        
-        # Extract rules from the freshly trained estimator
-        trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names,
-                                              self.class_names)
+        # Extract rules from the freshly trained estimator; the class names
+        # come from its classes_ (integer labels, see from_sklearn).
+        trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names)
         self.classifier = trained.classifier
+        self.class_names = trained.class_names
         
         return self
     
@@ -330,7 +334,12 @@ class PyRuleAnalyzer:
         Example:
             >>> analyzer = PyRuleAnalyzer.load("files/my_analyzer.pkl")
         """
-        classifier = RuleClassifier.load(path)
+        loaded = RuleClassifier.load(path)
+        # save() pickles the analyzer itself; a bare RuleClassifier (written
+        # by the analyzers' save_final_model, for instance) is wrapped.
+        if isinstance(loaded, PyRuleAnalyzer):
+            return loaded
+        classifier = loaded
         feature_names = classifier._array_feature_names if hasattr(classifier, '_array_feature_names') else []
         class_names = classifier.class_labels
         return PyRuleAnalyzer(classifier, feature_names, class_names)
@@ -493,17 +502,40 @@ class PyRuleAnalyzer:
             predicted_class, _, _ = self.classifier.classify(X.to_dict(), final=use_refined)
             return predicted_class
             
-        # Batch prediction
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-            
-        # predict_batch compiles (once) and uses the arrays of the requested
-        # rule set.
+        # Batch prediction. predict_batch compiles (once) and uses the arrays
+        # of the requested rule set.
+        X, names = self._batch_input(X)
         return self.classifier.predict_batch(
             X,
-            feature_names=self.feature_names,
+            feature_names=names,
             use_final=use_refined
         )
+
+    # Method to turn a batch into an array and the names of its columns.
+    def _batch_input(self, X):
+        """The batch as an array, with the feature name of each column.
+
+        A DataFrame is matched to the model by column name, not position: its
+        columns may come in another order, or include extra ones.
+
+        Args:
+            X: A DataFrame or a 2-D array (columns in training order).
+
+        Returns:
+            tuple: (array, feature names of its columns).
+
+        Raises:
+            ValueError: If a DataFrame lacks a feature the model uses.
+        """
+        if not isinstance(X, pd.DataFrame):
+            # No names (an analyzer built by create()): columns are taken in
+            # the order the arrays were compiled with.
+            return X, self.feature_names or None
+        names = list(X.columns)
+        missing = [f for f in self.feature_names if f not in names]
+        if missing:
+            raise ValueError(f"X is missing the feature(s) {missing}")
+        return X.values, names
     
     # Method to predict proba.
     def predict_proba(
@@ -521,14 +553,10 @@ class PyRuleAnalyzer:
         Returns:
             Class probabilities.
         """
-        import pandas as pd
-        
-        if isinstance(X, pd.DataFrame):
-            X = X.values
-            
+        X, names = self._batch_input(X)
         return self.classifier.predict_batch_proba(
             X,
-            feature_names=self.feature_names,
+            feature_names=names,
             use_final=use_refined,
         )
     

@@ -257,6 +257,80 @@ class RuleClassifier(RuleExporterMixin):
         except (ValueError, AttributeError, TypeError):
             return 0
 
+    # Method to map the columns of a forest distribution to class labels
+    def _rf_labels(self, n: int) -> List[int]:
+        """The class label each column of an `n`-class distribution stands for.
+
+        Leaf distributions are indexed like the estimator's ``classes_``; the
+        argmax of their sum is a column index, which is the label only when
+        the labels happen to be 0..K-1.
+
+        Args:
+            n (int): Length of the distribution.
+
+        Returns:
+            List[int]: The label of each column (the index itself when a label
+            cannot be read as an integer).
+        """
+        out = []
+        for i in range(n):
+            try:
+                out.append(int(str(self._label_at(i, n)).replace('Class', '').strip()))
+            except (ValueError, TypeError):
+                out.append(i)
+        return out
+
+    # Method to read an estimator's classes as the labels the rules store
+    @staticmethod
+    def _label_names(classes) -> List[str]:
+        """The labels of `classes` as the rules store them, e.g. ``'-1'``.
+
+        Every engine and export answers integer labels (the C, binary and
+        Arduino targets have no other type), so a label must be an integer
+        value. ``1.0`` becomes ``'1'``: ``str(1.0)`` would be ``'1.0'``, which
+        no engine can turn back into the label.
+
+        Args:
+            classes: The estimator's ``classes_``.
+
+        Returns:
+            List[str]: One label per class, in the same order.
+
+        Raises:
+            ValueError: If a label is not an integer value.
+        """
+        out = []
+        for c in classes:
+            try:
+                value = float(c)
+            except (TypeError, ValueError):
+                value = None
+            if value is None or not value.is_integer():
+                raise ValueError(
+                    f"pyruleanalyzer supports integer class labels only (got "
+                    f"{c!r}); encode them first, e.g. with "
+                    "sklearn.preprocessing.LabelEncoder."
+                )
+            out.append(str(int(value)))
+        return out
+
+    # Method to escape text placed inside a generated C comment
+    @staticmethod
+    def _c_comment(text) -> str:
+        """`text` made safe for a C comment: one line, no comment terminator.
+
+        Feature names come from the data (CSV headers); a newline would end a
+        ``//`` comment and a ``*/`` a block comment, turning the rest of the
+        name into code.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            str: The text on one line, with ``*/`` broken up.
+        """
+        return ' '.join(str(text).splitlines()).replace('*/', '* /')
+
     # Method to execute _assert_no_missing_values
     @staticmethod
     def _assert_no_missing_values(X) -> None:
@@ -493,7 +567,7 @@ class RuleClassifier(RuleExporterMixin):
             
             feat_name = node['f']
             # Use repr(float(t)) for precision
-            code = f"{tab}if sample.get('{feat_name}', 0) <= {repr(float(node['t']))}:\n"
+            code = f"{tab}if sample.get({feat_name!r}, 0) <= {repr(float(node['t']))}:\n"
             code += build_code(node['l'], indent + 1)
             code += f"{tab}else:\n"
             code += build_code(node['r'], indent + 1)
@@ -578,6 +652,11 @@ class RuleClassifier(RuleExporterMixin):
             # Now build the complete function code
             func_code = 'import math\n'
 
+            # Identifiers come from positions, never from rule names or class
+            # labels, which may hold anything (a '-' in "-1" already breaks
+            # them, and a crafted name would be executed).
+            fn_of = {tid: f'predict_{i}' for i, tid in enumerate(tree_rules_map)}
+
             # Re-iterate to build tree functions in order
             for tid, rules in tree_rules_map.items():
                 if not rules:
@@ -586,7 +665,7 @@ class RuleClassifier(RuleExporterMixin):
                 if len(rules) == 1 and not rules[0].parsed_conditions and rules[0].contribution is not None:
                     continue
 
-                func_name = f'predict_{tid}'
+                func_name = fn_of[tid]
                 tree_dict = self._native_tree(rules)
                 if tree_dict is None:
                     return
@@ -612,7 +691,7 @@ class RuleClassifier(RuleExporterMixin):
                     if node['f'] == -2:
                         return f'{tab}return {repr(float(node["v"]))}\n'
                     feat = node['f']
-                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                     code += _build_code(node['l'], indent + 1, td)
                     code += f'{tab}else:\n'
                     code += _build_code(node['r'], indent + 1, td)
@@ -639,8 +718,7 @@ class RuleClassifier(RuleExporterMixin):
                         continue
                     if rules[0].class_group != pos_class:
                         continue
-                    func_name = f'predict_{tid}'
-                    func_code += f'    score += {func_name}(sample)\n'
+                    func_code += f'    score += {fn_of[tid]}(sample)\n'
                 # Decide on the raw score, as scikit-learn does
                 # (raw_predictions >= 0). sigmoid(score) >= 0.5 is not the
                 # same test in floating point: sigmoid rounds to exactly 0.5
@@ -651,21 +729,23 @@ class RuleClassifier(RuleExporterMixin):
                 func_code += '    else:\n'
                 func_code += f'        return {int(classes[0])}, None, None\n'
             else:
-                # Multiclass
+                # Multiclass: one score per class, named by its position
+                col = {cl: i for i, cl in enumerate(classes)}
                 for class_label in classes:
                     score_init = init_scores.get(class_label, 0.0)
-                    func_code += f'    score_{class_label} = {repr(score_init)}\n'
+                    func_code += f'    score_{col[class_label]} = {repr(score_init)}\n'
                 for tid, rules in tree_rules_map.items():
                     if not rules:
                         continue
                     if len(rules) == 1 and not rules[0].parsed_conditions:
                         continue
-                    class_group = rules[0].class_group
-                    func_name = f'predict_{tid}'
-                    func_code += f'    score_{class_group} += {func_name}(sample)\n'
+                    if rules[0].class_group not in col:
+                        continue
+                    func_code += (f'    score_{col[rules[0].class_group]} += '
+                                  f'{fn_of[tid]}(sample)\n')
 
                 # Argmax
-                score_vars = [f'score_{cl}' for cl in classes]
+                score_vars = [f'score_{col[cl]}' for cl in classes]
                 class_ints = [int(cl) for cl in classes]
                 func_code += f'    scores = [{", ".join(score_vars)}]\n'
                 func_code += f'    classes = {class_ints}\n'
@@ -700,11 +780,12 @@ class RuleClassifier(RuleExporterMixin):
             
             tree_func_names = []
             func_code = ""
-            
-            for tid, rules in tree_rules_map.items():
-                func_name = f"predict_{tid}"
+
+            for t_pos, (tid, rules) in enumerate(tree_rules_map.items()):
+                # Named by position: rule names are not valid identifiers
+                func_name = f"predict_{t_pos}"
                 tree_func_names.append(func_name)
-                
+
                 # Build tree structure — store probability distribution at leaves
                 tree_dict = self._native_tree(rules)
                 if tree_dict is None:
@@ -752,7 +833,7 @@ class RuleClassifier(RuleExporterMixin):
                     
                     feat = node['f']
                     # Use repr(float(t)) to ensure no numpy precision issues in literals
-                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                     code += build_rf_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_rf_code(node['r'], indent + 1)
@@ -768,10 +849,7 @@ class RuleClassifier(RuleExporterMixin):
             except Exception:
                 default_val = self.default_class
             
-            if isinstance(default_val, str):
-                def_str = f"'{default_val}'"
-            else:
-                def_str = str(default_val)
+            def_str = repr(default_val)
 
             func_code += "def native_predict(sample):\n"
             func_code += "    tree_results = []\n"
@@ -779,8 +857,10 @@ class RuleClassifier(RuleExporterMixin):
                 func_code += f"    v = {func}(sample)\n"
                 func_code += "    if v is not None: tree_results.append(v)\n"
             func_code += f"    if not tree_results: return {def_str}, [], None\n"
-            
+
             if n_classes > 0:
+                # The argmax is a column of the distribution; answer its label
+                func_code += f"    labels = {self._rf_labels(n_classes)!r}\n"
                 # Soft voting path: each tree returns a probability list
                 func_code += "    # Check if results are probability lists (soft voting)\n"
                 func_code += "    if isinstance(tree_results[0], list):\n"
@@ -792,7 +872,7 @@ class RuleClassifier(RuleExporterMixin):
                 func_code += "        n = len(tree_results)\n"
                 func_code += "        avg = [p / n for p in avg]\n"
                 func_code += "        best = avg.index(max(avg))\n"
-                func_code += "        return best, None, avg\n"
+                func_code += "        return labels[best], None, avg\n"
                 func_code += "    else:\n"
                 func_code += "        # Fallback: hard voting (distributions unavailable)\n"
                 func_code += "        pred = Counter(tree_results).most_common(1)[0][0]\n"
@@ -810,7 +890,9 @@ class RuleClassifier(RuleExporterMixin):
             for node in tree_dict.values():
                 rule = node.pop('rule', None)
                 if rule is None:
-                    node['v'] = -1  # uncovered region -> default_class
+                    # Uncovered region -> default_class. None, not -1: -1 is
+                    # a legitimate label (y in {-1, 1}).
+                    node['v'] = None
                     continue
                 try:
                     node['v'] = int(str(rule.class_).replace('Class', '').strip())
@@ -829,20 +911,18 @@ class RuleClassifier(RuleExporterMixin):
                 """
                 node = tree_dict[node_id]
                 tab = "    " * indent
-                if node['f'] == -2: 
+                if node['f'] == -2:
                     val = node['v']
-                    if val == -1: 
+                    if val is None:
                         try:
                             val = int(str(self.default_class).replace('Class', '').strip())
                         except Exception:
                             val = self.default_class
-                    if isinstance(val, str):
-                        return f"{tab}return '{val}', None, None\n"
-                    return f"{tab}return {val}, None, None\n"
+                    return f"{tab}return {val!r}, None, None\n"
                 
                 feat = node['f']
                 # Use repr(float(t)) for precision
-                code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                 code += build_dt_code(node['l'], indent + 1)
                 code += f"{tab}else:\n"
                 code += build_dt_code(node['r'], indent + 1)
@@ -937,7 +1017,10 @@ class RuleClassifier(RuleExporterMixin):
         proba = None
 
         if self.algorithm_type == 'Random Forest':
-            predicted_class, votes, proba, _ = self.classify_rf(data, rules)
+            n_dist = next((len(r.class_distribution) for r in rules
+                           if r.class_distribution is not None), 0)
+            predicted_class, votes, proba, _ = self.classify_rf(
+                data, rules, labels=self._rf_labels(n_dist))
             if predicted_class is None:
                 # No tree had a matching rule: uncovered region in every tree.
                 predicted_class = self.default_class
@@ -1018,7 +1101,7 @@ class RuleClassifier(RuleExporterMixin):
 
     # Method to classify data using Random Forest rules    
     @staticmethod
-    def classify_rf(data, rules):
+    def classify_rf(data, rules, labels=None):
         """
         Classifies a single data instance using extracted rules from a Random Forest.
         Uses soft probability averaging (like sklearn) when class distributions are
@@ -1027,6 +1110,8 @@ class RuleClassifier(RuleExporterMixin):
         Args:
             data (Dict[str, float]): Instance data.
             rules (List[Rule]): List of rule instances.
+            labels (List[int], optional): The label of each distribution
+                column. Without it, soft voting answers the column index.
 
         Returns:
             Tuple: (Predicted Label, Votes List, Proba List, Matched Rules List)
@@ -1087,7 +1172,9 @@ class RuleClassifier(RuleExporterMixin):
             
             # Predicted class = argmax of averaged probabilities
             best_idx = avg_proba.index(max(avg_proba))
-            predicted_class = best_idx
+            predicted_class = (labels[best_idx]
+                               if labels is not None and len(labels) == n_classes
+                               else best_idx)
             probas_out = avg_proba
         else:
             # --- Fallback: Hard Voting ---
@@ -1896,7 +1983,9 @@ class RuleClassifier(RuleExporterMixin):
 
             # Average and argmax
             avg_proba = prob_sum / n_trees
-            predictions = np.argmax(avg_proba, axis=1).astype(np.int32)
+            # argmax is a column of the distribution; answer its label
+            labels = np.asarray(self._rf_labels(n_classes), dtype=np.int32)
+            predictions = labels[np.argmax(avg_proba, axis=1)]
 
             # Every tree abstained (refinement left this sample uncovered in
             # all of them): the argmax would silently return class 0 with no
@@ -2143,9 +2232,11 @@ class RuleClassifier(RuleExporterMixin):
                 2 bytes  n_classes (uint16)
                 2 bytes  n_trees (uint16)
                 4 bytes  default_class (int32)
-            Version 2 only:
+            Version 2 and later:
                 1 byte   flags: bit 0 = compare inputs rounded to float32
                          (``input_dtype='float32'``, as scikit-learn does)
+            Version 3 only (a Random Forest whose labels are not 0..K-1):
+                n_classes * 4 bytes  label of each distribution column (int32)
             For GBDT additionally:
                 1 byte   is_binary (bool)
                 2 bytes  n_gbdt_classes (uint16)
@@ -2202,15 +2293,25 @@ class RuleClassifier(RuleExporterMixin):
             # rounds its inputs to float32 is written as version 2, so a
             # reloaded model routes samples exactly like the one exported.
             f32 = getattr(self, 'input_dtype', None) == 'float32'
+            # Version 3 adds the label of each column of a forest's
+            # distributions, written only when they are not 0..K-1.
+            rf_labels = (self._rf_labels(self.num_classes)
+                         if self.algorithm_type == 'Random Forest' else None)
+            has_labels = (rf_labels is not None
+                          and rf_labels != list(range(self.num_classes)))
+            version = 3 if has_labels else (2 if f32 else 1)
             f.write(b'PYRA')                                      # magic
-            f.write(struct.pack('<B', 2 if f32 else 1))            # version
+            f.write(struct.pack('<B', version))                    # version
             f.write(struct.pack('<B', algo_byte))                  # algorithm_type
             f.write(struct.pack('<H', len(self._array_feature_names)))  # n_features
             f.write(struct.pack('<H', self.num_classes))           # n_classes
             f.write(struct.pack('<H', n_trees))                    # n_trees
             f.write(struct.pack('<i', default_cls))                # default_class
-            if f32:
-                f.write(struct.pack('<B', 1))                      # flags
+            if version >= 2:
+                f.write(struct.pack('<B', 1 if f32 else 0))        # flags
+            if has_labels:
+                for lab in rf_labels:
+                    f.write(struct.pack('<i', lab))                # class labels
 
             # --- GBDT metadata ---
             if self.algorithm_type == 'Gradient Boosting Decision Trees':
@@ -2284,7 +2385,7 @@ class RuleClassifier(RuleExporterMixin):
             if magic != b'PYRA':
                 raise ValueError(f'Invalid binary model file (magic={magic!r})')
             version = struct.unpack('<B', f.read(1))[0]
-            if version not in (1, 2):
+            if version not in (1, 2, 3):
                 raise ValueError(f'Unsupported binary model version: {version}')
             algo_byte = struct.unpack('<B', f.read(1))[0]
             n_features = struct.unpack('<H', f.read(2))[0]
@@ -2292,6 +2393,10 @@ class RuleClassifier(RuleExporterMixin):
             n_trees = struct.unpack('<H', f.read(2))[0]
             default_cls = struct.unpack('<i', f.read(4))[0]
             flags = struct.unpack('<B', f.read(1))[0] if version >= 2 else 0
+            class_labels = list(range(n_classes))
+            if version >= 3:
+                class_labels = [struct.unpack('<i', f.read(4))[0]
+                                for _ in range(n_classes)]
 
             algorithm_type = algo_names[algo_byte]
 
@@ -2363,7 +2468,7 @@ class RuleClassifier(RuleExporterMixin):
         obj = cls.__new__(cls)
         obj.algorithm_type = algorithm_type
         obj.num_classes = n_classes
-        obj.class_labels = list(range(n_classes))
+        obj.class_labels = class_labels
         obj.default_class = default_cls
         obj.initial_rules = []
         obj.final_rules = []
@@ -2434,7 +2539,7 @@ class RuleClassifier(RuleExporterMixin):
         # Feature name comments
         a('/* Feature order:')
         for i, name in enumerate(self._array_feature_names):
-            a(f'   [{i}] {name}')
+            a(f'   [{i}] {self._c_comment(name)}')
         a('*/')
         a('')
 
@@ -2553,7 +2658,10 @@ class RuleClassifier(RuleExporterMixin):
             a(f'    for (k = 1; k < N_CLASSES; k++) {{')
             a(f'        if (prob_sum[k] > prob_sum[best]) best = k;')
             a(f'    }}')
-            a(f'    return best;')
+            # best is a column of the distribution; answer its label
+            rf_labels = ', '.join(str(v) for v in self._rf_labels(self.num_classes))
+            a(f'    static const int32_t class_map[N_CLASSES] = {{ {rf_labels} }};')
+            a(f'    return class_map[best];')
             a('}')
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             classes = self._gbdt_classes or []
@@ -2751,7 +2859,7 @@ class RuleClassifier(RuleExporterMixin):
         # Feature name comments
         a('// Feature order:')
         for i, name in enumerate(self._array_feature_names):
-            a(f'//   [{i}] {name}')
+            a(f'//   [{i}] {self._c_comment(name)}')
         a('')
 
         # Per-tree arrays (same format as C header)
@@ -2863,7 +2971,10 @@ class RuleClassifier(RuleExporterMixin):
             a(f'    for (k = 1; k < N_CLASSES; k++) {{')
             a(f'        if (prob_sum[k] > prob_sum[best]) best = k;')
             a(f'    }}')
-            a(f'    return best;')
+            # best is a column of the distribution; answer its label
+            rf_labels = ', '.join(str(v) for v in self._rf_labels(self.num_classes))
+            a(f'    static const int32_t class_map[N_CLASSES] = {{ {rf_labels} }};')
+            a(f'    return class_map[best];')
             a('}')
         elif self.algorithm_type == 'Gradient Boosting Decision Trees':
             classes = self._gbdt_classes or []
@@ -2939,7 +3050,7 @@ class RuleClassifier(RuleExporterMixin):
             a('void read_features(void) {')
             for i in range(min(len(self._array_feature_names), 10)):
                 feat_name = self._array_feature_names[i] if i < len(self._array_feature_names) else f'feature_{i}'
-                a(f'    features[{i}] = 0.0; // TODO: read {feat_name}')
+                a(f'    features[{i}] = 0.0; // TODO: read {self._c_comment(feat_name)}')
             remaining = max(0, len(self._array_feature_names) - 10)
             if remaining > 0:
                 a(f'    // ... and {remaining} more features')
@@ -3823,6 +3934,10 @@ class RuleClassifier(RuleExporterMixin):
                         tid = rule.name
                     tree_rules_map[tid].append(rule)
 
+                # Identifiers come from positions, never from rule names or
+                # class labels (see update_native_model).
+                fn_of = {tid: f'predict_{i}' for i, tid in enumerate(tree_rules_map)}
+
                 # Collect init scores and write tree functions
                 init_scores = {}
                 for tid, rules in tree_rules_map.items():
@@ -3832,7 +3947,7 @@ class RuleClassifier(RuleExporterMixin):
                         init_scores[rules[0].class_group] = rules[0].contribution
                         continue
 
-                    func_name = f'predict_{tid}'
+                    func_name = fn_of[tid]
                     tree_dict = self._tree_from_rules(rules)
                     for node in tree_dict.values():
                         rule = node.pop('rule', None)
@@ -3856,7 +3971,7 @@ class RuleClassifier(RuleExporterMixin):
                         if node['f'] == -2:
                             return f'{tab}return {repr(float(node["v"]))}\n'
                         feat = node['f']
-                        code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                        code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                         code += _build_export_code(node['l'], indent + 1, td)
                         code += f'{tab}else:\n'
                         code += _build_export_code(node['r'], indent + 1, td)
@@ -3883,21 +3998,24 @@ class RuleClassifier(RuleExporterMixin):
                             continue
                         if rules[0].class_group != pos_class:
                             continue
-                        f.write(f'    score += predict_{tid}(sample)\n')
+                        f.write(f'    score += {fn_of[tid]}(sample)\n')
                     # Decide on the raw score, as scikit-learn does (raw >= 0).
                     f.write(f'    return {int(classes[1])} if score >= 0.0 else {int(classes[0])}\n')
                 else:
+                    col = {cl: i for i, cl in enumerate(classes)}
                     for class_label in classes:
                         score_init = init_scores.get(class_label, 0.0)
-                        f.write(f'    score_{class_label} = {repr(score_init)}\n')
+                        f.write(f'    score_{col[class_label]} = {repr(score_init)}\n')
                     for tid, rules in tree_rules_map.items():
                         if not rules:
                             continue
                         if len(rules) == 1 and not rules[0].parsed_conditions:
                             continue
-                        class_group = rules[0].class_group
-                        f.write(f'    score_{class_group} += predict_{tid}(sample)\n')
-                    score_vars = [f'score_{cl}' for cl in classes]
+                        if rules[0].class_group not in col:
+                            continue
+                        f.write(f'    score_{col[rules[0].class_group]} += '
+                                f'{fn_of[tid]}(sample)\n')
+                    score_vars = [f'score_{col[cl]}' for cl in classes]
                     class_ints = [int(cl) for cl in classes]
                     f.write(f'    scores = [{", ".join(score_vars)}]\n')
                     f.write(f'    classes = {class_ints}\n')
@@ -3922,8 +4040,9 @@ class RuleClassifier(RuleExporterMixin):
                 
                 # Generate a function for each tree
                 tree_func_names = []
-                for tid, rules in tree_rules_map.items():
-                    func_name = f"predict_{tid}"
+                for t_pos, (tid, rules) in enumerate(tree_rules_map.items()):
+                    # Named by position: rule names are not valid identifiers
+                    func_name = f"predict_{t_pos}"
                     tree_func_names.append(func_name)
                     
                     # Build tree structure — store probability distributions at leaves
@@ -3969,7 +4088,7 @@ class RuleClassifier(RuleExporterMixin):
                         
                         feat = node['f']
                         # Use repr(float(t)) for precision
-                        code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                        code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                         code += build_rf_code(node['l'], indent + 1)
                         code += f"{tab}else:\n"
                         code += build_rf_code(node['r'], indent + 1)
@@ -3985,10 +4104,7 @@ class RuleClassifier(RuleExporterMixin):
                 except Exception:
                     default_val = self.default_class
                 
-                if isinstance(default_val, str):
-                    def_str = f"'{default_val}'"
-                else:
-                    def_str = str(default_val)
+                def_str = repr(default_val)
 
                 f.write("def predict(sample):\n")
                 f.write("    tree_results = []\n")
@@ -3996,8 +4112,10 @@ class RuleClassifier(RuleExporterMixin):
                     f.write(f"    v = {func}(sample)\n")
                     f.write("    if v is not None: tree_results.append(v)\n")
                 f.write(f"    if not tree_results: return {def_str}\n")
-                
+
                 if n_classes > 0:
+                    # The argmax is a column of the distribution; answer its label
+                    f.write(f"    labels = {self._rf_labels(n_classes)!r}\n")
                     f.write("    # Soft voting: average probability distributions\n")
                     f.write("    if isinstance(tree_results[0], list):\n")
                     f.write(f"        n_classes = {n_classes}\n")
@@ -4007,7 +4125,7 @@ class RuleClassifier(RuleExporterMixin):
                     f.write("                avg[j] += proba[j]\n")
                     f.write("        n = len(tree_results)\n")
                     f.write("        avg = [p / n for p in avg]\n")
-                    f.write("        return avg.index(max(avg))\n")
+                    f.write("        return labels[avg.index(max(avg))]\n")
                     f.write("    else:\n")
                     f.write("        from collections import Counter\n")
                     f.write("        return Counter(tree_results).most_common(1)[0][0]\n")
@@ -4021,7 +4139,9 @@ class RuleClassifier(RuleExporterMixin):
                 for node in tree_dict.values():
                     rule = node.pop('rule', None)
                     if rule is None:
-                        node['v'] = -1  # uncovered region -> default_class
+                        # Uncovered region -> default_class. None, not -1: -1
+                        # is a legitimate label (y in {-1, 1}).
+                        node['v'] = None
                         continue
                     try:
                         node['v'] = int(str(rule.class_).replace('Class', '').strip())
@@ -4042,18 +4162,16 @@ class RuleClassifier(RuleExporterMixin):
                     tab = "    " * indent
                     if node['f'] == -2:
                         val = node['v']
-                        if val == -1:
+                        if val is None:
                             try:
                                 val = int(str(self.default_class).replace('Class', '').strip())
                             except Exception:
                                 val = self.default_class
-                        if isinstance(val, str):
-                            return f"{tab}return '{val}'\n"
-                        return f"{tab}return {val}\n"
+                        return f"{tab}return {val!r}\n"
                     
                     feat = node['f']
                     # Use repr(float(t)) for precision
-                    code = f"{tab}if sample.get('{feat}', 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
                     code += build_dt_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_dt_code(node['r'], indent + 1)
@@ -4934,7 +5052,7 @@ class RuleClassifier(RuleExporterMixin):
                 - Whether the model is binary classification.
                 - List of class label strings.
         """
-        classes = [str(c) for c in model.classes_]
+        classes = RuleClassifier._label_names(model.classes_)
         is_binary = len(classes) == 2
         learning_rate = model.get_params()['learning_rate']
 

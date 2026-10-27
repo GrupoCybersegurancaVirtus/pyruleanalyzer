@@ -743,9 +743,17 @@ class CPNToolsExporter:
             "fun allzero (xs : real list) =\n"
             "      List.all (fn x => x <= 0.0 andalso x >= 0.0) xs;"
         )
+        # argmax is a column of the distribution; when the labels are not
+        # 0..K-1, map it to its label as the Python engines do.
+        rf_labels = getattr(self.clf, "_rf_labels", None)
+        labels = rf_labels(self.n_classes) if rf_labels else None
+        pick = "argmax xs"
+        if labels and labels != list(range(self.n_classes)):
+            table = ", ".join(str(v).replace("-", "~") for v in labels)
+            pick = f"List.nth ([{table}], argmax xs)"
         self.mls.append(
             "fun decide (xs : real list) =\n"
-            f"      if allzero xs then {default_cls} else argmax xs;"
+            f"      if allzero xs then {default_cls} else {pick};"
         )
 
     # ------------------------------------------------------------------

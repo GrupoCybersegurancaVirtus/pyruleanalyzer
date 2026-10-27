@@ -199,6 +199,26 @@ def _argmax(vec):
     return bi
 
 
+# Function to read the label table of a forest's decision.
+def _rf_label_table(net):
+    """Labels of the distribution columns, from the net's ``decide`` function.
+
+    The exporter writes ``List.nth ([l0, l1, ...], argmax xs)`` when the
+    labels are not 0..K-1, and a bare ``argmax xs`` otherwise.
+
+    Args:
+        net (CPNNet): The parsed net.
+
+    Returns:
+        list[int] | None: The labels, or None when columns are the labels.
+    """
+    text = "".join(net.cpnet.itertext()) if net.cpnet is not None else ""
+    m = re.search(r"List\.nth\s*\(\[([^\]]*)\],\s*argmax xs\)", text)
+    if not m:
+        return None
+    return [int(v.strip().replace("~", "-")) for v in m.group(1).split(",")]
+
+
 # Function to compute the class the net denotes for one sample.
 def evaluate(net, x, default_class=0):
     """Compute the class the net denotes for one sample.
@@ -242,7 +262,9 @@ def evaluate(net, x, default_class=0):
             total = vec if total is None else [a + b for a, b in zip(total, vec)]
         if total is None or all(v == 0.0 for v in total):
             return int(default_class)      # every tree abstained
-        return _argmax(total)
+        labels = _rf_label_table(net)
+        best = _argmax(total)
+        return labels[best] if labels else best
 
     # --- GBDT: per-class channels, additive scores, then threshold/argmax -
     scores = {}

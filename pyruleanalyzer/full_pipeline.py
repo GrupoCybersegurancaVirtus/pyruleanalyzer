@@ -187,27 +187,23 @@ def full_pipeline(
                 stratify=y_train if len(np.unique(y_train)) > 1 else None
             )
         
-        # Treinar modelo
-        model = PyRuleAnalyzer.new_model(model=model_type)
-        
-        # Ajustar parâmetros específicos por tipo via classifier interno
-        if hasattr(model, 'classifier'):
-            estimator_params = {}
-            if n_estimators is not None:
-                estimator_params['n_estimators'] = n_estimators
-            if max_depth is not None:
-                estimator_params['max_depth'] = max_depth
-            if min_samples_split is not None:
-                estimator_params['min_samples_split'] = min_samples_split
-            
-            for key, val in estimator_params.items():
-                clf = model.classifier
-                if hasattr(clf, 'set_params'):
-                    try:
-                        clf.set_params(**{key: val})
-                    except Exception:
-                        pass
-        
+        # Treinar modelo: os hiperparâmetros dados sobrepõem os padrões e vão
+        # para o estimador do scikit-learn (um parâmetro inválido levanta erro
+        # em vez de ser ignorado).
+        params = dict(PyRuleAnalyzer._get_default_params(model_type))
+        if n_estimators is not None:
+            if model_type == 'Decision Tree':
+                import warnings
+                warnings.warn("n_estimators does not apply to a Decision Tree; "
+                              "ignored", UserWarning, stacklevel=2)
+            else:
+                params['n_estimators'] = n_estimators
+        if max_depth is not None:
+            params['max_depth'] = max_depth
+        if min_samples_split is not None:
+            params['min_samples_split'] = min_samples_split
+        model = PyRuleAnalyzer.new_model(model=model_type, params=params)
+
         model.fit(X_train, y_train)
         
         # Garantir que arrays estão compilados
