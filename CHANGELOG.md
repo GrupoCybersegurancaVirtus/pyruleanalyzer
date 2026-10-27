@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+**Breaking changes**
+* `verified_pipeline()` refuses an inconclusive check: a property left
+  undecided (usually an occurrence graph over `max_nodes`) sets
+  `passed=False`, is listed in `result["inconclusive"]` and raises
+  `VerificationError` unless `fail_on_inconclusive=False`. Large forests
+  need `reduction="stubborn"` or a larger `max_nodes`.
+* `verified_pipeline()` (`validation_size=0.25`) and `full_pipeline()`
+  (`validation_size=0.2`) refine on a validation split held out from the
+  training data; the test data is used only for the reported metrics. The
+  trees are therefore fit on fewer rows; `validation_size=0` restores the old
+  behaviour.
+* A single-sample prediction (`classify`, `predict(dict)`, the generated
+  `.py`) raises `KeyError` when a feature the rules test is missing, instead
+  of reading it as 0.
+* `full_pipeline()`: a test CSV without the target is ignored with a warning
+  instead of being replaced by training rows; string targets are encoded with
+  one `LabelEncoder` (`results["label_classes"]`); test columns are matched by
+  name; `fillna(0)` warns.
+* A Gradient Boosting model with a non-constant `init` estimator raises
+  `ValueError`: its initial score depends on the input and the rules cannot
+  express it.
+* `pyruleanalyzer.parsers`, an unused copy of the rule extractors, is removed.
+
+**New**
+* `PyRuleAnalyzer` is a scikit-learn classifier: `get_params`/`set_params`,
+  `classes_`, `score`, and it works with `clone`, `Pipeline`,
+  `cross_val_score` and `GridSearchCV`.
+
+**Security**
+* `load_binary()` validates the file (header, sizes, every node and child
+  index) before the arrays reach the C traversal, and the C wrappers check
+  their inputs; a corrupt or crafted `.bin` used to read out of bounds.
+* Guards and inscriptions read from `.cpn` files are evaluated by a
+  whitelisting AST interpreter instead of `eval` with emptied builtins, which
+  could be escaped.
+
 **Fixed**
 * Random Forest predictions answer the class label, not the index of its
   column: labels other than 0..K-1 (`1..3`, `-1/1`, ...) used to come back as
@@ -20,6 +56,17 @@
   memory) and in C/Arduino comments; a crafted CSV header could run code.
 * `full_pipeline()` passes `max_depth`, `n_estimators` and
   `min_samples_split` to the estimator; they used to be dropped silently.
+* Forest rules without a class distribution put their vote in the column of
+  their label (compiled arrays and Petri net), not in the column numbered
+  like the label.
+* `PyRuleAnalyzer.create()` fills `feature_names` from the training CSV, so
+  an array passed to `predict()` is read in CSV column order.
+* `examples/full_pipeline_example.py` uses `generate_arduino_sketch`.
+* README: speed is on par with scikit-learn (not 1.4x faster); refinement can
+  leave holes answered by `default_class`; large ensembles exceed the model
+  checker's budget; only integer labels are supported; pickle and `.cpn`
+  files should come from trusted sources.
+* Packaging: dependency lower bounds, status Beta, Python 3.14 in CI.
 
 ## 2.0.0
 

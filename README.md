@@ -24,7 +24,7 @@ that the simplified model still behaves like a classifier.
 * **One answer everywhere.** The in-memory engines, the Python, binary and C
   exports and the Petri net all compute the same function as scikit-learn,
   checked sample by sample at every threshold.
-* **Fast and small.** A vectorised C extension predicts about 1.4x faster than
+* **Fast and small.** A vectorised C extension predicts roughly on par with
   scikit-learn on a 100-tree forest; the binary and C exports are half its
   pickle size.
 * **Verified, not just tested.** The model becomes a Hierarchical Coloured
@@ -258,8 +258,12 @@ Merging siblings is a promotion upwards:
      `-- v2 >  1.2  -> class 0                               told nothing)
 ```
 
-Removing a rarely used leaf promotes its sibling the same way, so the removed
-region is absorbed, not left as a hole.
+Removing a rarely used leaf promotes its sibling the same way when the sibling
+is a leaf, so the removed region is absorbed. When the sibling is a subtree
+there is no single rule to promote: the removed region becomes a hole, answered
+by the model's `default_class` and counted in `classifier.fallback_activations`.
+On an unpruned decision tree this reached about 3% of the test samples, so
+check that counter after an aggressive removal.
 
 * **Random Forest refuses inter-tree fusion** (with a `RuntimeWarning`): its
   prediction is the average of one distribution per tree, so removing a voter
@@ -308,7 +312,9 @@ on a 100-tree Random Forest (depth <= 10, 20 features, 10 000 test samples,
 one thread). Read it as an order of magnitude, not a promise; run your own
 model with the scripts in `examples/`:
 
-* the C extension is about **1.4x faster than scikit-learn** `predict`;
+* the C extension is **roughly on par with scikit-learn** `predict` (1.04x on
+  the machine the figure was last measured on; the ratio depends on the
+  machine, the compiler and the model);
 * the numpy fallback is about a third of scikit-learn's speed;
 * the exported `.py` is meant to run **without** this package or scikit-learn,
   one sample at a time -- not to compete with vectorised code;
@@ -377,6 +383,13 @@ results = full_pipeline(
 print(results["generated_files"]["arduino"])   # path to model.ino
 print(results["memory_check"])                 # flash / RAM against the board
 ```
+
+`full_pipeline()` refines on a validation split held out from the training
+data (`validation_size=0.2`), never on the test CSV. A test CSV is matched to
+the training columns by name; one without the target column is ignored with a
+warning. String labels are encoded with one `LabelEncoder` for both files
+(`results["label_classes"]` maps the codes back), and missing values are
+filled with 0 with a warning.
 
 The sketch is self-contained: the tree arrays are inline, `pyra_predict()` is
 plain C, `setup()` prints the model's metadata and `loop()` reads the features,
@@ -507,12 +520,21 @@ The graph of an ensemble is large because its trees fire independently: a
 Random Forest of `n` trees has `2^n + 2` markings, and a `K`-class boosting
 model with `M` stages per class has `(3M+3)^K + 2` (the tests check the
 second formula). Beyond `max_nodes` the state-space properties get no verdict,
-rather than a guess. Partial-order reduction (stubborn sets) decides most of
-them on much smaller graphs:
+rather than a guess -- they are reported as *not decided*, and an ensemble
+beyond a handful of trees gets there quickly: on a 20-tree Random Forest, 14 of
+the 16 properties were not decided at `max_nodes=50_000`, and a 50-tree forest
+took about 12 minutes. For ensembles, use partial-order reduction (stubborn
+sets), which decides most of them on much smaller graphs:
 
 ```python
 model.model_check(which="final", reduction="stubborn")
 ```
+
+Keep in mind what remains when the graph is out of reach: B4 (structural, no
+state space) and PC (conformance, one run per input) are still decided, but
+they largely hold by construction -- the leaves of a scikit-learn tree are
+disjoint and the net is generated from the same rules as the classifier -- so
+on an unmodified model they confirm the export rather than add evidence.
 
 A 12-tree forest has 4 098 markings. With the reduction, CPNCheck decides its
 properties on 69 smaller graphs: 68 of them hold 1 020 markings between them,
@@ -572,14 +594,31 @@ With `fail_on_violation=True` (the default) the second check raises
 `VerificationError`, with the failing result attached, instead of exporting a
 model whose net no longer satisfies what the initial one did.
 
+A property that could not be decided -- typically because the occurrence graph
+went over `max_nodes` -- is not a pass either. With `fail_on_inconclusive=True`
+(the default) such a stage raises `VerificationError` too; with `False` the
+pipeline goes on, but `result["passed"]` is still `False` and
+`result["inconclusive"]` lists the undecided property ids per stage
+(`{"initial": [...], "final": [...]}`). For ensembles, pass
+`reduction="stubborn"` (and a larger `max_nodes` if needed) so the properties
+get a verdict.
+
+The refinement counts rule usage on a validation split held out from the
+training data (`validation_size=0.25` by default; its size is reported as
+`result["metrics"]["refinement_rows"]`). The test split is used only for the
+accuracy and the verification, so the reported accuracy is not optimistic.
+
 An already-trained estimator skips the training step, and
 `PyRuleAnalyzer.from_sklearn()` does the same wrapping on its own:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
 
-clf = RandomForestClassifier(n_estimators=50).fit(X_train, y_train)
-result = verified_pipeline(X=X, y=y, sklearn_model=clf, export_formats=("c", "arduino"))
+# A forest's state space grows as 2^n_trees: keep it small and use the
+# stubborn-set reduction, or the gate stops on undecided properties.
+clf = RandomForestClassifier(n_estimators=10, max_depth=5).fit(X_train, y_train)
+result = verified_pipeline(X=X, y=y, sklearn_model=clf, reduction="stubborn",
+                           export_formats=("c", "arduino"))
 
 analyzer = PyRuleAnalyzer.from_sklearn(clf)       # outside the pipeline
 ```
@@ -621,12 +660,34 @@ does not exist) unless you give a path:
 `model.save(path)` and `PyRuleAnalyzer.load(path)` pickle a model, recompiling
 the native function on load.
 
+**Security.** `PyRuleAnalyzer.load()`, `RuleClassifier.load()` and the
+`model_pkl` argument use `pickle`, and checking a `.cpn` file evaluates the
+inscriptions written in it: both can run arbitrary code. Only load models and
+nets you trust.
+
 ## API reference
 
 ### PyRuleAnalyzer
 
-The high-level entry point; it wraps a `RuleClassifier` and is compatible with
-scikit-learn (`fit`, `predict`, `predict_proba`).
+The high-level entry point; it wraps a `RuleClassifier` and is a scikit-learn
+classifier (`fit`, `predict`, `predict_proba`, `score`, `classes_`,
+`get_params`/`set_params`), so `clone`, `Pipeline`, `cross_val_score` and
+`GridSearchCV` work with `new_model(...)`:
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+search = GridSearchCV(PyRuleAnalyzer.new_model("Decision Tree", {"random_state": 0}),
+                      param_grid={"max_depth": [2, 3, 4]}, cv=5).fit(X_train, y_train)
+```
+
+The parameters are `model` and the hyperparameters of the scikit-learn
+estimator. `fit` trains and extracts the rules; refinement is a separate step
+(`execute_rule_refinement`), not part of a search or a cross-validation.
+
+**Labels.** Only integer class labels are supported (`0, 1, 2, ...` or any
+integers); string or other non-integer labels raise `ValueError`. Encode them
+first, e.g. with `sklearn.preprocessing.LabelEncoder`.
 
 | Method | Description |
 |---|---|
@@ -700,7 +761,6 @@ pyruleanalyzer/
 ├── pyruleanalyzer/
 │   ├── pyruleanalyzer.py     # PyRuleAnalyzer: the high-level entry point
 │   ├── rule_classifier.py    # Rule and RuleClassifier: the engine
-│   ├── parsers.py            # Rule extraction from scikit-learn models
 │   ├── exporters.py          # Python / binary / C export
 │   ├── dt_analyzer.py  rf_analyzer.py  gbdt_analyzer.py
 │   ├── _accel.py  _tree_traversal.c   # C extension and numpy fallback

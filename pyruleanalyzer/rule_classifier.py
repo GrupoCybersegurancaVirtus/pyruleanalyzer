@@ -360,6 +360,56 @@ class RuleClassifier(RuleExporterMixin):
                 'Impute the missing values before prediction.'
             )
 
+    # Method to list the features a rule set tests
+    def _used_features(self, rules: list) -> List[str]:
+        """The features the model answering with `rules` reads.
+
+        The union of the features tested by `rules`; a classifier loaded with
+        `load_binary` has no rules, so its compiled column names are used.
+        Cached per rule list (by identity and length), since `classify` asks
+        for it on every sample.
+
+        Args:
+            rules (List[Rule]): The rule set a prediction uses.
+
+        Returns:
+            List[str]: Feature names, sorted.
+        """
+        if not rules:
+            return list(getattr(self, '_array_feature_names', None) or [])
+        cache = getattr(self, '_used_features_cache', None)
+        if cache is not None and cache[0] is rules and cache[1] == len(rules):
+            return cache[2]
+        used = sorted({var for rule in rules
+                       for var, _, _ in getattr(rule, 'parsed_conditions', None) or []})
+        self._used_features_cache = (rules, len(rules), used)
+        return used
+
+    # Method to reject a sample that lacks a feature the model uses
+    def _assert_features_present(self, data, rules: list) -> None:
+        """Reject a single sample missing a feature the model tests.
+
+        The engines used to disagree on a missing feature: the compiled arrays
+        and the native function read it as 0, the iterative engine treated it
+        as "rule does not match". Neither reproduces the original model, so
+        it is an error.
+
+        Args:
+            data (Dict[str, float]): The instance to classify.
+            rules (List[Rule]): The rule set the prediction uses.
+
+        Raises:
+            KeyError: Naming the missing feature(s).
+        """
+        missing = [f for f in self._used_features(rules) if f not in data]
+        if missing:
+            shown = ', '.join(repr(f) for f in missing[:10])
+            more = f' (and {len(missing) - 10} more)' if len(missing) > 10 else ''
+            raise KeyError(
+                f'Sample is missing {len(missing)} feature(s) used by the '
+                f'model: {shown}{more}.'
+            )
+
     # Method to execute _quantize_input
     def _quantize_input(self, X):
         """Apply the configured input precision to a numpy array.
@@ -395,6 +445,7 @@ class RuleClassifier(RuleExporterMixin):
         # Compiled rule sets other than the current one are a cache: rebuilt
         # on demand, not worth the size of the pickle.
         state['_array_states'] = []
+        state.pop('_used_features_cache', None)
         # Also remove custom_rule_removal if it's a lambda or local function
         if 'custom_rule_removal' in state:
              # Reset to default logic string or None to be safe, 
@@ -566,8 +617,9 @@ class RuleClassifier(RuleExporterMixin):
                 return f"{tab}return {node['v']}\n"
             
             feat_name = node['f']
-            # Use repr(float(t)) for precision
-            code = f"{tab}if sample.get({feat_name!r}, 0) <= {repr(float(node['t']))}:\n"
+            # Use repr(float(t)) for precision. Index the sample directly: a
+            # missing feature raises KeyError instead of being read as 0.
+            code = f"{tab}if sample[{feat_name!r}] <={repr(float(node['t']))}:\n"
             code += build_code(node['l'], indent + 1)
             code += f"{tab}else:\n"
             code += build_code(node['r'], indent + 1)
@@ -691,7 +743,7 @@ class RuleClassifier(RuleExporterMixin):
                     if node['f'] == -2:
                         return f'{tab}return {repr(float(node["v"]))}\n'
                     feat = node['f']
-                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                     code += _build_code(node['l'], indent + 1, td)
                     code += f'{tab}else:\n'
                     code += _build_code(node['r'], indent + 1, td)
@@ -833,7 +885,7 @@ class RuleClassifier(RuleExporterMixin):
                     
                     feat = node['f']
                     # Use repr(float(t)) to ensure no numpy precision issues in literals
-                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                     code += build_rf_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_rf_code(node['r'], indent + 1)
@@ -922,7 +974,7 @@ class RuleClassifier(RuleExporterMixin):
                 
                 feat = node['f']
                 # Use repr(float(t)) for precision
-                code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                 code += build_dt_code(node['l'], indent + 1)
                 code += f"{tab}else:\n"
                 code += build_dt_code(node['r'], indent + 1)
@@ -973,6 +1025,10 @@ class RuleClassifier(RuleExporterMixin):
         # Every path below must answer with the rule set `final` selects:
         # final_rules, or initial_rules when there are none yet.
         rules = self._rules_for(final)
+
+        # A missing feature is an error on every engine (also checked before
+        # the fast paths, which would swallow it or read it as 0).
+        self._assert_features_present(data, rules)
 
         # --- FAST PATH 1: Array-based single-sample prediction ---
         # predict_batch selects (and, the first time, compiles) the arrays of
@@ -1453,6 +1509,7 @@ class RuleClassifier(RuleExporterMixin):
         n_classes: int = 0,
         default_class: int = 0,
         validate_structure: bool = True,
+        class_labels: Optional[list] = None,
     ) -> dict:
         """
         Convert a list of rules (all from one tree) into flat numpy arrays.
@@ -1476,6 +1533,9 @@ class RuleClassifier(RuleExporterMixin):
             default_class (int): Class assigned to uncovered regions (DT only).
             validate_structure (bool): Raise if the rules are not the leaves
                 of one tree.
+            class_labels (List[int], optional): The label of each RF
+                distribution column (see `_rf_labels`). A rule without a
+                distribution is one-hot encoded in its label's column.
 
         Returns:
             Dict with keys: 'feature_idx', 'threshold', 'children_left',
@@ -1503,10 +1563,18 @@ class RuleClassifier(RuleExporterMixin):
                 if rule.class_distribution is not None:
                     tree_dict[curr]['v'] = list(rule.class_distribution)
                 else:
-                    # Fallback: one-hot encode the class label
+                    # Fallback: one-hot encode the class label, in the
+                    # column that label stands for (labels 10/20/30 are
+                    # columns 0/1/2, not 10/20/30).
                     try:
-                        cls_idx = int(str(rule.class_).replace('Class', '').strip())
+                        label = int(str(rule.class_).replace('Class', '').strip())
                     except (ValueError, AttributeError):
+                        label = None
+                    if class_labels is not None and label in class_labels:
+                        cls_idx = list(class_labels).index(label)
+                    elif label is not None:
+                        cls_idx = label   # unknown label: read as a column
+                    else:
                         cls_idx = 0
                     one_hot = [0.0] * max(n_classes, cls_idx + 1)
                     one_hot[cls_idx] = 1.0
@@ -1706,6 +1774,7 @@ class RuleClassifier(RuleExporterMixin):
                     tree_rules_map[tid], feature_name_to_idx,
                     self.algorithm_type, n_classes,
                     default_class=self._default_class_int(),
+                    class_labels=self._rf_labels(n_classes),
                 )
                 tree_arrays.append(arr)
 
@@ -2374,6 +2443,13 @@ class RuleClassifier(RuleExporterMixin):
 
         Returns:
             RuleClassifier: A classifier ready for predict_batch().
+
+        Raises:
+            ValueError: If the file is not a valid model: unknown magic,
+                version or algorithm, truncated or trailing data, or tree
+                arrays the traversal could not walk safely (see
+                `_validate_tree_arrays`). The traversal does no bounds
+                checks, so the file is never trusted.
         """
         import struct
 
@@ -2381,87 +2457,136 @@ class RuleClassifier(RuleExporterMixin):
                       2: 'Gradient Boosting Decision Trees'}
 
         with open(filepath, 'rb') as f:
-            magic = f.read(4)
-            if magic != b'PYRA':
-                raise ValueError(f'Invalid binary model file (magic={magic!r})')
-            version = struct.unpack('<B', f.read(1))[0]
-            if version not in (1, 2, 3):
-                raise ValueError(f'Unsupported binary model version: {version}')
-            algo_byte = struct.unpack('<B', f.read(1))[0]
-            n_features = struct.unpack('<H', f.read(2))[0]
-            n_classes = struct.unpack('<H', f.read(2))[0]
-            n_trees = struct.unpack('<H', f.read(2))[0]
-            default_cls = struct.unpack('<i', f.read(4))[0]
-            flags = struct.unpack('<B', f.read(1))[0] if version >= 2 else 0
-            class_labels = list(range(n_classes))
-            if version >= 3:
-                class_labels = [struct.unpack('<i', f.read(4))[0]
-                                for _ in range(n_classes)]
+            data = f.read()
+        pos = 0
 
-            algorithm_type = algo_names[algo_byte]
+        # Read exactly `n` bytes, raising on a short read (not struct.error)
+        def _read(n):
+            nonlocal pos
+            if n < 0 or pos + n > len(data):
+                raise ValueError(
+                    f'Invalid binary model file: truncated at byte {pos} '
+                    f'(needed {n} more bytes, {len(data) - pos} left).'
+                )
+            chunk = data[pos:pos + n]
+            pos += n
+            return chunk
 
-            # GBDT metadata
-            gbdt_is_binary = False
-            gbdt_classes = []
-            gbdt_init_scores = {}
+        # Unpack one struct format from the next bytes
+        def _unpack(fmt):
+            return struct.unpack(fmt, _read(struct.calcsize(fmt)))[0]
+
+        magic = _read(4) if len(data) >= 4 else data
+        if magic != b'PYRA':
+            raise ValueError(f'Invalid binary model file (magic={magic!r})')
+        version = _unpack('<B')
+        if version not in (1, 2, 3):
+            raise ValueError(f'Unsupported binary model version: {version}')
+        algo_byte = _unpack('<B')
+        if algo_byte not in algo_names:
+            raise ValueError(f'Invalid binary model file: unknown algorithm '
+                             f'type {algo_byte}.')
+        n_features = _unpack('<H')
+        n_classes = _unpack('<H')
+        n_trees = _unpack('<H')
+        default_cls = _unpack('<i')
+        flags = _unpack('<B') if version >= 2 else 0
+        class_labels = list(range(n_classes))
+        if version >= 3:
+            class_labels = [_unpack('<i') for _ in range(n_classes)]
+
+        algorithm_type = algo_names[algo_byte]
+        if algorithm_type == 'Random Forest' and n_classes < 1:
+            raise ValueError('Invalid binary model file: a Random Forest '
+                             'needs at least one class.')
+
+        # GBDT metadata
+        gbdt_is_binary = False
+        gbdt_classes = []
+        gbdt_init_scores = {}
+        if algorithm_type == 'Gradient Boosting Decision Trees':
+            gbdt_is_binary = bool(_unpack('<B'))
+            n_gbdt_classes = _unpack('<H')
+            for _ in range(n_gbdt_classes):
+                gbdt_classes.append(_unpack('<i'))
+            for cl in gbdt_classes:
+                gbdt_init_scores[cl] = _unpack('<d')
+
+        # Feature names
+        feature_names = []
+        for _ in range(n_features):
+            name_len = _unpack('<H')
+            try:
+                feature_names.append(_read(name_len).decode('utf-8'))
+            except UnicodeDecodeError as e:
+                raise ValueError(f'Invalid binary model file: feature name '
+                                 f'is not utf-8 ({e}).') from None
+
+        # Bytes per node: feature_idx, threshold, both children, value.
+        value_size = {'Decision Tree': 4, 'Random Forest': n_classes * 8,
+                      'Gradient Boosting Decision Trees': 8}[algorithm_type]
+        node_size = 4 + 8 + 4 + 4 + value_size
+
+        # Trees
+        tree_arrays = []
+        tree_class_groups = []
+        tree_is_init = []
+
+        for t in range(n_trees):
+            n_nodes = _unpack('<i')
+
             if algorithm_type == 'Gradient Boosting Decision Trees':
-                gbdt_is_binary = bool(struct.unpack('<B', f.read(1))[0])
-                n_gbdt_classes = struct.unpack('<H', f.read(2))[0]
-                for _ in range(n_gbdt_classes):
-                    gbdt_classes.append(struct.unpack('<i', f.read(4))[0])
-                for cl in gbdt_classes:
-                    gbdt_init_scores[cl] = struct.unpack('<d', f.read(8))[0]
+                is_init = bool(_unpack('<B'))
+                if is_init:
+                    init_score = _unpack('<d')
+                    cg = _unpack('<i')
+                    tree_arrays.append({'init_score': init_score})
+                    tree_class_groups.append(cg)
+                    tree_is_init.append(True)
+                    continue
+                else:
+                    cg = _unpack('<i')
+                    tree_class_groups.append(cg)
+                    tree_is_init.append(False)
 
-            # Feature names
-            feature_names = []
-            for _ in range(n_features):
-                name_len = struct.unpack('<H', f.read(2))[0]
-                feature_names.append(f.read(name_len).decode('utf-8'))
+            # Bounded by the bytes left, so a forged count cannot make us
+            # allocate (or traverse) more than the file holds.
+            if n_nodes < 1 or n_nodes * node_size > len(data) - pos:
+                raise ValueError(
+                    f'Invalid binary model file: tree {t} has n_nodes='
+                    f'{n_nodes} ({len(data) - pos} bytes left).'
+                )
 
-            # Trees
-            tree_arrays = []
-            tree_class_groups = []
-            tree_is_init = []
+            feature_idx = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
+            threshold_arr = np.frombuffer(_read(n_nodes * 8), dtype='<f8').astype(np.float64)
+            children_left = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
+            children_right = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
 
-            for _ in range(n_trees):
-                n_nodes = struct.unpack('<i', f.read(4))[0]
+            if algorithm_type == 'Decision Tree':
+                value_arr = np.frombuffer(_read(n_nodes * 4), dtype='<i4').astype(np.int32)
+            elif algorithm_type == 'Random Forest':
+                value_arr = np.frombuffer(
+                    _read(n_nodes * n_classes * 8), dtype='<f8'
+                ).astype(np.float64).reshape(n_nodes, n_classes)
+            else:  # GBDT
+                value_arr = np.frombuffer(_read(n_nodes * 8), dtype='<f8').astype(np.float64)
 
-                if algorithm_type == 'Gradient Boosting Decision Trees':
-                    is_init = bool(struct.unpack('<B', f.read(1))[0])
-                    if is_init:
-                        init_score = struct.unpack('<d', f.read(8))[0]
-                        cg = struct.unpack('<i', f.read(4))[0]
-                        tree_arrays.append({'init_score': init_score})
-                        tree_class_groups.append(cg)
-                        tree_is_init.append(True)
-                        continue
-                    else:
-                        cg = struct.unpack('<i', f.read(4))[0]
-                        tree_class_groups.append(cg)
-                        tree_is_init.append(False)
+            tree = {
+                'feature_idx': feature_idx,
+                'threshold': threshold_arr,
+                'children_left': children_left,
+                'children_right': children_right,
+                'value': value_arr,
+                'max_depth': _unpack('<i'),
+            }
+            cls._validate_tree_arrays(tree, n_features, t)
+            tree_arrays.append(tree)
 
-                feature_idx = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
-                threshold_arr = np.frombuffer(f.read(n_nodes * 8), dtype=np.float64).copy()
-                children_left = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
-                children_right = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
-
-                if algorithm_type == 'Decision Tree':
-                    value_arr = np.frombuffer(f.read(n_nodes * 4), dtype=np.int32).copy()
-                elif algorithm_type == 'Random Forest':
-                    value_arr = np.frombuffer(
-                        f.read(n_nodes * n_classes * 8), dtype=np.float64
-                    ).reshape(n_nodes, n_classes).copy()
-                else:  # GBDT
-                    value_arr = np.frombuffer(f.read(n_nodes * 8), dtype=np.float64).copy()
-
-                tree_arrays.append({
-                    'feature_idx': feature_idx,
-                    'threshold': threshold_arr,
-                    'children_left': children_left,
-                    'children_right': children_right,
-                    'value': value_arr,
-                    'max_depth': struct.unpack('<i', f.read(4))[0],
-                })
+        if pos != len(data):
+            raise ValueError(
+                f'Invalid binary model file: {len(data) - pos} unexpected '
+                'trailing bytes.'
+            )
 
         # Build a minimal RuleClassifier instance
         # We use __new__ to bypass __init__ (no Rule objects needed)
@@ -2492,6 +2617,68 @@ class RuleClassifier(RuleExporterMixin):
         obj.input_dtype = 'float32' if flags & 1 else None
 
         return obj
+
+    # Method to check that tree arrays can be traversed safely
+    @staticmethod
+    def _validate_tree_arrays(tree: dict, n_features: int, tree_no: int = 0) -> None:
+        """Check one tree's arrays against what the traversal assumes.
+
+        The C traversal reads ``X[i, feature_idx[node]]`` and follows the
+        children without bounds checks, so arrays from an untrusted source
+        must hold:
+
+        - a leaf is a self-loop (both children are the node itself) with
+          ``feature_idx == 0`` and ``threshold == -inf``, as
+          `_build_single_tree_arrays` writes it;
+        - any other node has ``0 <= feature_idx < n_features`` and both
+          children in ``[0, n_nodes)``, neither being the node itself;
+        - ``0 <= max_depth <= n_nodes``.
+
+        Args:
+            tree (dict): 'feature_idx', 'threshold', 'children_left',
+                'children_right', 'max_depth'.
+            n_features (int): Number of input columns the model reads.
+            tree_no (int): Position of the tree, for the error message.
+
+        Raises:
+            ValueError: Naming the first violated invariant.
+        """
+        feat = tree['feature_idx']
+        thr = tree['threshold']
+        left = tree['children_left']
+        right = tree['children_right']
+        n_nodes = len(feat)
+
+        # Raise with the tree and the first offending node
+        def _fail(what, mask):
+            node = int(np.flatnonzero(mask)[0])
+            raise ValueError(
+                f'Invalid tree arrays (tree {tree_no}, node {node}): {what}.'
+            )
+
+        if n_nodes < 1 or not (len(thr) == len(left) == len(right) == n_nodes):
+            raise ValueError(f'Invalid tree arrays (tree {tree_no}): '
+                             'arrays are empty or of different lengths.')
+        ids = np.arange(n_nodes)
+        is_leaf = (left == ids) & (right == ids)
+        bad = is_leaf & ((feat != 0) | ~np.isneginf(thr))
+        if bad.any():
+            _fail('a leaf must have feature_idx 0 and threshold -inf', bad)
+        inner = ~is_leaf
+        bad = inner & ((feat < 0) | (feat >= n_features))
+        if bad.any():
+            _fail(f'feature_idx out of range [0, {n_features})', bad)
+        bad = inner & ((left < 0) | (left >= n_nodes)
+                       | (right < 0) | (right >= n_nodes))
+        if bad.any():
+            _fail(f'child index out of range [0, {n_nodes})', bad)
+        bad = inner & ((left == ids) | (right == ids))
+        if bad.any():
+            _fail('a split node cannot be its own child', bad)
+        depth = int(tree['max_depth'])
+        if not 0 <= depth <= n_nodes:
+            raise ValueError(f'Invalid tree arrays (tree {tree_no}): '
+                             f'max_depth={depth} not in [0, {n_nodes}].')
 
     # Method to execute export_to_c_header
     def export_to_c_header(
@@ -3971,7 +4158,7 @@ class RuleClassifier(RuleExporterMixin):
                         if node['f'] == -2:
                             return f'{tab}return {repr(float(node["v"]))}\n'
                         feat = node['f']
-                        code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                        code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                         code += _build_export_code(node['l'], indent + 1, td)
                         code += f'{tab}else:\n'
                         code += _build_export_code(node['r'], indent + 1, td)
@@ -4088,7 +4275,7 @@ class RuleClassifier(RuleExporterMixin):
                         
                         feat = node['f']
                         # Use repr(float(t)) for precision
-                        code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                        code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                         code += build_rf_code(node['l'], indent + 1)
                         code += f"{tab}else:\n"
                         code += build_rf_code(node['r'], indent + 1)
@@ -4171,7 +4358,7 @@ class RuleClassifier(RuleExporterMixin):
                     
                     feat = node['f']
                     # Use repr(float(t)) for precision
-                    code = f"{tab}if sample.get({feat!r}, 0) <= {repr(float(node['t']))}:\n"
+                    code = f"{tab}if sample[{feat!r}] <={repr(float(node['t']))}:\n"
                     code += build_dt_code(node['l'], indent + 1)
                     code += f"{tab}else:\n"
                     code += build_dt_code(node['r'], indent + 1)
@@ -5056,6 +5243,23 @@ class RuleClassifier(RuleExporterMixin):
         is_binary = len(classes) == 2
         learning_rate = model.get_params()['learning_rate']
 
+        # The init score is read once, as a constant (one rule per class).
+        # That holds for 'zero' and for scikit-learn's default prior
+        # (a DummyClassifier); any other init estimator scores depend on x,
+        # and rules built from a single constant would be silently wrong.
+        from sklearn.dummy import DummyClassifier
+        init = getattr(model, 'init_', 'zero')
+        if not (isinstance(init, str) and init == 'zero'):
+            if (not isinstance(init, DummyClassifier)
+                    or getattr(init, 'strategy', 'prior') == 'stratified'):
+                raise ValueError(
+                    'Unsupported GradientBoostingClassifier init estimator '
+                    f'{type(init).__name__}: only init=None (the default '
+                    "constant prior) or init='zero' can be expressed as "
+                    'rules, because any other init gives an initial score '
+                    'that depends on the input.'
+                )
+
         all_rules = []
         init_scores = {}
 
@@ -5068,8 +5272,7 @@ class RuleClassifier(RuleExporterMixin):
 
         for class_idx, class_label in class_iter:
             # Compute init score from the prior estimator (DummyClassifier)
-            init = model.init_
-            if init == 'zero':
+            if isinstance(init, str):
                 init_score = 0.0
             else:
                 n_features = len(feature_names)

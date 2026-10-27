@@ -215,6 +215,8 @@ State-space explosion
 
 A :math:`K`-class GBDT with :math:`M` stages per class has :math:`(3M+3)^K + 2` reachable markings and :math:`K(3M+2)(3M+3)^{K-1} + 2` arcs, because the channels interleave freely; the test suite checks both formulas against generated nets. A three-class model with a hundred stages is out of reach for any explicit-state tool, CPN Tools included. When the graph exceeds ``max_nodes`` (200,000 by default) the state-space properties get **no verdict** — the structural analysis and the conformance test still run. An earlier version fell back to a compositional mode; it was removed because its preservation argument had not been proven, and an unproven reduction is not something to report results from.
 
+Random Forests reach that limit quickly, since :math:`n` independent trees give :math:`2^n + 2` markings: on a 20-tree forest, 14 of the 16 properties were reported as not decided at ``max_nodes=50_000``, and a 50-tree forest took about 12 minutes. For ensembles beyond a handful of trees, pass ``reduction="stubborn"`` (stubborn-set partial-order reduction in CPNCheck), which decides the same properties on much smaller graphs. B4 and PC are decided either way, but they largely hold by construction -- the leaves of a scikit-learn tree are disjoint and the net is generated from the classifier's own rules -- so on an unmodified model they confirm the export rather than add independent evidence.
+
 
 .. _model-checking#validation:
 
@@ -270,7 +272,7 @@ The verified pipeline
    1. train a scikit-learn model, or take one that is already trained
    2. extract the rules and export the initial HCPN
    3. verify the initial model                           (baseline)
-   4. refine the rules
+   4. refine the rules, on a validation split held out from the training data
    5. verify the refined model                           (acceptance test)
    6. export: Python, binary, C header, Arduino sketch
    7. deploy to the edge device                          (optional)
@@ -289,7 +291,9 @@ The verified pipeline
        export_formats=("python", "binary", "c", "arduino"),
    )
 
-With ``fail_on_violation=True`` (the default) step 5 raises ``VerificationError`` instead of exporting a model whose net violates a property; the failing result is attached to the exception. An already-trained estimator skips step 1 (``sklearn_model=clf``). Giving the board's FQBN and port also compiles and uploads the sketch with ``arduino-cli``; board sizing is covered in :doc:`modeling_for_arduino`.
+With ``fail_on_violation=True`` (the default) step 5 raises ``VerificationError`` instead of exporting a model whose net violates a property; the failing result is attached to the exception. A property that could not be decided (typically an occurrence graph over ``max_nodes``) is not a pass either: with ``fail_on_inconclusive=True`` (the default) steps 3 and 5 raise ``VerificationError`` for it as well; with ``False`` the pipeline continues, but ``result["passed"]`` is ``False`` and ``result["inconclusive"]`` lists the undecided property ids per stage (``{"initial": [...], "final": [...]}``). For ensembles, pass ``reduction="stubborn"`` so the properties get a verdict.
+
+Step 4 counts rule usage on a validation split held out from the training data (``validation_size=0.25`` by default, reported as ``result["metrics"]["refinement_rows"]``); the test split is used only for accuracy and verification. An already-trained estimator skips step 1 (``sklearn_model=clf``). Giving the board's FQBN and port also compiles and uploads the sketch with ``arduino-cli``; board sizing is covered in :doc:`modeling_for_arduino`.
 
 
 .. _model-checking#cli:

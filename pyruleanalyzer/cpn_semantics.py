@@ -25,6 +25,8 @@ which model family a net encodes, where its sample is, what its leaves emit --
 because those are facts about *these* nets, not about Coloured Petri Nets.
 """
 
+import ast
+import operator
 import re
 
 from cpncheck.net import CPNNet as _ParsedNet
@@ -62,6 +64,170 @@ def sml_to_python(expr):
     return out or "True"
 
 
+# ---------------------------------------------------------------------------
+# Restricted evaluation
+# ---------------------------------------------------------------------------
+#
+# Guards and arc inscriptions come from a ``.cpn`` file, which may have been
+# written by anyone. ``eval`` with empty ``__builtins__`` is no sandbox --
+# ``().__class__.__base__.__subclasses__()`` reaches arbitrary code -- so the
+# expressions are parsed with :mod:`ast` and only the constructs the exporter
+# writes are interpreted: constants, names bound in the environment, item
+# access (``x['f3']``), comparisons, ``and``/``or``/``not``, unary minus,
+# arithmetic on numbers, list/tuple literals and calls to functions found in
+# the environment. Attribute access, private or dunder names, lambdas,
+# comprehensions and every other construct are rejected before anything runs.
+
+_COMPARE = {
+    ast.Eq: operator.eq, ast.NotEq: operator.ne,
+    ast.Lt: operator.lt, ast.LtE: operator.le,
+    ast.Gt: operator.gt, ast.GtE: operator.ge,
+}
+_BINARY = {
+    ast.Add: operator.add, ast.Sub: operator.sub,
+    ast.Mult: operator.mul, ast.Div: operator.truediv,
+}
+_UNARY = {ast.USub: operator.neg, ast.UAdd: operator.pos}
+_ALLOWED = (ast.Expression, ast.Constant, ast.Name, ast.Load, ast.Subscript,
+            ast.Compare, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
+            ast.BinOp, ast.List, ast.Tuple, ast.Call,
+            *_COMPARE, *_BINARY, *_UNARY)
+_CONSTANTS = (bool, int, float, str)
+_NUMBERS = (int, float)
+
+
+# Function to check that an expression tree uses only the whitelisted nodes.
+def _validate(tree):
+    """Reject any construct outside the whitelist, before evaluating.
+
+    The whole tree is checked, including branches that short-circuiting
+    would never reach.
+
+    Args:
+        tree (ast.AST): The parsed expression.
+
+    Raises:
+        ValueError: Naming the first construct that is not allowed.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED):
+            raise ValueError(f"disallowed construct in net expression: "
+                             f"{type(node).__name__}")
+        if isinstance(node, ast.Name) and node.id.startswith("_"):
+            raise ValueError(f"disallowed name in net expression: {node.id!r}")
+        if isinstance(node, ast.Constant) and not isinstance(node.value, _CONSTANTS):
+            raise ValueError(f"disallowed constant in net expression: "
+                             f"{node.value!r}")
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError(f"disallowed call of {type(node.func).__name__} "
+                                 "in net expression: only functions named in "
+                                 "the environment may be called")
+            if node.keywords:
+                raise ValueError("disallowed keyword arguments in net expression")
+
+
+# Function to interpret a validated expression tree.
+def _interpret(node, env):
+    """Evaluate a node of a tree that passed :func:`_validate`.
+
+    Args:
+        node (ast.AST): The node.
+        env (dict): Names visible to the expression.
+
+    Returns:
+        The value of the node.
+
+    Raises:
+        ValueError: On an unbound name or an operation on the wrong types.
+    """
+    if isinstance(node, ast.Expression):
+        return _interpret(node.body, env)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise ValueError(f"unbound name in net expression: {node.id!r}")
+        return env[node.id]
+    if isinstance(node, ast.Subscript):
+        value = _interpret(node.value, env)
+        key = _interpret(node.slice, env)
+        if not isinstance(value, (dict, list, tuple)):
+            raise ValueError(f"cannot index a {type(value).__name__}")
+        return value[key]
+    if isinstance(node, ast.Compare):
+        left = _interpret(node.left, env)
+        for op, comp in zip(node.ops, node.comparators):
+            right = _interpret(comp, env)
+            if not _COMPARE[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.BoolOp):
+        want = isinstance(node.op, ast.Or)
+        value = None
+        for sub in node.values:
+            value = _interpret(sub, env)
+            if bool(value) is want:
+                return value
+        return value
+    if isinstance(node, ast.UnaryOp):
+        operand = _interpret(node.operand, env)
+        if isinstance(node.op, ast.Not):
+            return not operand
+        if not isinstance(operand, _NUMBERS):
+            raise ValueError(f"unary {type(node.op).__name__} on a "
+                             f"{type(operand).__name__}")
+        return _UNARY[type(node.op)](operand)
+    if isinstance(node, ast.BinOp):
+        left = _interpret(node.left, env)
+        right = _interpret(node.right, env)
+        if not (isinstance(left, _NUMBERS) and isinstance(right, _NUMBERS)):
+            raise ValueError(f"{type(node.op).__name__} on "
+                             f"{type(left).__name__} and {type(right).__name__}")
+        return _BINARY[type(node.op)](left, right)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        items = [_interpret(e, env) for e in node.elts]
+        return items if isinstance(node, ast.List) else tuple(items)
+    if isinstance(node, ast.Call):
+        func = env.get(node.func.id)
+        if not callable(func):
+            raise ValueError(f"{node.func.id!r} is not a function of the net")
+        return func(*[_interpret(a, env) for a in node.args])
+    raise ValueError(f"disallowed construct in net expression: "
+                     f"{type(node).__name__}")
+
+
+# Function to evaluate untrusted Python expression text safely.
+def safe_eval(expr, env=None):
+    """Evaluate an expression read from a net without running arbitrary code.
+
+    A drop-in for ``eval(expr, {"__builtins__": {}}, env)`` restricted to the
+    constructs listed above.
+
+    Args:
+        expr (str): Python expression text (for a guard, the output of
+            :func:`sml_to_python`).
+        env (dict, optional): Names the expression may read or call.
+
+    Returns:
+        The value of the expression.
+
+    Raises:
+        TypeError: If ``expr`` is not a string.
+        ValueError: If the expression uses a construct outside the whitelist,
+            reads an unbound name, or does not parse.
+    """
+    if not isinstance(expr, str):
+        raise TypeError(f"safe_eval() needs a string, got {type(expr).__name__}")
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"cannot parse net expression {expr!r}: {exc.msg}")
+    _validate(tree)
+    return _interpret(tree, dict(env or {}))
+
+
 # Function to evaluate a translated SML expression against a sample.
 def _eval(expr, x):
     """Evaluate a translated SML expression against a sample.
@@ -72,8 +238,11 @@ def _eval(expr, x):
 
     Returns:
         The Python value of the expression.
+
+    Raises:
+        ValueError: If the expression is not one the exporter writes.
     """
-    return eval(sml_to_python(expr), {"__builtins__": {}}, {"x": x})  # noqa: S307
+    return safe_eval(sml_to_python(expr), {"x": x})
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +463,7 @@ def evaluate(net, x, default_class=0):
             env[f"sc{name.rsplit('_', 1)[-1]}"] = sc
 
     fired = [n for n, g in decides
-             if eval(sml_to_python(g or "true"), {"__builtins__": {}}, env)]  # noqa: S307
+             if safe_eval(sml_to_python(g or "true"), env)]
     assert len(fired) == 1, (
         f"{len(fired)} Decide transitions enabled ({fired}) -- the decision "
         "guards are not a partition"

@@ -13,9 +13,11 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">= 3.9"
 dependencies = [
-    "numpy",
-    "pandas",
-    "scikit-learn",
+    "numpy>=1.21",
+    # read_csv(on_bad_lines=...) needs pandas 1.3.
+    "pandas>=1.3",
+    # feature_names_in_ (rule extraction, from_sklearn) needs scikit-learn 1.0.
+    "scikit-learn>=1.0",
     "matplotlib",
     # Model checking of the exported .cpn models (pure standard library).
     "cpncheck>=0.2.1",
@@ -24,7 +26,7 @@ keywords = ["scikit-learn", "decision tree", "random forest", "gradient boosting
             "rule extraction", "explainability", "petri nets", "model checking",
             "arduino", "embedded"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
@@ -34,6 +36,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: C",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",

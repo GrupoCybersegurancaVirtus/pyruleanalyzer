@@ -19,6 +19,9 @@ jobs:
             python: "3.9"
           - os: ubuntu-latest
             python: "3.13"
+          # The newest Python the dependencies publish wheels for.
+          - os: ubuntu-latest
+            python: "3.14"
           - os: windows-latest
             python: "3.12"
     steps:

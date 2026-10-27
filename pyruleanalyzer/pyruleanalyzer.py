@@ -29,21 +29,60 @@ import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict, Union, Any
 
+from sklearn.base import BaseEstimator, ClassifierMixin
+
 from .rule_classifier import RuleClassifier
 
 
-class PyRuleAnalyzer:
+# Function to return the scikit-learn estimator class of a model type.
+def _sklearn_estimator_class(algorithm_type: str):
+    """The scikit-learn classifier trained for ``algorithm_type``.
+
+    Args:
+        algorithm_type: "Decision Tree", "Random Forest" or
+            "Gradient Boosting Decision Trees".
+
+    Returns:
+        type: The scikit-learn estimator class.
+
+    Raises:
+        ValueError: If the model type is not supported.
+    """
+    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+    from sklearn.tree import DecisionTreeClassifier
+
+    classes = {
+        'Decision Tree': DecisionTreeClassifier,
+        'Random Forest': RandomForestClassifier,
+        'Gradient Boosting Decision Trees': GradientBoostingClassifier,
+    }
+    if algorithm_type not in classes:
+        raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
+    return classes[algorithm_type]
+
+
+class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
     """
     High-level interface for creating, refining, and deploying classifiers.
-    
+
     This class simplifies the pyruleanalyzer workflow into a few intuitive
     methods, handling all the complexity internally.
-    
+
+    It is a scikit-learn classifier: ``get_params``/``set_params`` expose the
+    model type (``model``) and the hyperparameters of the underlying
+    scikit-learn estimator, so ``sklearn.base.clone``, ``Pipeline``,
+    ``cross_val_score`` and ``GridSearchCV`` work with the
+    ``new_model(...).fit(X, y)`` workflow. ``fit`` only trains the model and
+    extracts its rules; refinement (``execute_rule_refinement``) is a separate
+    step and is not part of a cross-validation or grid search.
+
     Attributes:
         classifier (RuleClassifier): The underlying RuleClassifier instance.
         feature_names (list): Names of features used by the model.
         class_names (list): Names of target classes.
-    
+        classes_ (np.ndarray): The integer class labels, as returned by
+            ``predict`` (fitted analyzers only).
+
     Example:
         >>> analyzer = PyRuleAnalyzer.create(
         ...     train_path="data/train.csv",
@@ -57,23 +96,164 @@ class PyRuleAnalyzer:
     """
     
     # Method to init.
-    def __init__(self, classifier: RuleClassifier, feature_names: List[str], class_names: List[str]):
+    def __init__(
+        self,
+        classifier: Optional[RuleClassifier] = None,
+        feature_names: Optional[List[str]] = None,
+        class_names: Optional[List[str]] = None,
+        *,
+        model: Optional[str] = None,
+        **params,
+    ):
         """
-        Initialize a PyRuleAnalyzer with an existing RuleClassifier.
-        
+        Initialize a PyRuleAnalyzer with an existing RuleClassifier, or an
+        untrained one from a model type and its hyperparameters.
+
+        ``PyRuleAnalyzer(model=..., **params)`` is the form
+        ``sklearn.base.clone`` uses (``get_params`` returns ``model`` and the
+        hyperparameters); ``new_model`` is the documented way to build it.
+
         Args:
-            classifier: A trained RuleClassifier instance.
+            classifier: A trained RuleClassifier instance. None builds an
+                untrained analyzer from ``model`` and ``params``.
             feature_names: List of feature names.
             class_names: List of class names.
+            model: Model type of an untrained analyzer - "Decision Tree"
+                (default), "Random Forest" or "Gradient Boosting Decision Trees".
+            **params: Hyperparameters of the scikit-learn estimator of an
+                untrained analyzer, passed as they are.
+
+        Raises:
+            TypeError: If ``model`` or hyperparameters are given together
+                with ``classifier``.
         """
+        if classifier is None:
+            classifier = RuleClassifier([], algorithm_type=model or "Decision Tree")
+            # fit() trains the scikit-learn estimator with these.
+            classifier.model_parameters = params
+        elif model is not None or params:
+            raise TypeError(
+                "model and hyperparameters only apply to an untrained "
+                "analyzer (classifier=None); use PyRuleAnalyzer.new_model()."
+            )
         self.classifier = classifier
-        self.feature_names = feature_names
-        self.class_names = class_names
-    
+        self.feature_names = feature_names if feature_names is not None else []
+        self.class_names = class_names if class_names is not None else []
+
+    # ==========================================================================
+    # SCIKIT-LEARN ESTIMATOR API
+    # ==========================================================================
+
+    # Method to get params.
+    def get_params(self, deep: bool = True) -> Dict[str, Any]:
+        """
+        Parameters of this estimator, as scikit-learn expects them.
+
+        Args:
+            deep: Ignored (the analyzer holds no nested estimator).
+
+        Returns:
+            Dictionary with ``model`` (the model type) and the hyperparameters
+            of the scikit-learn estimator.
+        """
+        params = getattr(self.classifier, 'model_parameters', None) or {}
+        return {"model": self.classifier.algorithm_type, **params}
+
+    # Method to set params.
+    def set_params(self, **params) -> "PyRuleAnalyzer":
+        """
+        Set the model type and/or hyperparameters; they apply at the next fit.
+
+        Changing ``model`` replaces the classifier with an untrained one of
+        that type (keeping the hyperparameters).
+
+        Args:
+            **params: ``model`` and/or hyperparameters of the scikit-learn
+                estimator.
+
+        Returns:
+            self
+
+        Raises:
+            ValueError: If a hyperparameter is not one of the estimator's.
+        """
+        current = self.get_params()
+        model = params.pop("model", current.pop("model"))
+        valid = _sklearn_estimator_class(model)().get_params(deep=False)
+        invalid = [k for k in params if k not in valid]
+        if invalid:
+            raise ValueError(
+                f"Invalid parameter(s) {invalid} for estimator "
+                f"{type(self).__name__} with model={model!r}. Valid "
+                f"parameters are: {['model'] + sorted(valid)}."
+            )
+        current.update(params)
+        if model != self.classifier.algorithm_type:
+            self.classifier = RuleClassifier([], algorithm_type=model)
+        self.classifier.model_parameters = current
+        return self
+
+    # Method to return the integer class labels.
+    @property
+    def classes_(self) -> np.ndarray:
+        """The class labels of a fitted analyzer, as ``predict`` returns them."""
+        if not self.class_names:
+            raise AttributeError(
+                "This PyRuleAnalyzer is not fitted yet; it has no classes_."
+            )
+        try:
+            return np.asarray([int(c) for c in self.class_names])
+        except (TypeError, ValueError):
+            return np.asarray(self.class_names)
+
+    # Method to tell scikit-learn whether the analyzer is fitted.
+    def __sklearn_is_fitted__(self) -> bool:
+        """True once the analyzer holds extracted rules."""
+        return bool(self.classifier.initial_rules)
+
+    # Method to score.
+    def score(self, X, y, sample_weight=None) -> float:
+        """
+        Mean accuracy of ``predict(X)`` (refined rules, if any) on ``y``.
+
+        Args:
+            X: Test samples (DataFrame or 2-D array).
+            y: True integer labels.
+            sample_weight: Optional sample weights.
+
+        Returns:
+            float: The accuracy.
+        """
+        from sklearn.metrics import accuracy_score
+        return accuracy_score(np.asarray(y), np.asarray(self.predict(X)),
+                              sample_weight=sample_weight)
+
     # ==========================================================================
     # FACTORY METHODS
     # ==========================================================================
-    
+
+    # Method to read the feature names of a CSV file.
+    @staticmethod
+    def _csv_feature_names(path: str) -> List[str]:
+        """The feature columns of a CSV, named as RuleClassifier.process_data names them.
+
+        A first line with letters is a header (the last column is the
+        target); otherwise the features are ``v1 ... vn``.
+
+        Args:
+            path: Path to the CSV file.
+
+        Returns:
+            list: The feature names, in column order.
+        """
+        with open(path, 'r', encoding='latin-1') as f:
+            first_line = f.readline().strip()
+        if any(c.isalpha() for c in first_line):
+            columns = pd.read_csv(path, nrows=0, encoding='latin-1').columns
+            return [str(c).strip() for c in columns][:-1]
+        n_columns = pd.read_csv(path, header=None, nrows=1, encoding='latin-1').shape[1]
+        return [f'v{i+1}' for i in range(n_columns - 1)]
+
     # Method to create.
     @staticmethod
     def create(
@@ -132,8 +312,19 @@ class PyRuleAnalyzer:
             save_sklearn_model=save_models
         )
         
-        # Extract feature names and class names
-        feature_names = classifier._array_feature_names if hasattr(classifier, '_array_feature_names') else []
+        # get_params() reports the hyperparameters the model was trained with.
+        classifier.model_parameters = params
+
+        # Extract feature names and class names. The rules name the features
+        # after the training CSV's columns; their order is the CSV's, which
+        # is the column order of an array passed to predict().
+        feature_names = list(getattr(classifier, '_array_feature_names', None) or [])
+        if not feature_names:
+            feature_names = PyRuleAnalyzer._csv_feature_names(train_path)
+            used = {var for rule in classifier.initial_rules
+                    for var, _, _ in rule.parsed_conditions}
+            if not used.issubset(feature_names):
+                feature_names = []
         class_names = classifier.class_labels
         
         # Create PyRuleAnalyzer instance
@@ -171,15 +362,10 @@ class PyRuleAnalyzer:
         # Set default parameters if not provided
         if params is None:
             params = PyRuleAnalyzer._get_default_params(model)
-            
-        # Create empty RuleClassifier
-        classifier = RuleClassifier([], algorithm_type=model)
-        
-        # We need to monkey-patch the model parameters into the classifier
-        # so it knows how to initialize the underlying sklearn model when fit() is called
-        classifier.model_parameters = params
-        
-        return PyRuleAnalyzer(classifier, [], [])
+
+        # An empty RuleClassifier carrying the hyperparameters, so fit()
+        # knows how to initialize the underlying sklearn model.
+        return PyRuleAnalyzer(model=model, **params)
         
     # Method to build an analyzer from an already-trained scikit-learn model.
     @staticmethod
@@ -261,6 +447,8 @@ class PyRuleAnalyzer:
         classifier.class_labels = class_names
         classifier.num_classes = len(class_names)
         classifier._array_feature_names = feature_names
+        # get_params() (and so clone) reproduces the estimator's settings.
+        classifier.model_parameters = model.get_params(deep=False)
         # scikit-learn casts X to float32 before comparing it with the
         # thresholds; comparing in float64 routes a sample lying within one
         # float32 ULP above a threshold to the other child.
@@ -284,25 +472,13 @@ class PyRuleAnalyzer:
         Returns:
             self
         """
-        import pandas as pd
-        import numpy as np
-        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-        from sklearn.tree import DecisionTreeClassifier
-        from .rule_classifier import RuleClassifier
-        
-        params = getattr(self.classifier, 'model_parameters', self._get_default_params(self.classifier.algorithm_type))
+        params = getattr(self.classifier, 'model_parameters', None)
+        if params is None:
+            params = self._get_default_params(self.classifier.algorithm_type)
         algorithm_type = self.classifier.algorithm_type
-        
+
         # Train the new Scikit-Learn model
-        if algorithm_type == 'Random Forest':
-            model = RandomForestClassifier(**params)
-        elif algorithm_type == 'Decision Tree':
-            model = DecisionTreeClassifier(**params)
-        elif algorithm_type == 'Gradient Boosting Decision Trees':
-            model = GradientBoostingClassifier(**params)
-        else:
-            raise ValueError(f"Unsupported algorithm type: {algorithm_type}")
-            
+        model = _sklearn_estimator_class(algorithm_type)(**params)
         model.fit(X, y)
         
         # Determine feature names and class names
@@ -314,6 +490,8 @@ class PyRuleAnalyzer:
         # Extract rules from the freshly trained estimator; the class names
         # come from its classes_ (integer labels, see from_sklearn).
         trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names)
+        # Keep the parameters as they were set, for get_params().
+        trained.classifier.model_parameters = params
         self.classifier = trained.classifier
         self.class_names = trained.class_names
         
@@ -528,8 +706,8 @@ class PyRuleAnalyzer:
             ValueError: If a DataFrame lacks a feature the model uses.
         """
         if not isinstance(X, pd.DataFrame):
-            # No names (an analyzer built by create()): columns are taken in
-            # the order the arrays were compiled with.
+            # No names (an analyzer loaded from a binary model, say): columns
+            # are taken in the order the arrays were compiled with.
             return X, self.feature_names or None
         names = list(X.columns)
         missing = [f for f in self.feature_names if f not in names]

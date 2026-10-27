@@ -45,6 +45,7 @@ from cpncheck.mutation import CPNDocument, Mutant
 from cpncheck.mutation import make_mutants as _make_mutants
 from cpncheck.net import CPNNet
 from .cpn_profile import detect_family
+from .cpn_semantics import safe_eval
 from cpncheck.statespace import build_state_space
 
 __all__ = ["CPNDocument", "Mutant", "MUTANTS", "TREE_MUTANTS", "analyse",
@@ -93,8 +94,11 @@ def analyse(path: str) -> Dict[str, object]:
             if p != pred_idx:
                 continue
             for _count, code in terms:
+                # Never eval net text: safe_eval only interprets whitelisted
+                # constructs (and rejects cpncheck's compiled terms, which
+                # are not source text).
                 try:
-                    value = eval(code, dict(cnet.env))  # noqa: S307
+                    value = safe_eval(code, cnet.env)
                 except Exception:
                     continue
                 if isinstance(value, int):

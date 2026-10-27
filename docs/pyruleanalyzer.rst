@@ -213,6 +213,23 @@ print(f"Classes: {summary['n_classes']}")
 print(f"Rules: {summary['n_rules_initial']} -> {summary['n_rules_final']}")
 ```
 
+### scikit-learn compatibility
+
+`PyRuleAnalyzer` is a scikit-learn classifier: `get_params()`/`set_params()` expose `model` and the hyperparameters of the scikit-learn estimator, `score(X, y)` returns the accuracy and a fitted analyzer has `classes_`. `clone`, `Pipeline`, `cross_val_score` and `GridSearchCV` work with the `new_model(...).fit(X, y)` workflow:
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+search = GridSearchCV(PyRuleAnalyzer.new_model("Decision Tree", {"random_state": 0}),
+                      param_grid={"max_depth": [2, 3, 4]}, cv=5).fit(X_train, y_train)
+```
+
+`fit` trains the model and extracts its rules; refinement (`execute_rule_refinement`) is a separate step, not part of a search or a cross-validation.
+
+### Class labels
+
+Only integer class labels are supported. String or other non-integer labels raise `ValueError`; encode them first, e.g. with `sklearn.preprocessing.LabelEncoder`.
+
 ## Complete Examples
 
 ### Example 1: Decision Tree (Simplest)

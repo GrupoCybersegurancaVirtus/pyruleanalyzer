@@ -11,7 +11,7 @@ the whole thing together and makes that check a gate rather than an afterthought
     1. train a scikit-learn model, or take one that is already trained
     2. extract the rules and export the initial HCPN
     3. model check the initial model                      (optional baseline)
-    4. refine the rules
+    4. refine the rules on rows held out of the training data
     5. model check the refined model                      (the acceptance test)
     6. export: Python, binary, C header, Arduino sketch
     7. deploy to the edge device                          (optional)
@@ -22,6 +22,9 @@ overlapping rules usually still agree on the class. The verification does move:
 ``B1`` (leaf mutual exclusion) fails the moment the refined rule set stops being
 a partition of the feature space, and with ``fail_on_violation`` set the pipeline
 refuses to export a model whose net no longer satisfies what the initial one did.
+A check that cannot decide its properties -- an occurrence graph larger than
+``max_nodes`` -- does not pass the gate either: with ``fail_on_inconclusive``
+set it stops the pipeline, and without it the result is not marked as passed.
 
 Usage:
     from pyruleanalyzer import verified_pipeline
@@ -130,6 +133,103 @@ def _load_data(X, y, train_csv, test_csv, target_feature, test_size, random_seed
                             random_state=random_seed)
 
 
+# Function to hold a validation split out of the training data for refinement.
+def _split_validation(X_train, y_train, validation_size, random_seed):
+    """Split the training data into a fitting part and a validation part.
+
+    Refinement prunes and merges rules according to how often they fire, so it
+    must not see the test set the final accuracy is reported on. The rows it
+    uses come out of the training data instead, stratified by class when every
+    class has enough rows for it.
+
+    Args:
+        X_train: Training features, or None.
+        y_train: Training targets, or None.
+        validation_size (float): Fraction of the training rows held out. ``0``
+            or None keeps every row for fitting and refines on all of them.
+        random_seed (int): Split seed.
+
+    Returns:
+        tuple: ``(X_fit, X_val, y_fit, y_val)``. Without a hold-out the fitting
+        and validation parts are both the whole training set.
+    """
+    from sklearn.model_selection import train_test_split
+
+    if X_train is None or not validation_size:
+        return X_train, X_train, y_train, y_train
+    try:
+        return train_test_split(X_train, y_train, test_size=validation_size,
+                                random_state=random_seed, stratify=y_train)
+    except ValueError:
+        # A class with a single row cannot be stratified.
+        return train_test_split(X_train, y_train, test_size=validation_size,
+                                random_state=random_seed)
+
+
+# Reasons for a missing verdict that come from the model, not from the search.
+_SKIPPED_BY_DESIGN = (
+    "label domain not declared",
+)
+
+
+# Function to list the properties a model-checking run could not decide.
+def _inconclusive(result) -> list:
+    """Identify the properties left without a verdict by the search.
+
+    A property that does not apply to the model family is not in the result
+    at all, and a report property states a fact rather than a requirement;
+    neither counts. A property the net has but the run cannot answer by
+    design (the valid-label property of a net whose label domain is not
+    numeric) is not counted either. Everything else without a verdict -- an
+    occurrence graph over budget, a reduction that does not preserve the
+    property, a conformance test that could not run -- leaves the run
+    inconclusive.
+
+    Args:
+        result: The :class:`~pyruleanalyzer.model_checker.ModelCheckResult`.
+
+    Returns:
+        list: Identifiers of the undecided properties.
+    """
+    return [r.id for r in result.skipped
+            if r.spec.kind != "report"
+            and not str(r.detail).startswith(_SKIPPED_BY_DESIGN)]
+
+
+# Function to apply the verification gate to one model-checking result.
+def _gate(results, result, stage, fail_on_violation, fail_on_inconclusive):
+    """Record the verdict of one stage and stop the pipeline when required.
+
+    Args:
+        results (dict): The pipeline's result, updated in place.
+        result: The stage's model-checking result.
+        stage (str): ``"initial"`` or ``"final"``.
+        fail_on_violation (bool): Raise on a violated property.
+        fail_on_inconclusive (bool): Raise on an undecided property.
+
+    Raises:
+        VerificationError: When the stage fails a gate that is set.
+    """
+    if not result.passed:
+        results["passed"] = False
+        if fail_on_violation:
+            what = ("the initial model violates " if stage == "initial" else
+                    "refinement broke the model: the refined net violates ")
+            raise VerificationError(
+                f"{what}{[f.id for f in result.failures]}", result, stage)
+
+    undecided = _inconclusive(result)
+    results["inconclusive"][stage] = undecided
+    if undecided:
+        results["passed"] = False
+        if fail_on_inconclusive:
+            raise VerificationError(
+                f"the {stage} model could not be verified: {undecided} got no "
+                "verdict (occurrence graph over budget). Raise max_nodes or "
+                "use reduction='stubborn', or pass fail_on_inconclusive=False "
+                "to export it unverified.", result, stage)
+
+
 # Function to pick the samples used as initial markings during verification.
 def _pick_samples(X_test, n: int):
     """Select the samples fixed in the net's initial marking.
@@ -226,6 +326,7 @@ def verified_pipeline(
     model_type: str = "Decision Tree",
     params: Optional[Dict[str, Any]] = None,
     test_size: float = 0.25,
+    validation_size: float = 0.25,
     random_seed: int = 42,
     refine: bool = True,
     remove_below_n_classifications: int = -1,
@@ -238,6 +339,7 @@ def verified_pipeline(
     check_consistency: bool = True,
     export_askctl: bool = False,
     fail_on_violation: bool = True,
+    fail_on_inconclusive: bool = True,
     export_formats: Sequence[str] = ("python",),
     board_model: str = "auto",
     serial_baud: int = 115200,
@@ -266,7 +368,12 @@ def verified_pipeline(
             ``"Gradient Boosting Decision Trees"``.
         params: Hyperparameters for the scikit-learn estimator.
         test_size: Hold-out fraction when no test set is given.
-        random_seed: Seed for the train/test split.
+        validation_size: Fraction of the training rows held out for rule
+            refinement, so that the test set stays unseen and the refined
+            accuracy is not optimistic. A model trained here is fitted on the
+            remaining rows; an already-fitted one keeps its own training. ``0``
+            refines on the whole training set. Ignored when ``refine`` is False.
+        random_seed: Seed for the train/test and train/validation splits.
         refine: Run rule refinement. When False the pipeline stops at the
             initial model and verifies only that one.
         remove_below_n_classifications: Usage threshold below which a rule is
@@ -291,6 +398,10 @@ def verified_pipeline(
             run in CPN Tools.
         fail_on_violation: Raise :class:`VerificationError` instead of exporting
             a model whose net violates a property.
+        fail_on_inconclusive: Raise :class:`VerificationError` instead of
+            exporting a model whose net could not be fully verified, i.e. some
+            property got no verdict because the occurrence graph exceeded
+            ``max_nodes``. Either way such a run does not count as passed.
         export_formats: Any of ``"python"``, ``"binary"``, ``"c"``,
             ``"arduino"``, ``"cpn"``.
         board_model: Target board for the Arduino sketch.
@@ -308,14 +419,18 @@ def verified_pipeline(
 
     Returns:
         dict: With keys ``model``, ``metrics``, ``hcpn``, ``verification``,
-        ``exports``, ``deployment``, ``passed`` and ``elapsed``. The
-        ``verification`` entry holds the
+        ``inconclusive``, ``exports``, ``deployment``, ``passed`` and
+        ``elapsed``. The ``verification`` entry holds the
         :class:`~pyruleanalyzer.model_checker.ModelCheckResult` of each stage
-        plus a ``comparison`` string when both were verified.
+        plus a ``comparison`` string when both were verified;
+        ``inconclusive`` maps each verified stage to the properties left
+        without a verdict. ``passed`` is True only when every verified stage
+        violated nothing and left nothing undecided.
 
     Raises:
         VerificationError: If ``fail_on_violation`` is set and a checked model
-            violates one of its properties.
+            violates one of its properties, or if ``fail_on_inconclusive`` is
+            set and a property of a checked model got no verdict.
 
     Example:
         >>> result = verified_pipeline(
@@ -341,6 +456,7 @@ def verified_pipeline(
         "metrics": {},
         "hcpn": {},
         "verification": {},
+        "inconclusive": {},
         "exports": {},
         "deployment": None,
         "passed": True,
@@ -359,6 +475,13 @@ def verified_pipeline(
             print(f"  train: {len(X_train)} rows   test: {len(X_test)} rows   "
                   f"features: {X_train.shape[1]}")
 
+    # Refinement gets its own rows out of the training data; the test set is
+    # only ever used to measure and to verify.
+    X_fit, X_val, y_fit, y_val = _split_validation(
+        X_train, y_train, validation_size if refine else 0, random_seed)
+    if verbose and X_val is not None and X_val is not X_train:
+        print(f"  refinement (validation): {len(X_val)} rows held out of train")
+
     if model_pkl:
         with open(model_pkl, "rb") as fh:
             analyzer = pickle.load(fh)
@@ -373,7 +496,7 @@ def verified_pipeline(
         if X_train is None:
             raise ValueError("training data is required when no model is given")
         analyzer = PyRuleAnalyzer.new_model(model=model_type, params=params)
-        analyzer.fit(X_train, y_train)
+        analyzer.fit(X_fit, y_fit)
         if verbose:
             print(f"  trained {model_type} with "
                   f"{len(analyzer.classifier.initial_rules)} rules")
@@ -406,13 +529,8 @@ def verified_pipeline(
             check_consistency=check_consistency,
             test_samples=X_test, askctl=export_askctl, verbose=verbose)
         results["verification"]["initial"] = initial_result
-        if not initial_result.passed:
-            results["passed"] = False
-            if fail_on_violation:
-                raise VerificationError(
-                    "the initial model violates "
-                    f"{[f.id for f in initial_result.failures]}",
-                    initial_result, "initial")
+        _gate(results, initial_result, "initial", fail_on_violation,
+              fail_on_inconclusive)
 
     # ------------------------------------------------------------------
     # 4-5. Refinement and its verification
@@ -420,9 +538,11 @@ def verified_pipeline(
     if refine:
         _step(verbose, 4, "Rule refinement")
         stats = analyzer.execute_rule_refinement(
-            X=X_test, y=y_test,
+            X=X_val, y=y_val,
             remove_below_n_classifications=remove_below_n_classifications,
             save_final_model=False, save_report=False)
+        results["metrics"]["refinement_rows"] = \
+            len(X_val) if X_val is not None else 0
         results["metrics"].update({
             "rules_final": stats["rules_after"],
             "rules_removed": stats["rules_removed"],
@@ -456,13 +576,8 @@ def verified_pipeline(
                 if verbose:
                     print()
                     print(comparison)
-            if not final_result.passed:
-                results["passed"] = False
-                if fail_on_violation:
-                    raise VerificationError(
-                        "refinement broke the model: the refined net violates "
-                        f"{[f.id for f in final_result.failures]}",
-                        final_result, "final")
+            _gate(results, final_result, "final", fail_on_violation,
+                  fail_on_inconclusive)
 
     # ------------------------------------------------------------------
     # 6. Exports
@@ -511,6 +626,9 @@ def verified_pipeline(
 
     results["elapsed"] = time.time() - t0
     if verbose:
-        verdict = "VERIFIED" if results["passed"] else "VIOLATION FOUND"
+        violated = any(not r.passed for r in results["verification"].values()
+                       if hasattr(r, "passed"))
+        verdict = ("VERIFIED" if results["passed"] else
+                   "VIOLATION FOUND" if violated else "INCONCLUSIVE")
         print(f"\nPipeline finished in {results['elapsed']:.1f}s -- {verdict}")
     return results

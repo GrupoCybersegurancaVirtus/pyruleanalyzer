@@ -259,13 +259,15 @@ class CPNToolsExporter:
         # Number of classes (for Random Forest soft-voting probability vectors).
         self.n_classes = int(getattr(classifier, "num_classes", 0) or 0)
         if self.n_classes < 2:
+            known = getattr(classifier, "class_labels", None)
+            n_hint = len(known) if known is not None else 0
             k = 0
             for r in self.rules:
                 d = getattr(r, "class_distribution", None)
                 if d is not None:
                     k = max(k, len(d))
                 else:
-                    k = max(k, _int_label(r.class_) + 1)
+                    k = max(k, self._label_column(r.class_, n_hint) + 1)
             self.n_classes = max(k, 2)
 
         # ---- Sample for the initial marking ----------------------------
@@ -306,7 +308,7 @@ class CPNToolsExporter:
         k = self.n_classes
         dist = getattr(rule, "class_distribution", None)
         if dist is None:
-            idx = _int_label(rule.class_)
+            idx = self._label_column(rule.class_)
             vec = [1.0 if i == idx else 0.0 for i in range(k)]
         else:
             d = [float(x) for x in dist]
@@ -316,6 +318,25 @@ class CPNToolsExporter:
             total = sum(d)
             vec = [(x / total if total > 0 else 0.0) for x in d]
         return "[" + ", ".join(_ml_val(v) for v in vec) + "]"
+
+    def _label_column(self, label, n=None) -> int:
+        """Distribution column that stands for a class label.
+
+        Columns follow the classifier's ``_rf_labels`` order, which is the
+        label itself only when the labels are 0..K-1. Falls back to the label
+        read as an int when the classifier cannot say.
+        """
+        lab = _int_label(label)
+        n = self.n_classes if n is None else n
+        rf_labels = getattr(self.clf, "_rf_labels", None)
+        if rf_labels is not None and n:
+            try:
+                labels = [int(v) for v in rf_labels(n)]
+            except (AttributeError, TypeError, ValueError):
+                labels = []
+            if lab in labels:
+                return labels.index(lab)
+        return lab
 
     def _declare_var(self, name, colorset):
         self.vars[name] = colorset

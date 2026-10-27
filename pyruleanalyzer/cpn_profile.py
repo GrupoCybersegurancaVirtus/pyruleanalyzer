@@ -61,6 +61,8 @@ from cpncheck.result import PropertyResult
 from cpncheck.structural import overlapping_guards
 from cpncheck.selectors import Explicit, Group, Places, Transitions
 
+from .cpn_semantics import safe_eval
+
 __all__ = ["TREE_CATALOG", "TreeStructure", "MLTreeProfile", "PROFILE",
            "detect_family"]
 
@@ -654,8 +656,10 @@ class MLTreeProfile(Profile):
             for info in structure.trees.values():
                 for ti in info["leaves"]:
                     for _p, terms in trans[ti]["out"]:
+                        # Never eval net text: safe_eval only interprets
+                        # whitelisted constructs.
                         try:
-                            vec = eval(terms[0][1], dict(net.env))  # noqa: S307
+                            vec = safe_eval(terms[0][1], net.env)
                         except Exception:
                             continue
                         if isinstance(vec, (tuple, list)) and vec:

@@ -1,23 +1,23 @@
 """
-Pipeline completo: de dados brutos a modelo Arduino/ESP32.
+Complete pipeline: from raw data to an Arduino/ESP32 model.
 
-Esta módulo fornece a função `full_pipeline` que automatiza todo o fluxo:
-  1. Carregar dados (CSV ou DataFrame)
-  2. Treinar modelo (Decision Tree / Random Forest / GBDT)
-  3. Refinar regras
-  4. Validar com dataset de teste
-  5. Gerar sketch Arduino/ESP32 pronto
-  6. Estimar uso de memória
+This module provides the `full_pipeline` function, which automates the whole flow:
+  1. Load data (CSV)
+  2. Train the model (Decision Tree / Random Forest / GBDT)
+  3. Refine the rules (on a validation split held out from the training data)
+  4. Validate on a test set the model has never seen
+  5. Generate a ready-to-use Arduino/ESP32 sketch
+  6. Estimate memory usage
 
-Uso programático:
+Programmatic usage:
     from pyruleanalyzer.full_pipeline import full_pipeline
-    
+
     results = full_pipeline(
         train_csv='train.csv',
         target_feature='Target',
         model_type='Random Forest',
         test_csv='test.csv',
-        generate_sketch=True,
+        generate_arduino_sketch=True,
         memory_report=True,
         output_dir='files',
     )
@@ -26,8 +26,39 @@ Uso programático:
 import os
 import pickle
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+
+def _split_holdout(X, y, size: float, random_seed: int):
+    """Split off a held-out fraction of (X, y), stratified when possible.
+
+    Falls back to a plain random split when stratification is impossible
+    (a single class, or a class with too few samples for both sides).
+    """
+    import numpy as np
+    from sklearn.model_selection import train_test_split
+
+    if len(np.unique(y)) > 1:
+        try:
+            return train_test_split(X, y, test_size=size,
+                                    random_state=random_seed, stratify=y)
+        except ValueError:
+            pass
+    return train_test_split(X, y, test_size=size, random_state=random_seed)
+
+
+def _fill_missing(X, which: str):
+    """Replace missing values with 0, warning with the number of filled cells."""
+    n_missing = int(X.isna().sum().sum())
+    if n_missing:
+        warnings.warn(
+            f"{which}: {n_missing} missing value(s) filled with 0",
+            UserWarning, stacklevel=3,
+        )
+        X = X.fillna(0)
+    return X
 
 
 def full_pipeline(
@@ -52,14 +83,26 @@ def full_pipeline(
     max_ram_percent: float = 85.0,
     random_seed: int = 42,
     model_pkl: Optional[str] = None,
+    validation_size: float = 0.2,
 ) -> Dict[str, Any]:
     """
     Run the complete pipeline: train, validate, and optionally export to Arduino/ESP32.
 
     Parameters:
         train_csv: Path to training CSV file. Required if model_pkl is not provided.
-        test_csv: Path to test CSV file for validation.
-        target_feature: Name of the target column in the data.
+        test_csv: Path to test CSV file for validation. It must contain the
+            target column to be scored; its feature columns are matched to the
+            training columns by name (order and extra columns do not matter, a
+            missing training column raises ValueError). A test CSV without the
+            target column cannot be scored: a warning is emitted and, when the
+            training data has the target, 20% of it is held out (excluded from
+            training) and used as the test set instead, exactly as when no
+            test_csv is given. Test rows are never used for training or
+            refinement.
+        target_feature: Name of the target column in the data. Non-numeric
+            labels are encoded with a single LabelEncoder fitted on the
+            training labels and applied to the test labels (a test label unseen
+            in training raises ValueError); see results['label_classes'].
         model_type: Model type ("Decision Tree", "Random Forest", "Gradient Boosting Decision Trees").
         n_estimators: Number of estimators (for Random Forest / GBDT).
         max_depth: Maximum tree depth.
@@ -79,121 +122,168 @@ def full_pipeline(
         target_platform: Target platform for compatibility check ("auto", "avr", "esp32").
         max_flash_percent: Maximum percentage of Flash memory to allow (for board check, default 90%).
         max_ram_percent: Maximum percentage of SRAM to allow (for board check, default 85%).
-        random_seed: Random seed for train/test split.
+        random_seed: Random seed for the train/validation/test splits.
         model_pkl: Path to a saved .pkl model file to load instead of training.
+        validation_size: Fraction of the training data held out (stratified
+            when possible) to refine the rules on, so rule usage counts are not
+            measured on the rows the trees were fit on. The trees are trained
+            on the remaining rows. Use 0 to refine on the training data itself
+            (the previous behaviour). Default 0.2.
+
+    Missing feature values are filled with 0; a UserWarning reports how many
+    cells were filled.
 
     Returns:
         Dictionary with pipeline results, including:
             - 'model': Trained or loaded PyRuleAnalyzer model
-            - 'validation': Validation metrics (if test_csv was provided)
+            - 'validation': Validation metrics on the unseen test set (None
+              when there is no scorable test set)
+            - 'label_classes': Original labels indexed by encoded class (the
+              model predicts integers i, meaning label_classes[i]), or None
+              when the labels were numeric and used as-is
             - 'memory_check': Memory estimation and board compatibility results
             - 'generated_files': Dictionary with paths of generated files (.ino, .pkl, etc.)
             - 'refine_stats': Rule refinement statistics
             - 'elapsed': Total execution time in seconds
     """
-    # Importações internas
+    # Internal imports
     import numpy as np
     from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-    
+
     from . import PyRuleAnalyzer
-    
+
+    if not 0 <= validation_size < 1:
+        raise ValueError(
+            f"validation_size must be in [0, 1), got {validation_size!r}"
+        )
+
     results: Dict[str, Any] = {
         'model': None,
         'validation': None,
         'memory_check': None,
         'generated_files': {},
+        'label_classes': None,
         'elapsed': 0.0,
     }
-    
+
     start_time = time.time()
-    
-    # Garantir que diretório de saída existe
+
+    # Make sure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
-    
+
     X_test = None
     y_test = None
-    
+
     # --------------------------------------------------------
-    # Etapa 1: Carregar dados ou carregar modelo existente
+    # Step 1: Load the data, or load an existing model
     # --------------------------------------------------------
     if model_pkl:
-        # Carregar modelo existente
+        # Load an existing model
         with open(model_pkl, 'rb') as f:
             model = pickle.load(f)
     else:
-        # Validar entrada de dados
+        # Validate the data input
         if train_csv is None or not os.path.exists(train_csv):
             raise ValueError(
-                "--train-csv é obrigatório para treinar um novo modelo. "
-                "Ou forneça --model-pkl para carregar um modelo existente."
+                "train_csv is required to train a new model. "
+                "Alternatively, provide model_pkl to load an existing model."
             )
-        
+
         import pandas as pd
         df_train = pd.read_csv(train_csv)
-        
-        # Verificar se o dataset tem coluna target ou é sem labels
+
+        label_encoder = None
+        # Check whether the dataset has the target column or has no labels
         if target_feature and target_feature in df_train.columns:
             has_target = True
             X_train = df_train.drop(columns=[target_feature])
             y_train = df_train[target_feature]
-            
-            # Converter tipos
-            X_train = X_train.select_dtypes([np.number]).fillna(0)
-            if y_train.dtype == 'object':
+
+            # Convert types. One encoder, fitted on the training labels, is
+            # reused for the test labels so both share the same integer codes.
+            X_train = X_train.select_dtypes([np.number])
+            if not pd.api.types.is_numeric_dtype(y_train):
                 from sklearn.preprocessing import LabelEncoder
-                le = LabelEncoder()
-                y_train = le.fit_transform(y_train)
+                label_encoder = LabelEncoder()
+                y_train = label_encoder.fit_transform(y_train)
+                results['label_classes'] = label_encoder.classes_.tolist()
         else:
             has_target = False
             numeric_cols = df_train.select_dtypes([np.number]).columns.tolist()
             if len(numeric_cols) < 2:
                 raise ValueError(
-                    "Dataset precisa ter pelo menos 2 colunas numéricas."
+                    "The dataset needs at least 2 numeric columns."
                 )
             y_col = numeric_cols[-1]
-            X_train = df_train[numeric_cols[:-1]].fillna(0)
+            X_train = df_train[numeric_cols[:-1]]
             y_train = df_train[y_col].astype(int)
-            print(f'  ⚠️  Usando coluna "{y_col}" como target proxy (dataset sem labels)')
-        
+            print(f'  [!] Using column "{y_col}" as a proxy target (dataset has no labels)')
+
+        X_train = _fill_missing(X_train, "training data")
+        # Training columns by name, used to align the test CSV.
+        train_columns = list(X_train.columns)
         X_train.columns = [f"feature_{i}" for i in range(X_train.shape[1])]
-        
-        # Se houver dados de teste com target, separar para validação
+
+        # Test set: a test CSV with the target column, otherwise a held-out
+        # split of the training data that is excluded from training.
+        use_test_csv = False
         if test_csv and os.path.exists(test_csv):
             df_test = pd.read_csv(test_csv)
-            
             if has_target and target_feature in df_test.columns:
-                X_test = df_test.drop(columns=[target_feature])
-                y_test = df_test[target_feature]
-                
-                if y_test.dtype == 'object':
-                    from sklearn.preprocessing import LabelEncoder
-                    le2 = LabelEncoder()
-                    y_test = le2.fit_transform(y_test)
+                use_test_csv = True
             else:
-                from sklearn.model_selection import train_test_split
-                numeric_cols_test = df_test.select_dtypes([np.number]).columns.tolist()
-                X_test_raw = df_test[numeric_cols_test[:-1]].fillna(0)
-                _, X_test_temp, _, y_test = train_test_split(
-                    X_train, y_train, test_size=0.2, random_state=random_seed
+                warnings.warn(
+                    f"test_csv {test_csv!r} has no target column "
+                    f"{target_feature!r} and cannot be scored; it is ignored"
+                    + ("; a held-out split of the training data is used as "
+                       "the test set instead" if has_target else
+                       "; no validation is performed"),
+                    UserWarning, stacklevel=2,
                 )
-                X_test = X_test_temp
-            X_test = X_test.select_dtypes([np.number]).fillna(0)
+
+        if use_test_csv:
+            # Align the test columns to the training columns by name.
+            missing = [c for c in train_columns if c not in df_test.columns]
+            if missing:
+                raise ValueError(
+                    f"test_csv is missing training column(s): {missing}"
+                )
+            X_test = _fill_missing(df_test[train_columns], "test data")
             X_test.columns = [f"feature_{i}" for i in range(X_test.shape[1])]
+
+            y_test = df_test[target_feature]
+            if label_encoder is not None:
+                unseen = sorted(set(y_test.unique()) - set(label_encoder.classes_),
+                                key=str)
+                if unseen:
+                    raise ValueError(
+                        f"test_csv has label(s) not present in the training "
+                        f"data: {unseen}"
+                    )
+                y_test = label_encoder.transform(y_test)
+            else:
+                y_test = y_test.to_numpy()
         elif has_target:
-            # Validação cruzada se não houver dados de teste
-            from sklearn.model_selection import train_test_split
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_train, y_train, test_size=0.2, random_state=random_seed,
-                stratify=y_train if len(np.unique(y_train)) > 1 else None
+            # No scorable test set: hold out 20% of the training data
+            X_train, X_test, y_train, y_test = _split_holdout(
+                X_train, y_train, 0.2, random_seed
             )
-        
-        # Treinar modelo: os hiperparâmetros dados sobrepõem os padrões e vão
-        # para o estimador do scikit-learn (um parâmetro inválido levanta erro
-        # em vez de ser ignorado).
+
+        # Validation split for rule refinement, held out from the training
+        # data so rule usage is not counted on the rows the trees were fit on.
+        if validation_size > 0:
+            X_train, X_val, y_train, y_val = _split_holdout(
+                X_train, y_train, validation_size, random_seed
+            )
+        else:
+            X_val, y_val = X_train, y_train
+
+        # Train the model: the given hyperparameters override the defaults and
+        # are passed to the scikit-learn estimator (an invalid parameter raises
+        # an error instead of being ignored).
         params = dict(PyRuleAnalyzer._get_default_params(model_type))
         if n_estimators is not None:
             if model_type == 'Decision Tree':
-                import warnings
                 warnings.warn("n_estimators does not apply to a Decision Tree; "
                               "ignored", UserWarning, stacklevel=2)
             else:
@@ -205,28 +295,28 @@ def full_pipeline(
         model = PyRuleAnalyzer.new_model(model=model_type, params=params)
 
         model.fit(X_train, y_train)
-        
-        # Garantir que arrays estão compilados
+
+        # Make sure the arrays are compiled
         if hasattr(model.classifier, 'compile_tree_arrays'):
-            # Passa a ordem completa das features: sem isso os nomes sao inferidos
-            # apenas das regras (subconjunto, ordenado alfabeticamente) e os indices
-            # dos arrays exportados deixam de corresponder as colunas do dataset.
+            # Pass the full feature order: otherwise the names are inferred
+            # from the rules only (a subset, sorted alphabetically) and the
+            # indices of the exported arrays no longer match the dataset columns.
             model.classifier.compile_tree_arrays(
                 feature_names=getattr(model, 'feature_names', None)
             )
-        
-        # Refinar regras
+
+        # Refine the rules on the validation split
         refine_stats = model.execute_rule_refinement(
-            X=X_train,
-            y=y_train,
+            X=X_val,
+            y=y_val,
             remove_below_n_classifications=remove_below_n_classifications,
             save_final_model=False,
             save_report=False,
         )
         results['refine_stats'] = refine_stats
-    
+
     # --------------------------------------------------------
-    # Etapa 2: Validar modelo
+    # Step 2: Validate the model
     # --------------------------------------------------------
     validation = None
     if X_test is not None and y_test is not None:
@@ -245,7 +335,7 @@ def full_pipeline(
         results['validation'] = validation
     
     # --------------------------------------------------------
-    # Etapa 3: Verificar memória
+    # Step 3: Check memory
     # --------------------------------------------------------
     memory_check = None
     if memory_report:
@@ -256,7 +346,7 @@ def full_pipeline(
         results['memory_check'] = memory_check
     
     # --------------------------------------------------------
-    # Etapa 4: Gerar sketch Arduino (se solicitado)
+    # Step 4: Generate the Arduino sketch (if requested)
     # --------------------------------------------------------
     if generate_arduino_sketch:
         generated_files = _generate_arduino_sketch(
@@ -272,7 +362,7 @@ def full_pipeline(
         results['generated_files'] = generated_files
     
     # --------------------------------------------------------
-    # Salvar modelo se solicitado
+    # Save the model if requested
     # --------------------------------------------------------
     if save_model:
         save_path = os.path.join(output_dir, f'{output_name}.pkl')
@@ -293,17 +383,17 @@ def _estimate_and_check_memory(
 ) -> Dict[str, Any]:
     """Estimate memory and check compatibility with Arduino/ESP32 platforms."""
     try:
-        # Importar de simulate_arduino relativo ao pacote
+        # Import from simulate_arduino relative to the package
         import sys
         pkg_dir = os.path.dirname(os.path.abspath(__file__))
-        examples_dir = os.path.join(pkg_dir, '..', '..')  # ajusta conforme necessário
-        
-        # Tentar importar do módulo interno primeiro
+        examples_dir = os.path.join(pkg_dir, '..', '..')  # adjust as needed
+
+        # Try importing from the internal module first
         from ..pyruleanalyzer import PyRuleAnalyzer as _PyRA
     except Exception:
         pass
-    
-    # Função inline de estimativa de memória baseada na estrutura do modelo
+
+    # Inline memory estimate based on the model structure
     estimates = _compute_memory_estimates(model)
     
     results = {}
@@ -333,8 +423,8 @@ def _estimate_and_check_memory(
 
 def _compute_memory_estimates(model) -> Dict[str, Any]:
     """Compute memory usage estimates for the model."""
-    # Valores máximos das plataformas
-    avr_max_flash = 143360  # Arduino Uno: ~140KB disponível
+    # Platform maximums
+    avr_max_flash = 143360  # Arduino Uno: ~140KB available
     avr_max_sram = 2048     # Arduino Uno: 2KB SRAM
     
     esp32_max_flash = 4 * 1024 * 1024  # ESP32: 4MB Flash
@@ -346,7 +436,7 @@ def _compute_memory_estimates(model) -> Dict[str, Any]:
     if hasattr(model, 'classifier'):
         clf = model.classifier
         
-        # Estimar tamanho dos arrays do classificador
+        # Estimate the size of the classifier arrays
         if hasattr(clf, 'n_classes_'):
             n_classes = int(clf.n_classes_)
         else:
@@ -357,32 +447,32 @@ def _compute_memory_estimates(model) -> Dict[str, Any]:
         else:
             n_features = 0
         
-        # Estimativa baseada na estrutura do Decision Tree
+        # Estimate based on the Decision Tree structure
         if hasattr(clf, 'tree_'):
             tree = clf.tree_
             n_nodes = tree.node_count
-            
-            # Cada nodo: feature_id (4B) + threshold (8B) + class (4B) + impurity (8B)
-            node_size = 24  
+
+            # Each node: feature_id (4B) + threshold (8B) + class (4B) + impurity (8B)
+            node_size = 24
             estimated_flash_bytes += n_nodes * node_size
-            
-            # Arrays de children/parents
+
+            # Children/parent arrays
             estimated_flash_bytes += n_nodes * 4 * 2  # left/right children
             estimated_flash_bytes += n_nodes * 4  # parent pointer
-            
-            # Header e metadados
+
+            # Header and metadata
             estimated_flash_bytes += 512
             
         elif hasattr(clf, 'estimators_'):
-            # Random Forest / GBDT - somar estimadores
+            # Random Forest / GBDT - sum over the estimators
             for est in clf.estimators_:
                 if hasattr(est, 'tree_'):
                     tree = est.tree_
                     n_nodes = tree.node_count
                     estimated_flash_bytes += n_nodes * 24 + n_nodes * 12 + 512
         
-        # Estimativa de overhead do runtime C
-        total_ram_bytes = estimated_flash_bytes * 0.1  # ~10% do flash como RAM temporária
+        # Estimated overhead of the C runtime
+        total_ram_bytes = estimated_flash_bytes * 0.1  # ~10% of flash as temporary RAM
     
     return {
         'estimated_flash_bytes': estimated_flash_bytes,
@@ -404,10 +494,10 @@ def _generate_arduino_sketch(
     max_flash_percent: float = 90.0,
     max_ram_percent: float = 85.0,
 ) -> Dict[str, str]:
-    """Generate Arduino/ESP32 .ino sketch from the model (autocontida)."""
+    """Generate a self-contained Arduino/ESP32 .ino sketch from the model."""
     files = {}
     
-    # Try to export Arduino .ino sketch (autocontida — no external dependencies)
+    # Try to export Arduino .ino sketch (self-contained, no external dependencies)
     if hasattr(model, 'classifier') and hasattr(model.classifier, 'export_to_arduino_ino'):
         try:
             ino_path = os.path.join(output_dir, f"{base_name}.ino")
