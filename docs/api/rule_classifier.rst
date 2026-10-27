@@ -5,3 +5,4 @@ RuleClassifier
 
 .. autoclass:: pyruleanalyzer.RuleClassifier
    :members:
+   :inherited-members:

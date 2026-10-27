@@ -67,7 +67,7 @@ Each model type has its own dedicated page with the complete HCPN formalization 
 3. Rule Extraction Algorithm
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The conversion follows the flow implemented in ``rule_classifier.py``, which constructs the HCPN module hierarchy:
+The rules are extracted in ``_extraction.py`` and the HCPN module hierarchy is constructed in ``cpn_tools_exporter.py``, following this flow:
 
 1. **Prior Extraction (GBDT only):** Queries scikit-learn's prior estimator to compute the initial score :math:`s_0` (log-odds for binary, centred log-priors for multiclass). This value becomes the initial token in the channel module's :math:`P_{accum}` place.
 2. **Traversal:** Recursively traverses each tree structure from root to each leaf node. At every internal node, the left child receives a ``<=`` predicate and the right child receives a ``>`` predicate over the same feature and threshold. Each complete root-to-leaf path produces a rule that becomes a guarded transition within a :math:`s_{DT}` leaf module.

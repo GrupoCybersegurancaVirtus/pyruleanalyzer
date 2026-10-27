@@ -1,12 +1,12 @@
-import os
-import struct
-import pickle
-import sys
-import time
-import numpy as np
-from collections import defaultdict, Counter
-from typing import List, Dict, Union, Tuple, Optional, Any
-import pandas as pd
+"""Export front-ends of the rule classifier.
+
+Provides ``RuleExporterMixin``, the short ``to_*`` names of the exports of
+:class:`RuleClassifier`: ``to_python`` (see :mod:`._native_python`),
+``to_c_header`` (:mod:`._c_export`), ``to_binary`` (:mod:`._binary_format`)
+and ``to_cpn_tools`` (:mod:`.cpn_tools_exporter`). It is the last base of
+``RuleClassifier``; the code generators themselves live in those modules.
+"""
+
 
 class RuleExporterMixin:
     """Mixin class for exporting RuleClassifier to different formats."""

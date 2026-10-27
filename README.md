@@ -829,8 +829,19 @@ usage).
 pyruleanalyzer/
 ├── pyruleanalyzer/
 │   ├── pyruleanalyzer.py     # PyRuleAnalyzer: the high-level entry point
-│   ├── rule_classifier.py    # Rule and RuleClassifier: the engine
-│   ├── exporters.py          # Python / binary / C export
+│   ├── rule_classifier.py    # RuleClassifier: the engine, combining the mixins below
+│   ├── _rules.py             # Rule and Condition (imported from rule_classifier)
+│   ├── _labels.py            # label codes, input checks (NaN, features)
+│   ├── _engine.py            # iterative single-sample engine (classify)
+│   ├── _native_python.py     # generated Python: in-memory function, .py export
+│   ├── _arrays.py            # compiled tree arrays, predict_batch / predict_batch_proba
+│   ├── _binary_format.py     # .bin export and loading
+│   ├── _c_export.py          # C header (.h) and Arduino sketch (.ino) export
+│   ├── _refinement.py        # redundancy analysis and rule refinement
+│   ├── _serialization.py     # pickle loading, JSON format
+│   ├── _reporting.py         # reports, metrics, comparisons, rule editing
+│   ├── _extraction.py        # data loading, rule extraction from scikit-learn
+│   ├── exporters.py          # to_python / to_c_header / to_binary / to_cpn_tools
 │   ├── dt_analyzer.py  rf_analyzer.py  gbdt_analyzer.py
 │   ├── _accel.py  _tree_traversal.c   # C extension and numpy fallback
 │   ├── cpn_tools_exporter.py # HCPN export (.cpn)
@@ -875,7 +886,7 @@ cd docs && make html
 
 ## Status
 
-Version 2.0.0; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
+Version 2.1.0; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
 says what changed. The figures on this page are drawn from real runs by
 [`docs/figures/make_figures.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/figures/make_figures.py).
 
