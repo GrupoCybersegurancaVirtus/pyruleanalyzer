@@ -14,8 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         # The ends of the supported range on Linux, and Windows in between.
+        # Python 3.9 is pinned to ubuntu-24.04: actions/python-versions has no
+        # 3.9 build for the newer image ubuntu-latest points to.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python: "3.9"
           - os: ubuntu-latest
             python: "3.13"
@@ -41,8 +43,8 @@ jobs:
     # one of these publishes cp39 wheels. scipy is pinned to a release of the
     # same period (it supports numpy 1.21 and scikit-learn 1.0 was tested
     # against it) instead of whatever the resolver backtracks to.
-    name: ubuntu-latest / Python 3.9 / minimum dependency versions
-    runs-on: ubuntu-latest
+    name: ubuntu-24.04 / Python 3.9 / minimum dependency versions
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
