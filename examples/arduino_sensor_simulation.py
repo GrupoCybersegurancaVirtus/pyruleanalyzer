@@ -301,18 +301,23 @@ def has_header(path: str) -> bool:
     """
     A file has a header unless every field of its first line is a number.
 
+    The first line is read through pandas, so compressed files (.gz, .zip,
+    .bz2, .xz) work the same as plain CSVs.
+
     Args:
-        path (str): CSV file.
+        path (str): CSV file, optionally compressed.
 
     Returns:
         bool: True when the first line is a header.
     """
-    with open(path, 'r', encoding='utf-8', errors='replace') as f:
-        first = f.readline().strip()
-    for tok in first.split(','):
+    import pandas as pd
+
+    first = pd.read_csv(path, header=None, nrows=1, dtype=str,
+                        encoding_errors='replace').iloc[0]
+    for tok in first:
         try:
             float(tok)
-        except ValueError:
+        except (TypeError, ValueError):
             return True
     return False
 
@@ -331,8 +336,14 @@ def read_table(path: str, header: str):
     """
     import pandas as pd
 
-    present = has_header(path) if header == 'auto' else header == 'yes'
-    df = pd.read_csv(path, header=0 if present else None, low_memory=False)
+    if not os.path.isfile(path):
+        raise SystemExit(f'[!] File not found: {path}')
+    try:
+        present = has_header(path) if header == 'auto' else header == 'yes'
+        df = pd.read_csv(path, header=0 if present else None, low_memory=False)
+    except (EOFError, OSError, UnicodeDecodeError, pd.errors.ParserError) as e:
+        raise SystemExit(f'[!] Could not read {path}: {e}. Is the file complete '
+                         '(not truncated or still downloading)?')
     if not present:
         df.columns = [f'col_{i}' for i in range(df.shape[1])]
     names, seen = [], {}
@@ -396,7 +407,14 @@ def prepare_data(args, out_dir: str) -> Dict:
         train_df = read_table(args.train_csv, args.header)
         test_df = read_table(args.test_csv, args.header)
         if list(train_df.columns) != list(test_df.columns):
-            raise SystemExit('[!] train and test CSVs have different columns.')
+            only_train = [c for c in train_df.columns if c not in test_df.columns]
+            only_test = [c for c in test_df.columns if c not in train_df.columns]
+            if only_train or only_test:
+                raise SystemExit('[!] train and test CSVs have different columns. '
+                                 f'Only in train: {only_train[:10]}; '
+                                 f'only in test: {only_test[:10]}.')
+            test_df = test_df[list(train_df.columns)]
+            print('  test columns reordered to match train')
         target = resolve_target(list(train_df.columns), args.target)
     else:
         if args.csv:

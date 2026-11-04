@@ -123,6 +123,8 @@ from arduino_hardware_test import (BOARD_FQBN, compile_sketch, detect_port,  # n
                                    extract_model_section, upload_sketch)
 
 VARIANTS = ('before', 'after')
+# Labels taken as normal operation when --normal-class is not given.
+NORMAL_NAMES = {'normal', 'benign', 'legitimate', 'good'}
 SCENARIO_FILE = 'scenario.csv'
 MANIFEST_FILE = 'manifest.json'
 
@@ -524,10 +526,25 @@ def cmd_prepare(args) -> int:
     feature_names, class_names = data['features'], data['classes']
     y_train = pd.read_csv(data['train_csv'])[data['target']].to_numpy(int)
 
-    if args.normal_class is None:
+    named = [i for i, c in enumerate(class_names)
+             if str(c).strip().lower() in NORMAL_NAMES]
+    try:
+        binary01 = sorted(float(c) for c in class_names) == [0.0, 1.0]
+    except ValueError:
+        binary01 = False
+    if args.normal_class is None and len(named) == 1:
+        normal = named[0]
+    elif args.normal_class is None and binary01:
+        normal = [float(c) for c in class_names].index(0.0)
+        print('  labels are 0/1: taking 0 as normal operation (pass --normal-class 1 '
+              'if it is the other way around)')
+    elif args.normal_class is None:
         normal = int(np.bincount(y_train).argmax())
-    elif args.normal_class in class_names:
-        normal = class_names.index(args.normal_class)
+        print(f'  [!] no class named like {sorted(NORMAL_NAMES)}: using the most frequent '
+              'one. Pass --normal-class if that is not normal operation.')
+    elif args.normal_class.strip().lower() in [str(c).strip().lower() for c in class_names]:
+        normal = [str(c).strip().lower() for c in class_names].index(
+            args.normal_class.strip().lower())
     else:
         try:
             normal = int(args.normal_class)
@@ -1369,7 +1386,9 @@ def parse_args() -> argparse.Namespace:
     g.add_argument('--model-pkl', default=None,
                    help='pickled PyRuleAnalyzer already trained and refined')
     g.add_argument('--normal-class', default=None,
-                   help='label (or code) of normal operation; default: most frequent')
+                   help='label (or code) of normal operation; default: the class named '
+                        'normal/benign/legitimate/good, else 0 for 0/1 labels, else the '
+                        'most frequent')
     g.add_argument('--episodes', type=int, default=20)
     g.add_argument('--normal-rows', type=int, default=30, help='rows before the onset')
     g.add_argument('--anomaly-rows', type=int, default=30, help='rows from the onset on')
