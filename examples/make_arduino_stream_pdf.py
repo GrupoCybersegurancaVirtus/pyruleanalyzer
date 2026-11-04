@@ -8,10 +8,14 @@ an episode) and lays out the document with reportlab, reusing the styles of
 make_arduino_hil_pdf.py.
 
 Usage:
-    python examples/make_arduino_stream_pdf.py
+    python examples/make_arduino_stream_pdf.py                # both documents
+    python examples/make_arduino_stream_pdf.py --doc rapido   # quick guide only
     python examples/make_arduino_stream_pdf.py --out-dir docs
 
-Output: <out-dir>/tutorial_stream_arduino_pt.pdf (default out-dir: examples).
+Output (default out-dir: examples):
+    <out-dir>/tutorial_stream_arduino_pt.pdf  full tutorial
+    <out-dir>/guia_rapido_arduino_pt.pdf      quick guide: wiring, built-in
+                                              datasets, before vs after run
 Requirements: matplotlib, reportlab (pip install reportlab).
 
 The content documents examples/arduino_stream_test.py -- keep both in sync when
@@ -535,21 +539,213 @@ def conteudo(larg, fig1, fig2):
 
 
 # ==============================================================================
+# CONTENT -- quick guide (practical steps only)
+# ==============================================================================
+
+SETA = '<font name="DejaVu">→</font>'
+
+
+def conteudo_rapido(larg, fig1, fig2):
+    E = [Spacer(1, 4),
+         P('Guia rápido: testar o modelo no Arduino', 'titulo'),
+         P('Só os passos práticos: ligar a placa, escolher um dataset que já vem pronto e '
+           'comparar, na placa, o modelo <b>antes</b> e <b>depois</b> do refinamento',
+           'subtitulo')]
+
+    # ---------------------------------------------------------------- 0
+    E += [P('O que você precisa', 'h1'),
+          LI('Uma placa: <b>Arduino Uno, Nano, Mega</b> ou <b>ESP32</b>.'),
+          LI('Um cabo USB <b>de dados</b> (alguns cabos só carregam e a placa não aparece no '
+             'PC).'),
+          LI('Um PC com Python 3.9+ e este repositório baixado.'),
+          LI('Nada mais: <b>não precisa ligar sensores</b>. O PC envia os dados pelo USB e a '
+             'placa responde. O LED da placa (pino 13 / ' + M('LED_BUILTIN') + ') acende quando '
+             'ela detecta uma anomalia.')]
+
+    # ---------------------------------------------------------------- 1
+    E += [P('Passo 1: instalar (só na primeira vez)', 'h1'),
+          P('Abra um terminal na pasta do repositório e rode:'),
+          CODE('pip install -e .\n'
+               'pip install pyserial matplotlib\n'
+               '\n'
+               'winget install ArduinoSA.CLI            # Windows; nos outros sistemas veja\n'
+               '                                        # arduino.github.io/arduino-cli\n'
+               'arduino-cli core update-index\n'
+               'arduino-cli core install arduino:avr    # Uno, Nano, Mega\n'
+               'arduino-cli core install esp32:esp32    # só se for usar ESP32'),
+          P('Feche e abra o terminal de novo depois do ' + M('winget') + ', para o comando '
+            + M('arduino-cli') + ' ser encontrado. Prefere a Arduino IDE? Pule o arduino-cli e '
+            'veja a dica no fim do Passo 4.', 'nota')]
+
+    # ---------------------------------------------------------------- 2
+    E += [P('Passo 2: ligar o Arduino e achar a porta', 'h1'),
+          LI('Conecte a placa no USB. O LED de energia (ON / PWR) deve acender.'),
+          LI('Descubra a porta:'),
+          CODE('arduino-cli board list'),
+          CODE('Port   Protocol Type              Board Name  FQBN\n'
+               'COM5   serial   Serial Port (USB) Arduino Uno arduino:avr:uno'),
+          P('Anote a porta (aqui, ' + M('COM5') + '). No Linux ela aparece como '
+            + M('/dev/ttyACM0') + ' ou ' + M('/dev/ttyUSB0') + '; no macOS, '
+            + M('/dev/cu.usbmodem...') + '.'),
+          P('<b>A placa não aparece?</b> Troque o cabo (pode ser só de carga); em clones de '
+            'Nano e em ESP32 instale o driver <b>CH340</b> ou <b>CP2102</b> (veja o nome do '
+            'chip ao lado do USB); no Windows, confira em Gerenciador de Dispositivos ' + SETA +
+            ' Portas (COM e LPT); no Linux, rode ' + M('sudo usermod -aG dialout $USER') +
+            ' e entre de novo na sessão.', 'nota'),
+          P('<b>Feche o Monitor Serial da Arduino IDE</b> se ele estiver aberto: só um '
+            'programa pode usar a porta por vez.', 'nota')]
+
+    # ---------------------------------------------------------------- 3
+    E += [CondPageBreak(7 * cm),
+          P('Passo 3: escolher o dataset', 'h1'),
+          P('Os quatro datasets abaixo já vêm com o scikit-learn: não precisa baixar nada. Os '
+            'números são de uma execução real com as opções padrão.'),
+          TABELA([
+              ['--dataset', 'Features', 'Regras antes ' + SETA + ' depois', 'Placa'],
+              [(M('iris'), 'celula'), '4', '8 ' + SETA + ' 4',
+               'qualquer uma (comece por este)'],
+              [(M('wine'), 'celula'), '13', '6 ' + SETA + ' 4', 'qualquer uma'],
+              [(M('breast_cancer'), 'celula'), '30', '16 ' + SETA + ' 7', 'qualquer uma'],
+              [(M('digits'), 'celula'), '64', '38 ' + SETA + ' 26',
+               '<b>Mega ou ESP32</b> (no Uno/Nano a linha de 64 valores ocupa mais da metade '
+               'dos 2 KB de RAM)'],
+          ], [larg * 0.20, larg * 0.13, larg * 0.24, larg * 0.43]),
+          P('No comando do passo seguinte, troque ' + M('--board') + ' pela sua placa: '
+            + M('uno') + ', ' + M('nano') + ' (ou ' + M('nano_old') + ' para Nanos com '
+            'bootloader antigo), ' + M('mega') + ', ' + M('leonardo') + ' ou ' + M('esp32')
+            + '.')]
+
+    # ---------------------------------------------------------------- 4
+    E += [P('Passo 4: rodar (antes e depois do refinamento)', 'h1'),
+          P('O teste sempre compara <b>duas versões do mesmo modelo</b>, cada uma gravada e '
+            'testada na placa:'),
+          TABELA([
+              ['Versão', 'O que é', 'Sketch gravado'],
+              [(M('before'), 'celula'), 'Modelo original, com as regras iniciais.',
+               (M('sketches/iris_before/'), 'celula')],
+              [(M('after'), 'celula'), 'Modelo depois do refinamento (regras redundantes '
+               'removidas).', (M('sketches/iris_after/'), 'celula')],
+          ], [larg * 0.13, larg * 0.50, larg * 0.37]),
+          P('As duas recebem exatamente as mesmas amostras. Os comandos abaixo usam o '
+            + M('iris') + ' num Uno na ' + M('COM5') + '; troque pelo seu dataset, placa e '
+            'porta.'),
+          P('4a. Gerar o pacote de teste (cria as duas versões)', 'h2'),
+          CODE('python examples/arduino_stream_test.py prepare --dataset iris --board uno '
+               '--name iris'),
+          P('Treina o modelo, refina as regras e cria a pasta ' + M('files/stream/iris/') + ' '
+            'com os dois sketches. No final ele já mostra o que espera de cada versão:'),
+          CODE('  rules: before 8 -> after 4\n'
+               '  ...\n'
+               '  before: detects 20/20 episodes, 0 false alarms, mean delay 3.00 samples\n'
+               '  after : detects 20/20 episodes, 0 false alarms, mean delay 3.00 samples'),
+          P('4b. Ensaio sem placa (opcional, 2 minutos)', 'h2'),
+          CODE('python examples/arduino_stream_test.py run --package files/stream/iris '
+               '--port sim'),
+          P('Uma placa de mentira responde no lugar do Arduino. Serve só para confirmar que '
+            'o pacote está certo antes de mexer no hardware.'),
+          P('4c. Rodar na placa', 'h2'),
+          CODE('python examples/arduino_stream_test.py run --package files/stream/iris '
+               '--port COM5'),
+          P('O script faz tudo sozinho, em ordem:'),
+          LI('<b>[1/2] before:</b> compila e grava o sketch ' + M('iris_before') + ', envia as '
+             'amostras e registra as respostas.'),
+          LI('<b>[2/2] after:</b> grava o sketch ' + M('iris_after') + ' por cima e repete '
+             'exatamente o mesmo cenário.'),
+          LI('No fim imprime a tabela <b>Before × After</b> e o resultado.'),
+          P('Com o ' + M('iris') + ' cada versão leva cerca de 1 minuto. Durante o teste o LED '
+            'da placa pisca: ele acende a cada anomalia detectada e apaga quando o próximo '
+            'trecho normal começa.'),
+          P('<b>Sem arduino-cli (usando a Arduino IDE):</b> acrescente '
+            + M('--manual-upload') + '. O script para duas vezes e mostra qual ' + M('.ino')
+            + ' gravar (primeiro o before, depois o after). Grave pela IDE, feche o Monitor '
+            'Serial e aperte Enter.', 'nota'),
+          P('4d. Rodar só uma das versões', 'h2'),
+          P('Para repetir só o <b>after</b> (ou só o <b>before</b>), use ' + M('--variants')
+            + '. Se o sketch certo já estiver gravado na placa, ' + M('--skip-upload') + ' '
+            'pula a gravação:'),
+          CODE('python examples/arduino_stream_test.py run --package files/stream/iris \\\n'
+               '    --port COM5 --variants after\n'
+               '\n'
+               'python examples/arduino_stream_test.py run --package files/stream/iris \\\n'
+               '    --port COM5 --variants after --skip-upload'),
+          P('No Windows (PowerShell/cmd), escreva cada comando numa linha só, sem a '
+            + M('\\') + '.', 'nota')]
+
+    # ---------------------------------------------------------------- 5
+    E += [CondPageBreak(8 * cm),
+          P('Passo 5: ler o resultado (antes × depois)', 'h1'),
+          P('A tabela final coloca as duas versões lado a lado. As linhas que mais importam:'),
+          TABELA([
+              ['Linha da tabela', 'O que comparar entre Before e After'],
+              ['Rules', 'Quantas regras cada versão tem (o after deve ter menos).'],
+              ['Flash / SRAM measured', 'Memória usada na placa (o after deve usar menos).'],
+              ['Inference mean (us)', 'Tempo de cada classificação, em microssegundos.'],
+              ['Accuracy vs true label', 'Acerto contra o rótulo real.'],
+              ['Episodes detected / False alarms', 'Se o refinamento manteve a detecção de '
+               'anomalias sem gerar alarmes falsos.'],
+              ['Class parity board vs Python', 'Tem que dar <b>100%</b> nas duas: a placa '
+               'classifica igual ao Python.'],
+          ], [larg * 0.38, larg * 0.62]),
+          P('A última linha diz <b>Result: PASS</b> ou <b>FAIL</b>. PASS quer dizer que, nas '
+            'duas versões, a placa respondeu tudo, classificou igual ao Python e alarmou '
+            'onde devia.'),
+          P('Os arquivos ficam em ' + M('files/stream/iris/results/<placa>_<data>/') + ': '
+            + M('comparison.md') + ' (a tabela), ' + M('comparison.png') + ' (gráfico) e os '
+            'CSVs com cada amostra de ' + M('before') + ' e ' + M('after') + '. Para ver a '
+            'tabela de novo:'),
+          CODE('python examples/arduino_stream_test.py report --package files/stream/iris')]
+
+    # ---------------------------------------------------------------- 6
+    E += [CondPageBreak(9 * cm),
+          P('Se der errado', 'h1'),
+          TABELA([
+              ['O que aparece', 'O que fazer'],
+              [(M('No handshake from the board'), 'celula'),
+               'Porta errada ou Monitor Serial aberto. Confira ' + M('arduino-cli board list')
+               + ', feche a IDE e rode de novo.'],
+              [(M('arduino-cli not found'), 'celula'),
+               'Reabra o terminal depois de instalar, ou use ' + M('--manual-upload') + '.'],
+              [(M('Upload failed'), 'celula'),
+               'Monitor Serial aberto ou porta errada. Nano: tente ' + M('--board nano_old')
+               + '. ESP32: segure o botão <b>BOOT</b> quando aparecer “Connecting...”.'],
+              [(M('Compilation ... failed'), 'celula'),
+               'O core da placa não está instalado (Passo 1) ou o modelo não cabe: use um '
+               'dataset menor ou um Mega/ESP32.'],
+              [(M('The board runs "before"...'), 'celula'),
+               'O sketch errado está na placa: rode sem ' + M('--skip-upload') + '.'],
+              ['Parity 99,x%', 'Normal em Uno/Nano com valores exatamente no limite de uma '
+               'regra (a placa tem menos precisão decimal). No ESP32 não acontece.'],
+          ], [larg * 0.36, larg * 0.64]),
+          P('Detalhes de cada opção, do protocolo e das métricas estão no tutorial completo, '
+            + M('tutorial_stream_arduino_pt.pdf') + '.')]
+
+    return E
+
+
+# ==============================================================================
 # BUILD
 # ==============================================================================
 
-def gerar(out_dir, work_dir):
+DOCS = {
+    'completo': {'file': 'tutorial_stream_arduino_pt.pdf', 'content': conteudo,
+                 'title': 'Teste de streaming em Arduino/ESP32 — pyruleanalyzer'},
+    'rapido': {'file': 'guia_rapido_arduino_pt.pdf', 'content': conteudo_rapido,
+               'title': 'Guia rápido: testar o modelo no Arduino — pyruleanalyzer'},
+}
+
+
+def gerar(out_dir, work_dir, qual='completo'):
     fig1 = os.path.join(work_dir, 'stream_fluxo.png')
     fig2 = os.path.join(work_dir, 'stream_episodio.png')
     figura_fluxo(fig1)
     figura_episodio(fig2)
 
     os.makedirs(out_dir, exist_ok=True)
-    pdf_path = os.path.join(out_dir, 'tutorial_stream_arduino_pt.pdf')
+    pdf_path = os.path.join(out_dir, DOCS[qual]['file'])
     doc = BaseDocTemplate(pdf_path, pagesize=A4,
                           leftMargin=2 * cm, rightMargin=2 * cm,
                           topMargin=1.8 * cm, bottomMargin=2 * cm,
-                          title='Teste de streaming em Arduino/ESP32 — pyruleanalyzer',
+                          title=DOCS[qual]['title'],
                           author='pyruleanalyzer')
 
     def rodape(canvas, doc_):
@@ -564,7 +760,7 @@ def gerar(out_dir, work_dir):
 
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='normal')
     doc.addPageTemplates([PageTemplate(id='padrao', frames=[frame], onPage=rodape)])
-    doc.build(conteudo(doc.width, fig1, fig2))
+    doc.build(DOCS[qual]['content'](doc.width, fig1, fig2))
     print(f'  {pdf_path} ({os.path.getsize(pdf_path):,} bytes)')
     return pdf_path
 
@@ -573,9 +769,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     p.add_argument('--out-dir', default=os.path.dirname(os.path.abspath(__file__)),
                    help='output directory (default: the examples folder)')
+    p.add_argument('--doc', default='both', choices=['completo', 'rapido', 'both'],
+                   help='full tutorial, quick guide, or both (default)')
     args = p.parse_args()
-    print('Generating the streaming tutorial PDF:')
-    gerar(args.out_dir, tempfile.mkdtemp(prefix='pyra_stream_pdf_'))
+    work = tempfile.mkdtemp(prefix='pyra_stream_pdf_')
+    print('Generating the streaming tutorial PDF(s):')
+    for qual in (['completo', 'rapido'] if args.doc == 'both' else [args.doc]):
+        gerar(args.out_dir, work, qual)
 
 
 if __name__ == '__main__':
