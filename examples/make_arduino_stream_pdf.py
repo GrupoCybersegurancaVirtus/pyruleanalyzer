@@ -288,8 +288,9 @@ def conteudo(larg, fig1, fig2):
               [(M('--n-estimators / --max-depth'), 'celula'), '— / 6',
                'Tamanho do modelo (impacta direto Flash e tempo).'],
               [(M('--model-pkl'), 'celula'), '—', 'Modelo pronto em vez de treinar.'],
-              [(M('--normal-class'), 'celula'), 'a mais frequente',
-               'Rótulo (ou código) da operação normal.'],
+              [(M('--normal-class'), 'celula'), 'automático',
+               'Rótulo (ou código) da operação normal. Sem ele: a classe chamada Normal / '
+               'BENIGN / legitimate / good; senão 0 em rótulos 0/1; senão a mais frequente.'],
               [(M('--episodes'), 'celula'), '20', 'Quantos episódios no cenário.'],
               [(M('--normal-rows / --anomaly-rows'), 'celula'), '30 / 30',
                'Linhas antes e a partir do início da anomalia.'],
@@ -545,6 +546,55 @@ def conteudo(larg, fig1, fig2):
 SETA = '<font name="DejaVu">→</font>'
 
 
+# Datasets of datasets-pyruleanalyzer (processed/<name>/train.csv.gz + test.csv.gz),
+# as measured with `prepare --max-train-rows 50000` (Decision Tree, max depth 6).
+# (name, features, extra options, board, rules before -> after)
+DATASETS_EXEMPLO = [
+    ('water_pipeline', 10, '', 'qualquer', '24 / 15'),
+    ('bot_iot', 11, '', 'qualquer', '49 / 37'),
+    ('mqttset', 17, '', 'qualquer', '14 / 9'),
+    ('water_storage', 23, '', 'qualquer', '21 / 12'),
+    ('cicids2017', 25, '', 'qualquer', '33 / 30'),
+    ('kddcup99', 25, '', 'qualquer', '24 / 17'),
+    ('gas_pipeline', 26, '', 'qualquer', '35 / 22'),
+    ('unsw_nb15', 34, '--target label --drop-cols attack_cat', 'Mega / ESP32', '39 / 22'),
+    ('ton_iot', 34, '', 'Mega / ESP32', '36 / 29'),
+    ('nsl_kdd', 41, '', 'Mega / ESP32', '51 / 36'),
+    ('ciciot2023', 46, '', 'Mega / ESP32', '19 / 15'),
+    ('swat', 51, '', 'Mega / ESP32', '14 / 8'),
+    ('westermo', 53, '--target NST_M_Label', 'Mega / ESP32', '25 / 17'),
+    ('x_iiotid', 61, '', 'Mega / ESP32', '48 / 40'),
+    ('litnet_2020', 83, '--normal-class <uma classe> (*)', 'Mega / ESP32', '5 / 5'),
+    ('edge_iiotset', 113, '', 'Mega / ESP32', '14 / 13'),
+    ('n_baiot_*', 115, '--csv test.csv.gz (**)', 'Mega / ESP32', '10 / 7'),
+    ('drebin', 215, '', 'ESP32', '38 / 22'),
+]
+
+
+def exemplos_datasets(larg):
+    linhas = [['Dataset', 'Features', 'Opções além de --train-csv / --test-csv', 'Placa',
+               'Regras antes / depois']]
+    for nome, nf, extra, placa, regras in DATASETS_EXEMPLO:
+        linhas.append([(M(nome), 'celula'), str(nf), (M(extra) if extra else '—', 'celula'),
+                       placa, regras])
+    return [
+        KeepTogether([
+            P('Os datasets de ' + M('datasets-pyruleanalyzer'), 'h2'),
+            P('Todos foram testados com o comando acima e ' + M('--max-train-rows 50000') + '. '
+              'Os maiores levam cerca de 1 minuto no ' + M('prepare') + '. Datasets que '
+              'aparecem em vários artigos são os mesmos arquivos; use qualquer uma das pastas.'),
+            TABELA(linhas, [larg * 0.19, larg * 0.11, larg * 0.38, larg * 0.15,
+                            larg * 0.17])]),
+        P('(*) O litnet_2020 processado só tem classes de ataque, sem tráfego normal: '
+          'escolha uma delas como “normal” (ex.: ' + M('--normal-class SPAM') + ') e o '
+          'teste vira “essa classe × as outras”.<br/>'
+          '(**) No N-BaIoT o treino tem só tráfego normal (o artigo detecta anomalias sem '
+          'ver ataques), então um modelo de árvore não aprende os ataques. Use só o '
+          + M('test.csv.gz') + ' com ' + M('--csv') + ', que o script divide em 70/30.',
+          'nota'),
+    ]
+
+
 def conteudo_rapido(larg, fig1, fig2):
     E = [Spacer(1, 4),
          P('Guia rápido: testar o modelo no Arduino', 'titulo'),
@@ -615,6 +665,51 @@ def conteudo_rapido(larg, fig1, fig2):
             'bootloader antigo), ' + M('mega') + ', ' + M('leonardo') + ' ou ' + M('esp32')
             + '.')]
 
+    # ---------------------------------------------------------------- 3b
+    E += [P('Ou: usar qualquer outro dataset (CSV)', 'h2'),
+          P('Serve qualquer CSV com uma linha por amostra, uma coluna por feature e uma coluna '
+            'com o rótulo. Pode estar compactado (' + M('.csv.gz') + ', ' + M('.zip') + '). O '
+            'script converte sozinho rótulos e colunas de texto em números, troca valores '
+            'vazios/infinitos por 0 e aceita treino e teste com as colunas em ordem diferente.'),
+          P('Com treino e teste separados, como os datasets de '
+            + M('datasets-pyruleanalyzer') + ' (pasta ' + M('processed\\<dataset>') + ' de cada '
+            'artigo), no PowerShell:'),
+          CODE('$D = "C:\\Users\\...\\datasets-pyruleanalyzer\\<artigo>\\processed\\gas_pipeline"\n'
+               '\n'
+               'python examples/arduino_stream_test.py prepare --train-csv "$D\\train.csv.gz" '
+               '`\n'
+               '    --test-csv "$D\\test.csv.gz" --board mega --name gas_pipeline'),
+          P('Com um CSV só (o script separa 70% para treino e 30% para teste):'),
+          CODE('python examples/arduino_stream_test.py prepare --csv "C:\\dados\\meu.csv" '
+               '--board mega --name meu'),
+          P('Use aspas no caminho (as pastas têm espaços) e um ' + M('--name') + ' curto, sem '
+            'espaços: ele vira o nome da pasta ' + M('files/stream/<name>') + ' usada nos '
+            'próximos passos.', 'nota'),
+          P('Opções que você pode precisar:'),
+          TABELA([
+              ['Opção', 'Quando usar'],
+              [(M('--target <coluna>'), 'celula'),
+               'O rótulo não é a última coluna (padrão: última).'],
+              [(M('--drop-cols a,b'), 'celula'),
+               'Colunas que não são features: ids, horários, ou <b>um segundo rótulo</b> (ex.: '
+               + M('attack_cat') + ' no UNSW-NB15). Deixá-las entrega a resposta ao modelo.'],
+              [(M('--normal-class <rótulo>'), 'celula'),
+               'A operação normal não se chama Normal / BENIGN / legitimate / good. Sem isso, '
+               'o script usa a classe com esse nome; em rótulos 0/1, o 0; senão, a mais '
+               'frequente. Confira a linha ' + M('normal class:') + ' que o prepare imprime.'],
+              [(M('--max-train-rows 50000'), 'celula'),
+               'Arquivos grandes (centenas de MB): treina com uma amostra e fica bem mais '
+               'rápido.'],
+              [(M('--time-col <coluna>'), 'celula'),
+               'O teste tem uma coluna de tempo: os episódios seguem as transições reais '
+               'normal ' + SETA + ' ataque. Some também com ' + M('--drop-cols') + '.'],
+          ], [larg * 0.30, larg * 0.70]),
+          P('<b>Qual placa?</b> Cada amostra viaja como uma linha de texto que a placa guarda '
+            'inteira na RAM. Até ~30 features: qualquer placa. De 30 a ~120: <b>Mega</b> ou '
+            '<b>ESP32</b>. Acima disso: <b>ESP32</b>. O ' + M('prepare') + ' avisa quando a '
+            'linha fica grande demais para Uno/Nano.', 'nota')]
+    E += exemplos_datasets(larg)
+
     # ---------------------------------------------------------------- 4
     E += [P('Passo 4: rodar (antes e depois do refinamento)', 'h1'),
           P('O teste sempre compara <b>duas versões do mesmo modelo</b>, cada uma gravada e '
@@ -632,6 +727,9 @@ def conteudo_rapido(larg, fig1, fig2):
           P('4a. Gerar o pacote de teste (cria as duas versões)', 'h2'),
           CODE('python examples/arduino_stream_test.py prepare --dataset iris --board uno '
                '--name iris'),
+          P('Com outro dataset, use o comando ' + M('prepare') + ' do Passo 3 e, daqui em '
+            'diante, troque ' + M('files/stream/iris') + ' por ' + M('files/stream/<name>') +
+            '.'),
           P('Treina o modelo, refina as regras e cria a pasta ' + M('files/stream/iris/') + ' '
             'com os dois sketches. No final ele já mostra o que espera de cada versão:'),
           CODE('  rules: before 8 -> after 4\n'
@@ -713,6 +811,12 @@ def conteudo_rapido(larg, fig1, fig2):
                'dataset menor ou um Mega/ESP32.'],
               [(M('The board runs "before"...'), 'celula'),
                'O sketch errado está na placa: rode sem ' + M('--skip-upload') + '.'],
+              [(M('Could not read ... Compressed file ended'), 'celula'),
+               'O arquivo do dataset está incompleto (download ou cópia interrompidos). Baixe '
+               'ou copie de novo.'],
+              [(M('train and test CSVs have different columns'), 'celula'),
+               'Treino e teste não têm as mesmas colunas (a mensagem lista quais). Ordem '
+               'diferente não é problema.'],
               ['Parity 99,x%', 'Normal em Uno/Nano com valores exatamente no limite de uma '
                'regra (a placa tem menos precisão decimal). No ESP32 não acontece.'],
           ], [larg * 0.36, larg * 0.64]),
