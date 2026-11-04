@@ -25,6 +25,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn
 from sklearn.base import clone
 from sklearn.ensemble import (ExtraTreesClassifier, GradientBoostingClassifier,
                               RandomForestClassifier)
@@ -50,6 +51,17 @@ ESTIMATORS = {
     "ET": lambda: ExtraTreesClassifier(n_estimators=5, max_depth=5, random_state=0),
 }
 GBDT = lambda: GradientBoostingClassifier(n_estimators=8, max_depth=3, random_state=0)  # noqa: E731
+
+# The scikit-learn release from which each estimator fits and predicts with
+# NaN and records missing_go_to_left; older releases refuse NaN outright.
+_NAN_SINCE = {"DT": (1, 3), "RF": (1, 4), "ET": (1, 6)}
+_SKLEARN = tuple(int(p) for p in sklearn.__version__.split(".")[:2])
+
+
+def _require_nan_support(est):
+    """Skip the test when this scikit-learn cannot route NaN for `est`."""
+    if _SKLEARN < _NAN_SINCE[est]:
+        pytest.skip(f"scikit-learn {sklearn.__version__} has no NaN support for {est}")
 
 
 def _data(n_classes=3, n=300, seed=0, nan_rate=0.15):
@@ -157,6 +169,7 @@ def _assert_engines_equal(results, expected):
 @pytest.mark.parametrize("fit_with_nan", [True, False], ids=["fit_nan", "fit_clean"])
 @pytest.mark.parametrize("est", sorted(ESTIMATORS))
 def test_nan_every_engine_matches_sklearn(est, fit_with_nan, n_classes, tmp_path):
+    _require_nan_support(est)
     Xn, Xc, y = _data(n_classes)
     sk = ESTIMATORS[est]().fit(Xn if fit_with_nan else Xc, y)
     a = _quiet(PyRuleAnalyzer.from_sklearn, sk)
@@ -171,6 +184,7 @@ def test_nan_every_engine_matches_sklearn(est, fit_with_nan, n_classes, tmp_path
 
 
 def test_conditions_record_the_routing_of_every_split():
+    _require_nan_support("DT")
     Xn, _, y = _data()
     sk = ESTIMATORS["DT"]().fit(Xn, y)
     a = _quiet(PyRuleAnalyzer.from_sklearn, sk)
@@ -211,6 +225,7 @@ def test_gbdt_refuses_nan_like_sklearn(tmp_path):
 
 
 def test_pickle_keeps_routing_and_labels():
+    _require_nan_support("ET")
     import pickle
     Xn, _, y0 = _data(3)
     labels = np.array(["cat", "dog", "fox"])[y0]
@@ -247,6 +262,7 @@ def test_rules_without_recorded_routing_refuse_nan():
 
 @pytest.mark.parametrize("est", sorted(ESTIMATORS))
 def test_refinement_with_nan_keeps_engines_consistent(est, tmp_path):
+    _require_nan_support(est)
     Xn, _, y = _data(3, n=400)
     train, test = Xn.iloc[:250], Xn.iloc[250:]
     sk = ESTIMATORS[est]().fit(train, y[:250])
@@ -392,6 +408,7 @@ def test_string_labels_every_engine(est, n_classes, tmp_path):
 
 
 def test_float_labels_and_refinement(tmp_path, monkeypatch):
+    _require_nan_support("RF")
     # scikit-learn refuses non-integral float targets ("continuous"), but
     # class_names may name the classes with any labels.
     Xn, _, y0 = _data(3, n=400)
@@ -426,6 +443,7 @@ def test_float_labels_and_refinement(tmp_path, monkeypatch):
 
 
 def test_fit_with_string_labels_and_nan(tmp_path):
+    _require_nan_support("DT")
     Xn, _, y0 = _data(3)
     labels = np.array(["low", "mid", "high"])[y0]
     a = PyRuleAnalyzer.new_model("Decision Tree", {"max_depth": 5, "random_state": 0})
@@ -488,6 +506,7 @@ def test_legacy_models_are_written_as_before(tmp_path):
 
 
 def test_json_version_1_still_loads(tmp_path):
+    _require_nan_support("DT")
     import json
     Xn, Xc, y0 = _data(3)
     a = _quiet(PyRuleAnalyzer.from_sklearn, ESTIMATORS["DT"]().fit(Xc, y0))
@@ -576,6 +595,7 @@ def test_extra_tree_classifier_refit():
 # ---------------------------------------------------------------------------
 
 def test_cpn_handles_missing_only_splits_and_refuses_nan(tmp_path):
+    _require_nan_support("DT")
     Xn, Xc, y = _data(2)
     sk = DecisionTreeClassifier(max_depth=4, random_state=0).fit(Xn, y)
     assert np.isinf(sk.tree_.threshold).any()   # a split isolating NaN
@@ -608,6 +628,7 @@ def _c_compiler():
 
 @pytest.mark.parametrize("est", ["DT", "RF"])
 def test_c_header_routes_nan_like_sklearn(est, tmp_path):
+    _require_nan_support(est)
     compiler = _c_compiler()
     if compiler is None:
         pytest.skip("no C compiler on PATH")

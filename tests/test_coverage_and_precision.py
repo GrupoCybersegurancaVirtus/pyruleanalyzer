@@ -22,6 +22,7 @@ import contextlib
 
 import numpy as np
 import pytest
+import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 
@@ -134,6 +135,10 @@ def test_rf_total_abstention_resolves_to_default_class():
 # Missing values
 # ---------------------------------------------------------------------------
 
+# scikit-learn predicts with NaN (and records missing_go_to_left) from 1.3.
+@pytest.mark.skipif(
+    tuple(int(p) for p in sklearn.__version__.split(".")[:2]) < (1, 3),
+    reason="scikit-learn < 1.3 has no NaN support")
 def test_nan_input_follows_the_tree_routing():
     # NaN used to be rejected; rules read from a fitted tree now record
     # where each split sends it, as scikit-learn does.
