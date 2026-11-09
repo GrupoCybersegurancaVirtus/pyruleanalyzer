@@ -239,15 +239,15 @@ works for all three model types.
 | **Usage count** | Runs the refinement samples through the rules and counts how often each fires. | unchanged |
 | **Boundary merge** | Sibling leaves with the same output and complementary conditions (`<= T` and `> T`) are merged into their parent, repeatedly, until no pair is left. The merged rule carries the sum of the two usage counts. | unchanged |
 | **Low-usage removal** | Rules used `remove_below_n_classifications` times or fewer are removed, deepest first; the sibling of a removed rule is promoted. `-1` disables it, `0` removes only never-used rules. | may change |
-| **Inter-tree fusion** (GBDT, `refine_between_trees=True`) | Stages of one class with an identical region are folded into one rule whose contribution is the sum. The other stages abstain there. | unchanged |
+| **Inter-tree fusion** (GBDT, on by default; `refine_between_trees=False` turns it off) | Stages of one class with an identical region are folded into one rule whose contribution is the sum. The other stages abstain there. | unchanged |
 
 ```python
 # Random Forest: low-usage removal only (see below for why not inter-tree).
 model.execute_rule_refinement(X=X_val, y=y_val, remove_below_n_classifications=1)
 
-# Gradient Boosting: also fold identical stages.
-model.execute_rule_refinement(X=X_val, y=y_val, remove_below_n_classifications=1,
-                              refine_between_trees=True)
+# Gradient Boosting: identical stages are also folded (refine_between_trees,
+# on by default for GBDT).
+model.execute_rule_refinement(X=X_val, y=y_val, remove_below_n_classifications=1)
 ```
 
 Merging siblings is a promotion upwards:
@@ -792,7 +792,7 @@ added condition) refuse NaN as before.
 | `.fit(X, y)` | Train the scikit-learn model and extract its rules |
 | `PyRuleAnalyzer.from_sklearn(model, feature_names=None, class_names=None)` | Wrap an already-fitted `DecisionTreeClassifier`, `RandomForestClassifier`, `ExtraTreesClassifier` (wrapped as a Random Forest; `get_params()["estimator"]` remembers the class, so refitting, also after `clone`, trains an `ExtraTreesClassifier` again) or `GradientBoostingClassifier` |
 | `PyRuleAnalyzer.create(train_path, test_path, model, params, refine)` | Same, from CSV files |
-| `.execute_rule_refinement(X, y, remove_below_n_classifications=-1, refine_between_trees=False, ...)` | Refine; returns `rules_before`, `rules_after`, `rules_removed`, `reduction_percent` |
+| `.execute_rule_refinement(X, y, remove_below_n_classifications=-1, refine_between_trees=None, ...)` | Refine; returns `rules_before`, `rules_after`, `rules_removed`, `reduction_percent` |
 | `.compare_initial_final_results(X, y)` | Metrics and disagreements, initial against refined |
 | `.predict(X, use_refined=True)`, `.predict_proba(X, ...)` | Vectorised prediction |
 | `.summary_report()` | A dict: model type, total rules, classes and every rule |

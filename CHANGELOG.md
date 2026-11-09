@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Changed**
+* `execute_rule_refinement` merges identical regions across the stages of a
+  Gradient Boosting model by default (`refine_between_trees=None` means on for
+  GBDT, off for Random Forest and Decision Tree). The merged rule carries the
+  sum of the values, so predictions are unchanged; on a 50-stage, 8-class
+  model it removed a further 25% of the rules and 10% of the exported size.
+  Pass `refine_between_trees=False` for the previous behaviour.
+
 ## 2.1.0
 
 **Breaking changes**

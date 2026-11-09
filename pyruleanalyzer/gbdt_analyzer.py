@@ -250,7 +250,7 @@ class GBDTAnalyzer:
         X=None,
         y=None,
         remove_below_n_classifications: int = -1,
-        refine_between_trees: bool = False,
+        refine_between_trees: bool = True,
         save_final_model: bool = True,
         save_report: bool = True,
         max_error_increase: Optional[int] = None,
@@ -270,6 +270,10 @@ class GBDTAnalyzer:
             y: True labels.
             remove_below_n_classifications: Threshold for low-usage refinement
                 (-1 disables).
+            refine_between_trees: After the low-usage stage, merge the rules of
+                different stages of one class that cover the same region into
+                one rule carrying the sum of their values; the other stages
+                add 0 there, so predictions are unchanged. Default True.
             save_final_model: Whether to save the final model to 'final_model.pkl'.
                 Default is True.
             save_report: Whether to save the analysis report to 'output_classifier_gbdt.txt'.

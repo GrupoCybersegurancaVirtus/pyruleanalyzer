@@ -42,7 +42,8 @@ def test_batch_counts_every_leaf_once_per_sample():
     X, y = make_classification(n_samples=300, n_features=5, n_classes=3,
                                n_informative=3, random_state=1)
     sk = GradientBoostingClassifier(n_estimators=8, max_depth=3, random_state=0).fit(X, y)
-    an = _refined(sk, X, y, 'batch')
+    # without inter-tree merging, which moves merged regions out of all but one stage
+    an = _refined(sk, X, y, 'batch', refine_between_trees=False)
     clf = an.classifier
     by_tree = {}
     for r in clf.final_rules:

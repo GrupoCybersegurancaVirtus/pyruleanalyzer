@@ -750,7 +750,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         remove_below_n_classifications: int = -1,
         save_final_model: bool = False,
         save_report: bool = False,
-        refine_between_trees: bool = False,
+        refine_between_trees: Optional[bool] = None,
         max_error_increase: Optional[int] = None,
         usage_engine: str = 'auto',
     ) -> Dict[str, Any]:
@@ -773,7 +773,8 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 redundancy; the merged rule carries the sum of their values,
                 so the score is unchanged). Refused for Random Forest, where
                 it would change the soft vote; no effect on a Decision Tree.
-                Default is False.
+                None (default) turns it on for Gradient Boosting and off
+                otherwise.
             max_error_increase: Error-aware refinement: remove a low-usage
                 rule only while the refinement-set errors stay within this
                 many samples of those before the stage (0 = never more
@@ -798,6 +799,9 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             >>> print(f"Removed {stats['rules_removed']} rules ({stats['reduction_percent']:.1f}%)")
         """
         rules_before = len(self.classifier.initial_rules)
+        if refine_between_trees is None:
+            refine_between_trees = (self.classifier.algorithm_type
+                                    == 'Gradient Boosting Decision Trees')
         
         # Execute refinement using the appropriate analyzer
         # The analyzer handles save_final_model and save_report internally
