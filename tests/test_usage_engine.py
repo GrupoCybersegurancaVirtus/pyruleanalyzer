@@ -52,6 +52,27 @@ def test_batch_counts_every_leaf_once_per_sample():
     assert set(by_tree.values()) == {len(X)}
 
 
+@pytest.mark.parametrize('n_classes', [2, 3])
+def test_batch_recount_equals_evaluator(n_classes):
+    X, y = make_classification(n_samples=500, n_features=6, n_informative=4,
+                               n_classes=n_classes, random_state=7)
+    sk = GradientBoostingClassifier(n_estimators=12, max_leaf_nodes=10, max_depth=None,
+                                    random_state=0).fit(X[:300], y[:300])
+    an = _refined(sk, X[300:], y[300:], 'loop', remove_below_n_classifications=3)
+    clf = an.classifier
+    names = [f'f{i}' for i in range(X.shape[1])]
+    labels = np.asarray(y).astype(str)
+    clf._refinement_evaluator(X, labels, names, clf.final_rules).recount(clf.final_rules)
+    expected = _signature(clf.final_rules)
+    for r in clf.final_rules:
+        r.usage_count = r.error_count = -1
+    for r in clf.final_rules:   # init scores are not recounted by either path
+        if not r.parsed_conditions:
+            r.usage_count, r.error_count = expected[clf.final_rules.index(r)][3:]
+    assert clf._recount_gbdt_batch(X, labels, names, clf.final_rules)
+    assert _signature(clf.final_rules) == expected
+
+
 def test_auto_and_bad_engine():
     X, y = make_classification(n_samples=200, n_features=4, random_state=2)
     sk = GradientBoostingClassifier(n_estimators=5, max_depth=2, random_state=0).fit(X, y)

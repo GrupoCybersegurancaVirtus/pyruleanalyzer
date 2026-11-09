@@ -254,7 +254,7 @@ class GBDTAnalyzer:
         save_final_model: bool = True,
         save_report: bool = True,
         max_error_increase: Optional[int] = None,
-        usage_engine: str = 'loop',
+        usage_engine: str = 'auto',
     ) -> None:
         """Evaluates GBDT rules on a dataset, detects redundancies, and refines.
 
@@ -285,7 +285,7 @@ class GBDTAnalyzer:
                 routes all samples through compiled tree arrays (orders of
                 magnitude faster on large sets, same counts and predictions as
                 the loop); 'loop' classifies one sample at a time with
-                `classify_gbdt`; 'auto' uses 'batch' whenever it applies
+                `classify_gbdt`; 'auto' (default) uses 'batch' whenever it applies
                 (numeric inputs without missing values, '<='/'>' conditions,
                 rules that are the leaves of trees, as extracted from a model)
                 and 'loop' otherwise.
@@ -411,7 +411,8 @@ class GBDTAnalyzer:
             n_before = len(clf.final_rules)
             if clf.specific_rules:
                 clf._remove_low_usage(clf.specific_rules, X_test, y_test,
-                                      feature_names, max_error_increase)
+                                      feature_names, max_error_increase,
+                                      usage_engine=usage_engine)
                 print(f'Rules after promotion: {len(clf.final_rules)}')
             self.redundancy_counts['low_usage'] = n_before - len(clf.final_rules)
 

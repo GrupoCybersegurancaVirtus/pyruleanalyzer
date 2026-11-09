@@ -826,7 +826,7 @@ class RefinementMixin:
 
     # Method to run the low-usage stage on the refinement set
     def _remove_low_usage(self, rules_to_remove, X, y, feature_names,
-                          max_error_increase=None):
+                          max_error_increase=None, usage_engine='loop'):
         """Remove `rules_to_remove` from `final_rules`, then recount usage.
 
         The low-usage stage of the analyzers. Each removal hands the rule's
@@ -845,6 +845,9 @@ class RefinementMixin:
             feature_names (List[str]): Column names of `X`.
             max_error_increase (int, optional): Error budget; None (default)
                 removes every candidate (usage-only criterion).
+            usage_engine (str): 'loop' recounts with the rule masks; 'batch'
+                (GBDT) through compiled tree arrays, same counts; 'auto' uses
+                'batch' when it applies.
 
         Returns:
             List[Rule]: The refined rule set (also stored in `final_rules`).
@@ -861,10 +864,117 @@ class RefinementMixin:
         if max_error_increase is not None:
             print(f"Refinement-set errors: {evaluator.base_errors} -> "
                   f"{evaluator.errors()} (budget +{max_error_increase}).")
-        self._refinement_evaluator(
-            X, y, feature_names, self.final_rules,
-            keep_tree_outputs=False).recount(self.final_rules)
+        if not (usage_engine != 'loop'
+                and self._recount_gbdt_batch(X, y, feature_names, self.final_rules)):
+            if usage_engine == 'batch' and self.algorithm_type == 'Gradient Boosting Decision Trees':
+                raise ValueError("usage_engine='batch': the refined rules cannot be "
+                                 "recounted on tree arrays; use 'auto'.")
+            self._refinement_evaluator(
+                X, y, feature_names, self.final_rules,
+                keep_tree_outputs=False).recount(self.final_rules)
         return self.final_rules
+
+    # Method to recount GBDT usage/errors through compiled tree arrays
+    def _recount_gbdt_batch(self, X, y, feature_names, rules) -> bool:
+        """`_refinement_evaluator(...).recount(rules)` for GBDT, vectorized.
+
+        Routes every sample through each tree's arrays instead of testing
+        each rule's conditions on every sample. The sum of the tree outputs is
+        accumulated in the evaluator's order (trees in the order of `rules`,
+        then the init scores), so predictions, usage and error counts are
+        identical to the evaluator's.
+
+        Args:
+            X (np.ndarray): Refinement samples (prepared).
+            y (array-like): True labels.
+            feature_names (List[str]): Column names of `X`.
+            rules (List[Rule]): The rule set to recount (set in place).
+
+        Returns:
+            bool: True if the counts were set; False (rules untouched) when
+            the fast path does not apply: not a GBDT, missing values,
+            conditions other than '<='/'>', unknown features, or rules that
+            are not the leaves of trees.
+        """
+        if self.algorithm_type != 'Gradient Boosting Decision Trees':
+            return False
+        from ._accel import traverse_tree_batch
+        try:
+            X = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
+        except (TypeError, ValueError):
+            return False
+        if X.ndim != 2 or np.isnan(X).any():
+            return False
+
+        def _lab(v):
+            try:
+                return int(str(v).replace('Class', '').strip())
+            except (ValueError, AttributeError):
+                return v
+
+        y = np.array([_lab(v) for v in y])
+        col = {f: i for i, f in enumerate(feature_names)}
+        classes = list(self._gbdt_classes or [])
+        k = len(classes)
+        if not k:
+            return False
+        gcol = {c: i for i, c in enumerate(classes)}
+
+        trees: dict = defaultdict(list)
+        for r in rules:
+            if r.parsed_conditions:   # init scores are not leaves
+                trees[r.name.split('_')[0] if '_' in r.name else r.name].append(r)
+        plan = []
+        try:
+            for trules in trees.values():
+                for r in trules:
+                    for var, op, _ in r.parsed_conditions:
+                        if var not in col or op not in ('<=', '>'):
+                            return False
+                    if r.class_group not in gcol:
+                        return False
+                nodes = self._tree_from_rules(trules, True)
+                owner = {nid: nd['rule'] for nid, nd in nodes.items() if nd.get('rule') is not None}
+                arrays = self._build_single_tree_arrays(
+                    trules, col, self.algorithm_type, self.num_classes or k)
+                plan.append((arrays, owner))
+        except ValueError:
+            return False
+
+        n = len(y)
+
+        def _ids(arrays):
+            return traverse_tree_batch(X, arrays['feature_idx'], arrays['threshold'],
+                                       arrays['children_left'], arrays['children_right'],
+                                       arrays['max_depth'], None)
+
+        agg = np.zeros((n, k), dtype=np.float64)
+        for arrays, owner in plan:
+            ids = _ids(arrays)
+            # A tree's output: its matching rule's contribution in the column
+            # of the rule's class group, zero elsewhere (as `_output`).
+            for j in {gcol[r.class_group] for r in owner.values()}:
+                v = np.zeros(len(arrays['value']), dtype=np.float64)
+                for nid, r in owner.items():
+                    if gcol[r.class_group] == j:
+                        v[nid] = r.contribution or 0.0
+                agg[:, j] += v[ids]
+        init = np.array([self._gbdt_init_scores.get(c, 0.0) for c in classes], dtype=np.float64)
+        score = agg + init
+        if self._gbdt_is_binary:
+            pred = np.where(score[:, 1] >= 0, _lab(classes[1]), _lab(classes[0]))
+        else:
+            labs = np.array([_lab(c) for c in classes], dtype=object)
+            pred = labs[np.argmax(score, axis=1)]
+        wrong = np.asarray(pred != y, dtype=bool)
+        for arrays, owner in plan:
+            ids = _ids(arrays)
+            use = np.bincount(ids, minlength=len(arrays['value']))
+            err = np.bincount(ids[wrong], minlength=len(arrays['value']))
+            for nid, r in owner.items():
+                r.usage_count = int(use[nid])
+                r.error_count = int(err[nid])
+        return True
 
     # Method to build an evaluator of rule-set changes on the refinement set
     def _refinement_evaluator(self, X, y, feature_names, rules, max_error_increase=0,

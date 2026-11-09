@@ -752,7 +752,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         save_report: bool = False,
         refine_between_trees: bool = False,
         max_error_increase: Optional[int] = None,
-        usage_engine: str = 'loop',
+        usage_engine: str = 'auto',
     ) -> Dict[str, Any]:
         """
         Refine the classifier by removing redundant and low-usage rules.
@@ -781,7 +781,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             usage_engine: How rule usage is counted (Gradient Boosting):
                 'batch' routes all samples through compiled tree arrays (much
                 faster, same counts), 'loop' one sample at a time, and 'auto'
-                'batch' whenever it applies, else 'loop'.
+                (default) 'batch' whenever it applies, else 'loop'.
 
         Returns:
             Dictionary with refinement statistics:
