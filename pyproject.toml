@@ -20,7 +20,7 @@ dependencies = [
     "scikit-learn>=1.0",
     "matplotlib",
     # Model checking of the exported .cpn models (pure standard library).
-    "cpncheck>=0.2.1",
+    "cpncheck>=0.2.2",
 ]
 keywords = ["scikit-learn", "decision tree", "random forest", "gradient boosting",
             "rule extraction", "explainability", "petri nets", "model checking",

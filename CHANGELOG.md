@@ -90,6 +90,9 @@
 * The recount after low-usage removal accumulates the tree outputs instead of
   keeping one (samples x classes) array per tree, which for large multiclass
   ensembles reserved tens of GB.
+* Requires CPNCheck 0.2.2, which loads large nets about five times faster
+  (a net of 33 000 transitions: 67 s to 13 s), so verifying and
+  fault-injecting large ensembles spends much less time reading the `.cpn`.
 
 **Internal**
 * `rule_classifier.py` (7 500 lines) is split into one module per
