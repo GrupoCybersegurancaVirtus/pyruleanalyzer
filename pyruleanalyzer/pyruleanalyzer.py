@@ -752,6 +752,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         save_report: bool = False,
         refine_between_trees: bool = False,
         max_error_increase: Optional[int] = None,
+        usage_engine: str = 'loop',
     ) -> Dict[str, Any]:
         """
         Refine the classifier by removing redundant and low-usage rules.
@@ -777,6 +778,10 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 rule only while the refinement-set errors stay within this
                 many samples of those before the stage (0 = never more
                 errors). None (default) = usage only.
+            usage_engine: How rule usage is counted (Gradient Boosting):
+                'batch' routes all samples through compiled tree arrays (much
+                faster, same counts), 'loop' one sample at a time, and 'auto'
+                'batch' whenever it applies, else 'loop'.
 
         Returns:
             Dictionary with refinement statistics:
@@ -829,7 +834,8 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 refine_between_trees=refine_between_trees,
                 max_error_increase=max_error_increase,
                 save_final_model=save_final_model,
-                save_report=save_report
+                save_report=save_report,
+                usage_engine=usage_engine,
             )
         else:
             raise ValueError(f"Unsupported algorithm type: {self.classifier.algorithm_type}")

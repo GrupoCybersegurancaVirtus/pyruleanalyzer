@@ -26,6 +26,140 @@ import numpy as np
 import pandas as pd
 
 from .rule_classifier import RuleClassifier
+from ._accel import traverse_tree_batch as _accel_traverse
+
+
+def _count_usage_batch(clf, X_test, y_test, feature_names):
+    """Usage/error counts and predictions of `clf.final_rules`, vectorized.
+
+    Computes exactly what the per-sample loop of `execute_rule_refinement`
+    computes with `RuleClassifier.classify_gbdt`: each tree's leaves are
+    rebuilt as tree arrays and every sample is routed with the compiled
+    traversal, the scores are accumulated tree by tree in the same order as
+    `classify_gbdt` (so they are bitwise the same), and a rule is counted for
+    every sample that reaches it. Rules without conditions (init scores) match
+    every sample and add nothing to the score, as there.
+
+    Args:
+        clf (RuleClassifier): Classifier whose `final_rules` are counted.
+        X_test (list | np.ndarray): Prepared samples (`_prepare_test_data`).
+        y_test (list | np.ndarray): True labels.
+        feature_names (List[str]): Column names of `X_test`.
+
+    Returns:
+        np.ndarray | None: Predicted labels, with `usage_count`/`error_count`
+        of the rules set; None, with the rules untouched, when the fast path
+        does not apply (non-numeric or missing values, conditions other than
+        ``<=``/``>``, unknown features, or rules that are not the leaves of
+        one tree), so the caller falls back to the per-sample loop.
+    """
+    try:
+        X = np.ascontiguousarray(np.asarray(X_test, dtype=np.float64))
+        y = np.asarray([int(v) for v in y_test])
+    except (TypeError, ValueError):
+        return None
+    if X.ndim != 2 or len(X) != len(y) or np.isnan(X).any():
+        return None
+    col = {f: i for i, f in enumerate(feature_names)}
+    classes = list(clf._gbdt_classes or [])
+    init_scores = clf._gbdt_init_scores or {}
+    is_binary = bool(clf._gbdt_is_binary)
+    if not classes:
+        return None
+
+    # Trees in the order classify_gbdt groups them (first appearance).
+    tree_map: Dict[str, list] = {}
+    for rule in clf.final_rules:
+        tid = rule.name.split('_')[0] if '_' in rule.name else rule.name
+        tree_map.setdefault(tid, []).append(rule)
+
+    # Build every tree first, so a fallback leaves the counters untouched.
+    pos_class = classes[1] if is_binary else None
+    plan = []   # (class_group, always-matching rules, arrays or None, {node: rule})
+    try:
+        for trules in tree_map.values():
+            group = trules[0].class_group
+            if is_binary and group != pos_class:
+                continue   # classify_gbdt skips these trees entirely
+            always = [r for r in trules if not r.parsed_conditions and r.contribution is not None]
+            leaves = [r for r in trules if r.parsed_conditions or r.contribution is None]
+            arrays, owner = None, {}
+            if leaves:
+                for r in leaves:
+                    if not r.parsed_conditions:
+                        return None   # a condition-free leaf without contribution
+                    for var, op, _ in r.parsed_conditions:
+                        if var not in col or op not in ('<=', '>'):
+                            return None
+                nodes = RuleClassifier._tree_from_rules(leaves, True)
+                owner = {nid: nd['rule'] for nid, nd in nodes.items() if nd.get('rule') is not None}
+                arrays = RuleClassifier._build_single_tree_arrays(
+                    leaves, col, 'Gradient Boosting Decision Trees', len(classes))
+            plan.append((group, always, arrays, owner))
+    except ValueError:
+        return None
+
+    n = len(X)
+
+    def _leaves(arrays):
+        return _accel_traverse(X, arrays['feature_idx'], arrays['threshold'],
+                               arrays['children_left'], arrays['children_right'],
+                               arrays['max_depth'], None)
+
+    for rule in clf.final_rules:
+        rule.usage_count = 0
+        rule.error_count = 0
+
+    # Pass 1: scores and usage.
+    if is_binary:
+        score = np.full(n, init_scores.get(pos_class, 0.0), dtype=np.float64)
+    else:
+        score = np.empty((n, len(classes)), dtype=np.float64)
+        for j, c in enumerate(classes):
+            score[:, j] = init_scores.get(c, 0.0)
+        gcol = {c: j for j, c in enumerate(classes)}
+    for group, always, arrays, owner in plan:
+        for r in always:
+            r.usage_count += n
+        if arrays is None:
+            continue
+        ids = _leaves(arrays)
+        counts = np.bincount(ids, minlength=len(arrays['value']))
+        for nid, r in owner.items():
+            r.usage_count += int(counts[nid])
+        contrib = np.zeros(len(arrays['value']), dtype=np.float64)
+        hit = np.zeros(len(arrays['value']), dtype=bool)
+        for nid, r in owner.items():
+            if r.contribution is not None:
+                contrib[nid] = r.contribution
+                hit[nid] = True
+        if is_binary:
+            m = hit[ids]
+            score[m] += contrib[ids][m]
+        elif group in gcol:
+            m = hit[ids]
+            j = gcol[group]
+            score[m, j] += contrib[ids][m]
+
+    if is_binary:
+        pred = np.where(score >= 0.0, int(classes[1]), int(classes[0]))
+    else:
+        cls_int = np.array([int(c) for c in classes])
+        pred = cls_int[np.argmax(score, axis=1)]
+
+    # Pass 2: errors (samples the full model misclassifies, per rule reached).
+    wrong = pred != y
+    n_wrong = int(wrong.sum())
+    for group, always, arrays, owner in plan:
+        for r in always:
+            r.error_count += n_wrong
+        if arrays is None or not n_wrong:
+            continue
+        ids = _leaves(arrays)[wrong]
+        counts = np.bincount(ids, minlength=len(arrays['value']))
+        for nid, r in owner.items():
+            r.error_count += int(counts[nid])
+    return pred
 
 
 class GBDTAnalyzer:
@@ -120,6 +254,7 @@ class GBDTAnalyzer:
         save_final_model: bool = True,
         save_report: bool = True,
         max_error_increase: Optional[int] = None,
+        usage_engine: str = 'loop',
     ) -> None:
         """Evaluates GBDT rules on a dataset, detects redundancies, and refines.
 
@@ -146,6 +281,14 @@ class GBDTAnalyzer:
                 before the low-usage stage by more than this many; 0 is
                 reduced-error pruning (errors never increase). Use a large
                 threshold to let the error criterion alone decide.
+            usage_engine: How the usage of each rule is counted. 'batch'
+                routes all samples through compiled tree arrays (orders of
+                magnitude faster on large sets, same counts and predictions as
+                the loop); 'loop' classifies one sample at a time with
+                `classify_gbdt`; 'auto' uses 'batch' whenever it applies
+                (numeric inputs without missing values, '<='/'>' conditions,
+                rules that are the leaves of trees, as extracted from a model)
+                and 'loop' otherwise.
 
         A removed leaf whose sibling is a leaf promotes that sibling (it takes
         the removed region with its own value). When the sibling is a
@@ -160,7 +303,6 @@ class GBDTAnalyzer:
 
         # 1. Load Data
         X_test, y_test, feature_names = RuleClassifier._prepare_test_data(file_path, X, y, clf)
-        sample_dicts = [dict(zip(feature_names, row)) for row in X_test]
         total_samples = len(y_test)
 
         # 2. Reset Counters
@@ -169,8 +311,25 @@ class GBDTAnalyzer:
             rule.usage_count = 0
             rule.error_count = 0
 
-        # 3. Classification Loop
+        # 3. Classification: vectorized when the rules are the leaves of trees
+        # (always, for rules extracted from a model); otherwise one sample at a
+        # time. Both give the same predictions and counts.
         y_pred: List[Any] = []
+        if usage_engine not in ('auto', 'batch', 'loop'):
+            raise ValueError("usage_engine must be 'auto', 'batch' or 'loop'.")
+        fast = (_count_usage_batch(clf, X_test, y_test, feature_names)
+                if usage_engine != 'loop' else None)
+        if fast is None and usage_engine == 'batch':
+            raise ValueError(
+                "usage_engine='batch' needs numeric inputs without missing values, "
+                "conditions '<='/'>' on known features, and rules that are the "
+                "leaves of trees; use 'auto' to fall back to the per-sample loop.")
+        if fast is not None:
+            y_pred = list(fast)
+            print(f'[==============================] 100.0% | vectorized, '
+                  f'{time.time() - start_time:.1f}s')
+        sample_dicts = ([dict(zip(feature_names, row)) for row in X_test]
+                        if fast is None else [])
 
         for i, sample in enumerate(sample_dicts):
             true_label = int(y_test[i])
