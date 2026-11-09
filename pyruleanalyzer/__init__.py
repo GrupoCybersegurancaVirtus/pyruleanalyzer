@@ -14,6 +14,13 @@ from .model_checker import (
     compare_results,
 )
 from .verified_pipeline import verified_pipeline
+from .footprint import (
+    BOARDS,
+    Board,
+    estimate_footprint,
+    fit_to_board,
+    suggest_complexity,
+)
 
 __all__ = [
     'RuleClassifier',
@@ -32,4 +39,9 @@ __all__ = [
     'PROPERTY_CATALOG',
     'check_cpn',
     'compare_results',
+    'BOARDS',
+    'Board',
+    'estimate_footprint',
+    'fit_to_board',
+    'suggest_complexity',
 ]
