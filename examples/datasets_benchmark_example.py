@@ -1,5 +1,5 @@
 """
-Full-metric benchmark across the article datasets.
+Full-metric benchmark across a list of user-configured datasets.
 
 For every (dataset x model) pair it trains the model, extracts rules, refines
 them, exports every artifact format and records everything measurable:
@@ -17,7 +17,7 @@ Outputs (in --out-dir, default files/, one set per run):
 
 Usage:
     python examples/datasets_benchmark_example.py
-    python examples/datasets_benchmark_example.py --dataset Detecting --model DT
+    python examples/datasets_benchmark_example.py --dataset "My dataset" --model DT
     python examples/datasets_benchmark_example.py --no-cpn --no-arduino
     python examples/datasets_benchmark_example.py --keep-artifacts --timing-repeats 3
 
@@ -48,99 +48,28 @@ from pyruleanalyzer import PyRuleAnalyzer, RuleClassifier
 
 # ==============================================================================
 # CONFIGURATION of DATASETS
-# Fill in the paths for train and test CSV files of each dataset,
-# as well as the parameters for each algorithm.
+# One entry per dataset. Each needs a train and a test CSV whose last column is
+# the label, plus the hyperparameters of each algorithm (use {} for the
+# scikit-learn defaults). Entries whose train/test path is empty are skipped.
+# Use --dataset <part of the name> to run a single entry.
 # ==============================================================================
 DATASETS = [
     {
-        "nome": "Usage of Machine Learning in DDOS Attack Detection (Article)",
-        "train": "examples/data/Usage_of_Machine_Learning_in_DDOS_Attack_Detection/train.csv",
-        "test": "examples/data/Usage_of_Machine_Learning_in_DDOS_Attack_Detection/test.csv",
-        "param_dt": {"random_state": 42},
-        "param_rf": {"n_estimators": 300, "random_state": 42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Improvement of Distributed Denial of Service Attack Detection through Machine Learning and Data Processing (Article)",
-        "train": "examples/data/Improvement_of_Distributed_Denial_of_Service_Attack_Detection_through_Machine_Learning_and_Data_Processing/train.csv",
-        "test": "examples/data/Improvement_of_Distributed_Denial_of_Service_Attack_Detection_through_Machine_Learning_and_Data_Processing/test.csv",
-        "param_dt": {"criterion":'gini', "splitter":'best', "max_depth":7, "min_samples_split":24, "min_samples_leaf":10, "random_state":42},
-        "param_rf": {"criterion":'entropy', "n_estimators":43, "max_depth":12, "max_features":0.9145, "random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Machine Learning Techniques for Detecting DDOS Attacks (Article)",
-        "train": "examples/data/Machine_Learning_Techniques_for_Detecting_DDOS_Attacks/train.csv",
-        "test": "examples/data/Machine_Learning_Techniques_for_Detecting_DDOS_Attacks/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "A Paradigm for DoS Attack Disclosure using Machine Learning Techniques (Article)",
-        "train": "examples/data/A_Paradigm_for_DoS_Attack_Disclosure_using_Machine_Learning_Techniques/train.csv",
-        "test": "examples/data/A_Paradigm_for_DoS_Attack_Disclosure_using_Machine_Learning_Techniques/test.csv",
-        "param_dt": {"random_state":42}, # only dt
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Anomaly detection in NetFlow network traffic using supervised machine learning algorithms (Article)",
-        "train": "examples/data/Anomaly_detection_in_NetFlow_network_traffic_using_supervised_machine_learning_algorithms/train.csv",
-        "test": "examples/data/Anomaly_detection_in_NetFlow_network_traffic_using_supervised_machine_learning_algorithms/test.csv",
+        "nome": "My dataset",
+        "train": "examples/data/my_dataset/train.csv",
+        "test": "examples/data/my_dataset/test.csv",
         "param_dt": {"random_state": 42},
         "param_rf": {"n_estimators": 100, "random_state": 42, "n_jobs": -1},
-        "param_gbdt": {"random_state":42}
+        "param_gbdt": {"random_state": 42},
     },
-    # PW bases
-    {
-        "nome": "A Comprehensive Analysis of Network Security Attack Classification using Machine Learning Algorithms (Article)",
-        "train": "examples/data/A_Comprehensive_Analysis_of_Network_Security_Attack_Classification_using_Machine_Learning_Algorithms/train.csv",
-        "test": "examples/data/A_Comprehensive_Analysis_of_Network_Security_Attack_Classification_using_Machine_Learning_Algorithms/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42}, # only rf
-        "param_gbdt": {"random_state":42},
-    },
-    {
-        "nome": "An Evaluation of Machine Learning Methods for Classifying Bot Traffic in Software Defined Networks (Article)",
-        "train": "examples/data/An_Evaluation_of_Machine_Learning_Methods_for_Classifying_Bot_Traffic_in_Software_Defined_Networks/train.csv",
-        "test": "examples/data/An_Evaluation_of_Machine_Learning_Methods_for_Classifying_Bot_Traffic_in_Software_Defined_Networks/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42}, # only rf
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Capturing low-rate DDoS attack based on MQTT protocol in software Defined-IoT environment (Article)",
-        "train": "examples/data/Capturing_low-rate_DDoS_attack_based_on_MQTT_protocol_in_software_Defined-IoT_environment/train.csv",
-        "test": "examples/data/Capturing_low-rate_DDoS_attack_based_on_MQTT_protocol_in_software_Defined-IoT_environment/test.csv",
-        "param_dt": {"random_state":42}, # only dt
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Detecting DDoS Attacks using Decision Tree Algorithm (Article)",
-        "train": "examples/data/Detecting_DDoS_Attacks_using_Decision_Tree_Algorithm/train.csv",
-        "test": "examples/data/Detecting_DDoS_Attacks_using_Decision_Tree_Algorithm/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Detection of DDoS Attacks using Machine Learning Algorithms (Article)",
-        "train": "examples/data/Detection_of_DDoS_Attacks_using_Machine_Learning_Algorithms/train.csv",
-        "test": "examples/data/Detection_of_DDoS_Attacks_using_Machine_Learning_Algorithms/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
-    {
-        "nome": "Enhancing DDoS Attack Detection via Blending Ensemble Learning (Article)",
-        "train": "examples/data/Enhancing_DDoS_Attack_Detection_via_Blending_Ensemble_Learning/train.csv",
-        "test": "examples/data/Enhancing_DDoS_Attack_Detection_via_Blending_Ensemble_Learning/test.csv",
-        "param_dt": {"random_state":42},
-        "param_rf": {"random_state":42},
-        "param_gbdt": {"random_state":42}
-    },
+    # {
+    #     "nome": "Another dataset",
+    #     "train": "path/to/train.csv",
+    #     "test": "path/to/test.csv",
+    #     "param_dt": {"max_depth": 10, "random_state": 42},
+    #     "param_rf": {"n_estimators": 50, "max_depth": 12, "random_state": 42},
+    #     "param_gbdt": {"n_estimators": 50, "max_depth": 3, "random_state": 42},
+    # },
 ]
 
 MODELS_TO_TEST = [
@@ -777,7 +706,7 @@ def write_outputs(rows, nested_rows, env, paths):
 
 def main():
     p = argparse.ArgumentParser(
-        description='Full-metric benchmark of pyruleanalyzer over the article datasets.',
+        description='Full-metric benchmark of pyruleanalyzer over the datasets configured in DATASETS.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='Configure the datasets in the DATASETS list inside this file.')
     p.add_argument('--dataset', default=None,
