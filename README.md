@@ -275,6 +275,14 @@ the stage; `0` never adds an error (reduced-error pruning when combined with a
 very large `remove_below_n_classifications`). `None`, the default, uses usage
 alone. A small refinement set can make it overfit: measure on fresh data.
 
+**Large refinement sets (Gradient Boosting).** `usage_engine='auto'`, the
+default, counts how many refinement samples reach each rule by pushing them
+through the compiled tree arrays, before and after low-usage removal, instead
+of classifying them one at a time. The refined rules are identical; on 288 000
+samples and 51 000 rules refinement takes 25 s instead of 2.5 h.
+`usage_engine='loop'` forces the per-sample path, `'batch'` refuses to fall
+back to it.
+
 * **Random Forest refuses inter-tree fusion** (with a `RuntimeWarning`): its
   prediction is the average of one distribution per tree, so removing a voter
   changes the average.
@@ -427,6 +435,30 @@ The tool estimates flash and SRAM and compares them with the target board
 model will not fit. For depth strategies, feature selection and memory formulas
 see the
 [modelling guide](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/tutorials/modeling_for_arduino.rst).
+
+**Size the model for the board before training.** `pyruleanalyzer.footprint`
+bounds the flash an exported model needs from its hyperparameters alone, so the
+largest model a board holds can be chosen up front:
+
+```python
+from pyruleanalyzer import BOARDS, estimate_footprint, fit_to_board, suggest_complexity
+
+estimate_footprint('gbdt', n_estimators=50, n_classes=8, max_leaf_nodes=127)
+# {'trees': 400, 'leaves': 50800, 'nodes': 101200, 'model_bytes': 2861600, ...}
+
+print(suggest_complexity(algorithm='gbdt', n_estimators=50, n_classes=8,
+                         depths=range(3, 9), board='esp32_huge_app'))
+
+fit = fit_to_board(X_train, y_train, board='esp32_huge_app')   # or flash_bytes=..., ram_bytes=...
+model = GradientBoostingClassifier(**fit.params).fit(X_train, y_train)
+```
+
+`fit_to_board()` gives each candidate number of trees the most leaves per tree
+that fit, scores the candidates on held-out training rows and returns the best
+(`fit.candidates` lists them all). Presets: `uno`, `nano`, `mega2560`, `esp32`
+(1.25 MB application) and `esp32_huge_app` (3 MB); any board can be described
+with `flash_bytes` and `ram_bytes`. The ESP32 constants are measured on the
+Arduino core 3.3.12, where the bound was within 15 KB above the compiled size.
 
 **Test it without a board, or with one:**
 

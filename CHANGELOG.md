@@ -39,6 +39,21 @@
 * `pyruleanalyzer.parsers`, an unused copy of the rule extractors, is removed.
 
 **New**
+* Embedded footprint, `pyruleanalyzer.footprint`: presets for Arduino Uno,
+  Nano and Mega 2560 and for the ESP32 (default and 3 MB `huge_app`
+  partitions), or any flash/RAM budget; `estimate_footprint()` bounds the
+  size of an exported DT, RF or GBDT before training, `suggest_complexity()`
+  previews the size over a grid of depths, leaves and trees, and
+  `fit_to_board()` picks the number of trees and the leaves per tree that
+  fill the board and score best on held-out data. The constants are
+  calibrated on the ESP32 Arduino core 3.3.12.
+* `execute_rule_refinement(usage_engine=...)` for Gradient Boosting:
+  `'batch'` counts rule usage and errors through the compiled tree arrays,
+  `'loop'` one sample at a time, and `'auto'` (default) uses `'batch'`
+  whenever it applies. Both give identical refined rule sets.
+* `examples/arduino_stream_test.py`, a streaming anomaly-detection test on
+  Arduino/ESP32 boards (or a simulator through a serial URL) with any CSV
+  dataset, and a configurable `examples/datasets_benchmark_example.py`.
 * Compositional model checking, `reduction="compositional"`: each tree (or
   boosting channel) is explored on its own and the vote once per combination
   of outputs, with a per-property soundness argument and a fallback to the
@@ -66,6 +81,15 @@
   ExtraTrees trains ExtraTrees again.
 * Wheels for Python 3.14 (cibuildwheel 3.4.1); a CI job on the minimum
   declared dependency versions.
+
+**Performance**
+* Gradient Boosting refinement counts usage and recounts it after the
+  low-usage stage on compiled tree arrays: two to three orders of magnitude
+  faster on large refinement sets (288 000 samples and 51 000 rules: 2.5 h
+  to 25 s), with the same counts and predictions.
+* The recount after low-usage removal accumulates the tree outputs instead of
+  keeping one (samples x classes) array per tree, which for large multiclass
+  ensembles reserved tens of GB.
 
 **Internal**
 * `rule_classifier.py` (7 500 lines) is split into one module per
