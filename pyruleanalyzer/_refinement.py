@@ -862,11 +862,13 @@ class RefinementMixin:
             print(f"Refinement-set errors: {evaluator.base_errors} -> "
                   f"{evaluator.errors()} (budget +{max_error_increase}).")
         self._refinement_evaluator(
-            X, y, feature_names, self.final_rules).recount(self.final_rules)
+            X, y, feature_names, self.final_rules,
+            keep_tree_outputs=False).recount(self.final_rules)
         return self.final_rules
 
     # Method to build an evaluator of rule-set changes on the refinement set
-    def _refinement_evaluator(self, X, y, feature_names, rules, max_error_increase=0):
+    def _refinement_evaluator(self, X, y, feature_names, rules, max_error_increase=0,
+                              keep_tree_outputs=True):
         """Predictions and errors of `rules` on a refinement set, kept up to date.
 
         Backs error-aware refinement (reduced-error pruning on the refinement
@@ -889,6 +891,9 @@ class RefinementMixin:
             rules (List[Rule]): Current rule set.
             max_error_increase (int): How many more refinement samples the
                 accepted changes may misclassify, in total, than `rules` do.
+            keep_tree_outputs (bool): Keep each tree's output, which `accept`
+                needs. False (enough for `recount`) only accumulates them,
+                using the memory of one output instead of one per tree.
 
         Returns:
             types.SimpleNamespace: ``accept(rule, old_rules, new_rules)``, the
@@ -1004,13 +1009,20 @@ class RefinementMixin:
         for r in rules:
             if not _is_init(r):
                 trees[_tree_id(r)].append(r)
-        outs = {t: _output(rs, all_rows) for t, rs in trees.items()}
-        if algo == 'Decision Tree':
-            agg = outs.get('_all', np.full(n, default, dtype=object))
+        if keep_tree_outputs or algo == 'Decision Tree':
+            outs = {t: _output(rs, all_rows) for t, rs in trees.items()}
+            if algo == 'Decision Tree':
+                agg = outs.get('_all', np.full(n, default, dtype=object))
+            else:
+                agg = np.zeros((n, k), dtype=np.float64)
+                for o in outs.values():
+                    agg += o
         else:
+            # Same sum, in the same order, one tree output alive at a time.
+            outs = None
             agg = np.zeros((n, k), dtype=np.float64)
-            for o in outs.values():
-                agg += o
+            for rs in trees.values():
+                agg += _output(rs, all_rows)
         state = {'agg': agg, 'pred': _predict(agg)}
         state['errors'] = int(np.sum(state['pred'] != y))
         base_errors = state['errors']
