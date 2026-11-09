@@ -750,7 +750,8 @@ class SerialLink:
             import serial  # pyserial
         except ImportError:
             raise SystemExit('[!] pyserial is not installed. Run: pip install pyserial')
-        self.ser = serial.Serial(port, baud, timeout=0.05)
+        # serial_for_url also takes simulator URLs (rfc2217://localhost:4000, socket://...)
+        self.ser = serial.serial_for_url(port, baud, timeout=0.05)
         time.sleep(boot_delay)
         self.ser.reset_input_buffer()
 
