@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.1
 
 **Changed**
 * `execute_rule_refinement` merges identical regions across the stages of a
