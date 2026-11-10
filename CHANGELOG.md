@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+* The `bad_label` mutation operator writes a label one past the largest class
+  of the net instead of a fixed `7`, which is a valid class of any model with
+  eight or more classes; such mutants now violate the label-domain property
+  (A6) instead of only changing the predicted class.
+
 ## 2.1.1
 
 **Changed**

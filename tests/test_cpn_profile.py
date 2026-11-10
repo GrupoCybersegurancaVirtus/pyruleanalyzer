@@ -87,3 +87,34 @@ def test_the_askctl_script_is_written(tmp_path):
     decl, queries = mc.ml_program()
     assert set(queries) <= set(mc.check().oracle)
     assert "EXIST_UNTIL" in text or "EV(" in text
+
+
+class _StubDoc:
+    """Records the label bad_label writes on the producer's Prediction arc."""
+
+    def __init__(self):
+        self.written = None
+
+    def arcs(self, page, name, direction):
+        return ["a1"]
+
+    def place_of(self, page, arc):
+        return "Prediction"
+
+    def set_inscription(self, arc, text):
+        self.written = text
+
+
+@pytest.mark.parametrize("labels,prediction,expected", [
+    (list(range(8)), [3], "8"),      # 7 would be a valid class here
+    (list(range(19)), [7], "19"),
+    ([], [2], str(2 + 1_000_000)),   # no constant domain (forests)
+])
+def test_bad_label_writes_a_label_outside_the_domain(labels, prediction, expected):
+    from pyruleanalyzer.cpn_mutants import _bad_label
+    doc = _StubDoc()
+    info = {"labels": labels, "prediction": prediction,
+            "producer_page": "Top", "producer": "Decide_3"}
+    assert _bad_label(doc, info)
+    assert doc.written == expected
+    assert labels == [] or int(doc.written) not in labels

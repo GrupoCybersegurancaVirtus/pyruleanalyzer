@@ -227,10 +227,14 @@ def _double_output(doc: CPNDocument, info) -> bool:
 
 # Function to deposit a label outside the domain (A6).
 def _bad_label(doc: CPNDocument, info) -> bool:
+    # One past the largest class the correct net can predict; a fixed label
+    # such as 7 is a valid class of any model with eight or more classes.
+    known = list(info.get("labels") or []) + list(info.get("prediction") or [])
+    bad = max(known) + 1 if info.get("labels") else max(known + [0]) + 1_000_000
     page, name = info["producer_page"], info["producer"]
     for arc in doc.arcs(page, name, "TtoP"):
         if doc.place_of(page, arc) == "Prediction":
-            doc.set_inscription(arc, "7")
+            doc.set_inscription(arc, str(bad))
     return True
 
 
@@ -373,7 +377,7 @@ TREE_MUTANTS: List[Mutant] = [
            "dormant leaf always enabled, produces nothing", _dead_branch),
     Mutant("double_output", ("A5", "A7"), _ALL,
            "prediction deposited twice", _double_output),
-    Mutant("bad_label", ("A6",), _ALL, "prediction replaced by label 7", _bad_label),
+    Mutant("bad_label", ("A6",), _ALL, "prediction replaced by a label outside the domain", _bad_label),
     Mutant("overlap", ("B1", "B4"), _ALL,
            "dormant leaf enabled next to the live one", _overlap),
     Mutant("hidden_overlap", ("B4",), _ALL,
