@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.2
 
 **Fixed**
 * The `bad_label` mutation operator writes a label one past the largest class

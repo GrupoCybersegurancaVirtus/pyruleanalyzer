@@ -918,7 +918,7 @@ cd docs && make html
 
 ## Status
 
-Version 2.1.1; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
+Version 2.1.2; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
 says what changed. The figures on this page are drawn from real runs by
 [`docs/figures/make_figures.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/figures/make_figures.py).
 

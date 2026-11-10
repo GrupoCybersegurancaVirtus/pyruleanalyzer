@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "pyRuleAnalyzer"
 copyright = "2025, GrupoCybersegurancaVirtus"
 author = "GrupoCybersegurancaVirtus"
-version = "2.1.1"
-release = "2.1.1"
+version = "2.1.2"
+release = "2.1.2"
 
 extensions = [
     "sphinx.ext.napoleon",
