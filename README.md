@@ -2,7 +2,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![PyPI version](https://img.shields.io/pypi/v/pyruleanalyzer.svg)](https://pypi.org/project/pyruleanalyzer/)
+[![PyPI version](https://img.shields.io/pypi/v/pyruleanalyzer.svg?cacheSeconds=3600)](https://pypi.org/project/pyruleanalyzer/)
 
 **Turn a scikit-learn tree model into rules you can read, shrink, verify and
 ship to a microcontroller -- with the same predictions all the way.**
