@@ -55,6 +55,10 @@ XGB = 'XGBClassifier'
 LGBM = 'LGBMClassifier'
 CATBOOST = 'CatBoostClassifier'
 EXTERNAL_GBDT = (XGB, LGBM, CATBOOST)
+# The model name shown to the user for each library (reports, repr, exports).
+LIBRARY_NAMES = {XGB: 'XGBoost', LGBM: 'LightGBM', CATBOOST: 'CatBoost'}
+# Library codes of the version 5 binary format (0 = scikit-learn).
+LIBRARY_CODES = {None: 0, XGB: 1, LGBM: 2, CATBOOST: 3}
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.2.0
+
+**Added**
+* XGBoost, LightGBM and CatBoost classifiers. `from_sklearn` reads a fitted
+  `XGBClassifier`, `LGBMClassifier` or `CatBoostClassifier` as a "Gradient
+  Boosting Decision Trees" model, and `new_model("XGBoost" | "LightGBM" |
+  "CatBoost")` (or `estimator="XGBClassifier"`, ...) trains one, with any
+  labels; `get_params`, `set_params` and `clone` work as for scikit-learn.
+  Refinement, every engine, the Python/C/Arduino/binary/JSON exports and the
+  HCPN export work on them unchanged. Optional extras: `[xgboost]`,
+  `[lightgbm]`, `[catboost]`, `[boosting]`.
+* The raw scores are each library's bit for bit, and binary predictions are
+  exactly the library's `predict`: XGBoost's `x < t` splits and float32
+  sums, LightGBM's float64 comparisons and its reading of `|x| <= 1e-35` as
+  0, CatBoost's symmetric trees and `x > border` splits, NaN routed where
+  each library sends it, XGBoost DART weights. Multiclass models predict the
+  argmax of the raw scores (XGBoost and LightGBM: of the softmax, which
+  differs only on a rounding tie).
+* `RuleClassifier.score_dtype` ('float64' or 'float32') and
+  `RuleClassifier.binary_threshold` (0.0 for scikit-learn), honoured by every
+  engine and export.
+* `RuleClassifier.model_name`: "XGBoost", "LightGBM" or "CatBoost" for a
+  model of those libraries (else `algorithm_type`), shown by `repr`,
+  `summary()`, `summary_report()` and the Arduino sketch header, and kept by
+  the JSON and binary round trips.
+* `footprint` accepts the three libraries' class names.
+
+**Changed**
+* JSON models are written as version 3, and `.bin` files as version 5, only
+  for models read from these libraries (they store the score arithmetic);
+  scikit-learn models are written exactly as before, and every earlier
+  version still loads.
+
 ## 2.1.2
 
 **Fixed**

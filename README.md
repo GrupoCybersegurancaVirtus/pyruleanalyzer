@@ -239,8 +239,11 @@ implementation on samples placed on and one ULP around every threshold.
 
 ## XGBoost, LightGBM and CatBoost
 
-Their classifiers are read as a **Gradient Boosting** model, so refinement,
-every engine, the exports and the Petri net work on them unchanged:
+Their classifiers run on the **Gradient Boosting** engine, so refinement,
+every engine, the exports and the Petri net work on them unchanged. The model
+keeps its own name: `classifier.model_name`, `repr`, `summary()` and the
+Arduino sketch header say "XGBoost", "LightGBM" or "CatBoost", while
+`classifier.algorithm_type` stays "Gradient Boosting Decision Trees":
 
 ```python
 import xgboost as xgb

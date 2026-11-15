@@ -579,7 +579,7 @@ class CExportMixin:
         # Header comment block with metadata and memory check
         a('// ============================================================')
         a(f'// Auto-generated Arduino/ESP32 Sketch by pyruleanalyzer')
-        a(f'// Model: {self.algorithm_type}')
+        a(f'// Model: {self.model_name}')
         a(f'// Features: {len(self._array_feature_names)} | Classes: {self.num_classes} | Trees: {len(self._tree_arrays)}')
         a(f'// Target Board: {board_model.upper()}')
         a('// ============================================================')
@@ -657,7 +657,7 @@ class CExportMixin:
         a('    Serial.begin(SERIAL_BAUD);')
         a('    while (!Serial) delay(10);')
         a('    Serial.println(F("pyruleanalyzer model loaded"));')
-        a(f'    Serial.print(F("Algorithm: ")); Serial.println(F("{self.algorithm_type}"));')
+        a(f'    Serial.print(F("Algorithm: ")); Serial.println(F("{self.model_name}"));')
         a(f'    Serial.print(F("Features: ")); Serial.print(N_FEATURES);')
         a(f'    Serial.print(F(" | Classes: ")); Serial.print(N_CLASSES);')
         a(f'    Serial.print(F(" | Trees: ")); Serial.println(N_TREES);')

@@ -393,3 +393,37 @@ def test_footprint_knows_the_libraries():
     from pyruleanalyzer import footprint
     for name in ("XGBClassifier", "LGBMClassifier", "CatBoostClassifier", "xgboost"):
         assert footprint._algorithm(name) == "gbdt"
+
+
+@pytest.mark.parametrize("lib, name, estimator", [
+    ("xgboost", "XGBoost", "XGBClassifier"),
+    ("lightgbm", "LightGBM", "LGBMClassifier"),
+    ("catboost", "CatBoost", "CatBoostClassifier")])
+def test_model_is_named_after_its_library(lib, name, estimator, tmp_path):
+    model, _, _ = fitted(lib, 2, False)
+    a = PyRuleAnalyzer.from_sklearn(model)
+    assert a.classifier.model_name == name
+    assert a.classifier.algorithm_type == "Gradient Boosting Decision Trees"
+    assert repr(a).startswith(f"PyRuleAnalyzer(model={name},")
+    assert a.summary()["model_name"] == name
+    assert a.summary_report()["model_name"] == name
+    # The name survives every round trip, the binary one included.
+    path = str(tmp_path / "m.bin")
+    a.to_binary(path)
+    b = PyRuleAnalyzer.load_binary(path)
+    assert b.classifier.model_name == name
+    assert b.classifier.sklearn_estimator == estimator
+    path = str(tmp_path / "m.json")
+    a.save_json(path)
+    assert PyRuleAnalyzer.load_json(path).classifier.model_name == name
+    ino = str(tmp_path / "m.ino")
+    a.classifier.export_to_arduino_ino(filepath=ino)
+    assert f"// Model: {name}" in open(ino, encoding="utf-8").read()
+
+
+def test_scikit_learn_models_keep_their_family_name():
+    from sklearn.ensemble import GradientBoostingClassifier
+    X, y = data(2, False)
+    a = PyRuleAnalyzer.from_sklearn(
+        GradientBoostingClassifier(n_estimators=5, random_state=0).fit(X, y))
+    assert a.classifier.model_name == "Gradient Boosting Decision Trees"

@@ -251,6 +251,19 @@ class RuleClassifier(
         if rules_to_compile:
             self.update_native_model(rules_to_compile)
             
+    # Property naming the model as the user knows it
+    @property
+    def model_name(self) -> str:
+        """The model's name: "XGBoost", "LightGBM" or "CatBoost" for a model
+        of those libraries, else `algorithm_type`.
+
+        The three libraries run as 'Gradient Boosting Decision Trees' (same
+        engine, refinement and coloured net); only the name shown differs.
+        """
+        from ._boosting_import import LIBRARY_NAMES
+        return LIBRARY_NAMES.get(getattr(self, 'sklearn_estimator', None),
+                                 self.algorithm_type)
+
     # Method to parse the rules from string based on the algorithm type
     def parse_rules(self, rules, algorithm_type):
         """

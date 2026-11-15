@@ -1436,7 +1436,9 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         
         Returns:
             Dictionary with classifier information:
-            - model_type: Type of model
+            - model_type: Type of model (the engine family)
+            - model_name: Name of the model ("XGBoost", "LightGBM",
+              "CatBoost", else the same as model_type)
             - n_features: Number of features
             - n_classes: Number of classes
             - n_rules_initial: Number of rules before refinement
@@ -1446,6 +1448,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         """
         return {
             "model_type": self.classifier.algorithm_type,
+            "model_name": self.classifier.model_name,
             "n_features": len(self.feature_names),
             "n_classes": len(self.class_names),
             "n_rules_initial": len(self.classifier.initial_rules),
@@ -1468,6 +1471,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             
         return {
             "model_type": self.classifier.algorithm_type,
+            "model_name": self.classifier.model_name,
             "total_rules": len(rules),
             "classes": self.class_names,
             "rules": rules_list
@@ -1544,7 +1548,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             Any: Result of the operation.
         """
         summary = self.summary()
-        return (f"PyRuleAnalyzer(model={summary['model_type']}, "
+        return (f"PyRuleAnalyzer(model={summary['model_name']}, "
                 f"features={summary['n_features']}, "
                 f"classes={summary['n_classes']}, "
                 f"rules={summary['n_rules_final']})")

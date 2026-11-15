@@ -93,6 +93,8 @@ class BinaryFormatMixin:
                 Version 5 with flag bit 4 (XGBoost, LightGBM, CatBoost):
                     1 byte   score_dtype: 0 = float64, 1 = float32
                     8 bytes  binary_threshold (float64)
+                    1 byte   library: 0 = scikit-learn, 1 = XGBoost,
+                             2 = LightGBM, 3 = CatBoost
             Feature names:
                 For each feature:
                     2 bytes  name_len (uint16)
@@ -208,6 +210,9 @@ class BinaryFormatMixin:
                 if flags & 16:
                     f.write(struct.pack('<B', 1 if self.score_dtype == 'float32' else 0))
                     f.write(struct.pack('<d', float(self.binary_threshold)))
+                    from ._boosting_import import LIBRARY_CODES
+                    f.write(struct.pack('<B', LIBRARY_CODES.get(
+                        getattr(self, 'sklearn_estimator', None), 0)))
 
             # --- Feature names ---
             for name in self._array_feature_names:
@@ -360,7 +365,7 @@ class BinaryFormatMixin:
                 gbdt_classes.append(_unpack('<i'))
             for cl in gbdt_classes:
                 gbdt_init_scores[cl] = _unpack('<d')
-        score_dtype, binary_threshold = 'float64', 0.0
+        score_dtype, binary_threshold, library = 'float64', 0.0, None
         if flags & 16:
             if algorithm_type != 'Gradient Boosting Decision Trees':
                 raise ValueError('Invalid binary model: score arithmetic on a non-GBDT model.')
@@ -369,6 +374,12 @@ class BinaryFormatMixin:
                 raise ValueError(f'Invalid binary model: score dtype code {code}.')
             score_dtype = 'float32' if code == 1 else 'float64'
             binary_threshold = _unpack('<d')
+            from ._boosting_import import LIBRARY_CODES
+            lib_code = _unpack('<B')
+            by_code = {v: k for k, v in LIBRARY_CODES.items()}
+            if lib_code not in by_code:
+                raise ValueError(f'Invalid binary model: library code {lib_code}.')
+            library = by_code[lib_code]
 
         # Feature names
         feature_names = []
@@ -485,7 +496,7 @@ class BinaryFormatMixin:
         obj._gbdt_nan_routing = (algorithm_type == 'Gradient Boosting Decision Trees'
                                  and bool(flags & 2))
         obj.label_table = label_table
-        obj.sklearn_estimator = None
+        obj.sklearn_estimator = library
 
         return obj
 
