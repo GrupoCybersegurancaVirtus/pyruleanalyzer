@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.1
+
+**Fixed**
+* The coloured net of a Random Forest decides on scikit-learn's own floats.
+  Each leaf now emits the row of the tree's `predict_proba` as scikit-learn
+  stores it (`Rule.leaf_proba`, kept by JSON and pickle), and the `Vote`
+  transition divides the sum by the number of trees (`vdiv`) before the
+  argmax, as scikit-learn does. Before, the leaf rows were normalised again
+  from the weighted counts and the sum was not divided: the scores could
+  differ in the last bits, and a tie that the division creates was won by
+  another class than scikit-learn's. Refined models, whose merged leaves have
+  no scikit-learn row, still normalise the counts.
+
 ## 2.2.0
 
 **Added**
