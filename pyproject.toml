@@ -44,7 +44,8 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+# lxml validates the CPN Tools XML against its DTD (tests/test_cpn_export.py).
+test = ["pytest", "lxml"]
 # Reading and training XGBoost, LightGBM and CatBoost classifiers. The lower
 # bounds are the releases the bit-for-bit tests (tests/test_external_gbdt.py)
 # were run against.

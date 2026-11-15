@@ -173,30 +173,32 @@ def engines(analyzer, X, tmp_path):
         out["binary"] = PyRuleAnalyzer.load_binary(str(b)).predict(X)
 
     out["pickle"] = pickle.loads(pickle.dumps(analyzer)).predict(Xdf)
-
-    if GCC:
-        base = str(tmp_path / "model_c")
-        with contextlib.redirect_stdout(io.StringIO()):
-            analyzer.export(base_name=base, formats=["c"])
-        driver = tmp_path / "driver.c"
-        driver.write_text(
-            '#include <stdio.h>\n#include <math.h>\n'
-            f'#include "{os.path.basename(base)}.h"\n'
-            'int main(void) {\n    double f[N_FEATURES];\n    for (;;) {\n'
-            '        for (int i = 0; i < N_FEATURES; i++) {\n'
-            '            char s[64]; if (scanf("%63s", s) != 1) return 0;\n'
-            '            f[i] = (s[0] == \'n\') ? NAN : strtod(s, 0);\n        }\n'
-            '        printf("%d\\n", (int)predict(f));\n    }\n}\n')
-        driver.write_text('#include <stdlib.h>\n' + driver.read_text())
-        exe = tmp_path / "driver.exe"
-        subprocess.run([GCC, "-O1", "-o", str(exe), str(driver), "-lm"], check=True,
-                       cwd=str(tmp_path), capture_output=True)
-        feed = "\n".join(" ".join("nan" if v != v else repr(float(v)) for v in row)
-                         for row in X) + "\n"
-        res = subprocess.run([str(exe)], input=feed, capture_output=True, text=True,
-                             check=True).stdout.split()
-        out["c_header"] = [int(v) for v in res]
     return {k: np.asarray(v).astype(int) for k, v in out.items()}
+
+
+def c_header_predictions(analyzer, X, tmp_path):
+    """The predictions of the C header export, compiled with gcc."""
+    base = str(tmp_path / "model_c")
+    with contextlib.redirect_stdout(io.StringIO()):
+        analyzer.export(base_name=base, formats=["c"])
+    driver = tmp_path / "driver.c"
+    driver.write_text(
+        '#include <stdio.h>\n#include <math.h>\n'
+        f'#include "{os.path.basename(base)}.h"\n'
+        'int main(void) {\n    double f[N_FEATURES];\n    for (;;) {\n'
+        '        for (int i = 0; i < N_FEATURES; i++) {\n'
+        '            char s[64]; if (scanf("%63s", s) != 1) return 0;\n'
+        '            f[i] = (s[0] == \'n\') ? NAN : strtod(s, 0);\n        }\n'
+        '        printf("%d\\n", (int)predict(f));\n    }\n}\n')
+    driver.write_text('#include <stdlib.h>\n' + driver.read_text())
+    exe = tmp_path / "driver.exe"
+    subprocess.run([GCC, "-O1", "-o", str(exe), str(driver), "-lm"], check=True,
+                   cwd=str(tmp_path), capture_output=True)
+    feed = "\n".join(" ".join("nan" if v != v else repr(float(v)) for v in row)
+                     for row in X) + "\n"
+    res = subprocess.run([str(exe)], input=feed, capture_output=True, text=True,
+                         check=True).stdout.split()
+    return np.asarray([int(v) for v in res])
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +225,18 @@ def test_every_engine_predicts_like_the_library(lib, k, nan, tmp_path):
     for name, pred in engines(analyzer, X, tmp_path).items():
         bad = np.flatnonzero(pred != expected)
         assert not len(bad), f"{lib} K={k} nan={nan}: {name} disagrees on {len(bad)}/{len(X)}"
+
+
+@pytest.mark.skipif(GCC is None, reason="no gcc on PATH")
+@pytest.mark.parametrize("lib", LIBS)
+@pytest.mark.parametrize("k", (2, 3))
+@pytest.mark.parametrize("nan", (False, True))
+def test_c_header_predicts_like_the_library(lib, k, nan, tmp_path):
+    model, _, X = fitted(lib, k, nan)
+    analyzer = PyRuleAnalyzer.from_sklearn(model)
+    pred = c_header_predictions(analyzer, X, tmp_path)
+    bad = np.flatnonzero(pred != library_predict(model, X))
+    assert not len(bad), f"{lib} K={k} nan={nan}: C header disagrees on {len(bad)}/{len(X)}"
 
 
 @pytest.mark.parametrize("lib", LIBS)
