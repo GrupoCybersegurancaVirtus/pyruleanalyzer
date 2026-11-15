@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+* `fit_to_board`, `probe_leaves` and `suggest_complexity` with
+  `algorithm='xgboost'`, `'lightgbm'` or `'catboost'` (or the class names)
+  fitted a scikit-learn `GradientBoostingClassifier` instead. They now fit
+  that library's model, translating `max_depth` and `max_leaf_nodes` to its
+  own settings (XGBoost `max_leaves` with `grow_policy='lossguide'`, LightGBM
+  `num_leaves`, CatBoost `depth`: a symmetric tree of depth `d` has `2 ** d`
+  leaves), count its trees as the exports store them, accept any labels, and
+  `fit_to_board` returns the parameters in the library's names.
+
 ## 2.2.1
 
 **Fixed**

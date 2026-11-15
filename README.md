@@ -513,7 +513,19 @@ model = GradientBoostingClassifier(**fit.params).fit(X_train, y_train)
 
 `fit_to_board()` gives each candidate number of trees the most leaves per tree
 that fit, scores the candidates on held-out training rows and returns the best
-(`fit.candidates` lists them all). Presets: `uno`, `nano`, `mega2560`, `esp32`
+(`fit.candidates` lists them all). With `algorithm='xgboost'`, `'lightgbm'` or
+`'catboost'` the candidates are that library's models, and `fit.params` is in
+its own names (XGBoost `max_leaves` with `grow_policy='lossguide'`, LightGBM
+`num_leaves`, CatBoost `iterations` and `depth`, its symmetric trees taking the
+deepest depth whose `2 ** depth` leaves fit):
+
+```python
+fit = fit_to_board(X_train, y_train, board='esp32', algorithm='lightgbm')
+model = LGBMClassifier(**fit.params).fit(X_train, y_train)
+```
+
+`probe_leaves()` and `suggest_complexity()` measure the library's own trees
+the same way. Presets: `uno`, `nano`, `mega2560`, `esp32`
 (1.25 MB application) and `esp32_huge_app` (3 MB); any board can be described
 with `flash_bytes` and `ram_bytes`. The ESP32 constants are measured on the
 Arduino core 3.3.12, where the bound was within 15 KB above the compiled size.

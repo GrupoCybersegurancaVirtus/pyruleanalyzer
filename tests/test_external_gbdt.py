@@ -441,3 +441,73 @@ def test_scikit_learn_models_keep_their_family_name():
     a = PyRuleAnalyzer.from_sklearn(
         GradientBoostingClassifier(n_estimators=5, random_state=0).fit(X, y))
     assert a.classifier.model_name == "Gradient Boosting Decision Trees"
+
+
+# ---------------------------------------------------------------------------
+# footprint: sizing a board for the library's own model
+# ---------------------------------------------------------------------------
+
+def _compiled_counts(model, X):
+    """(trees, nodes) of the arrays the C export writes for a fitted model."""
+    clf = PyRuleAnalyzer.from_sklearn(model).classifier
+    clf.compile_tree_arrays(clf.initial_rules, feature_names=list(X.columns))
+    trees = [t for t in clf._tree_arrays if "init_score" not in t]
+    return len(trees), sum(len(t["feature_idx"]) for t in trees)
+
+
+@pytest.mark.parametrize("lib", LIBS)
+@pytest.mark.parametrize("k", (2, 3))
+def test_footprint_counts_the_library_trees(lib, k):
+    from pyruleanalyzer import footprint as fp
+    pytest.importorskip(lib)
+    X, y = data(k, False)
+    model = fp._make_estimator("gbdt", 6, 3, 0, {}, fp._library(lib)).fit(X, y)
+    assert type(model).__module__.split(".")[0] == lib
+    trees, nodes = _compiled_counts(model, X)
+    assert trees == fp.n_trees(lib, 6, k)
+    leaves = fp._leaf_counts(model)
+    assert len(leaves) == trees and max(leaves) <= 8
+    if lib == "catboost":
+        assert set(leaves) == {8}          # symmetric trees are full
+    est = fp.estimate_footprint(lib, 6, k, 3, leaves_per_tree=float(np.mean(leaves)))
+    assert est["nodes"] == nodes
+    assert fp.estimate_footprint(lib, 6, k, 3)["model_bytes"] >= est["model_bytes"]
+
+
+@pytest.mark.parametrize("lib", LIBS)
+def test_probe_fits_the_library_model(lib):
+    from pyruleanalyzer import footprint as fp
+    pytest.importorskip(lib)
+    X, y = data(3, False)
+    ys = np.array(["a", "b", "c"])[y]          # any labels
+    for depth in (2, 4):
+        leaves = fp.probe_leaves(X, ys, lib, max_depth=depth, n_estimators=4)
+        assert 2 <= leaves <= 2 ** depth
+        if lib == "catboost":
+            assert leaves == 2 ** depth
+    capped = fp.probe_leaves(X, ys, lib, max_depth=None, n_estimators=4, max_leaf_nodes=5)
+    assert capped <= (4 if lib == "catboost" else 5)
+    report = fp.suggest_complexity(X, ys, algorithm=lib, n_estimators=20, depths=[2, 3],
+                                   board="esp32")
+    for row in report.rows:
+        assert row["expected_leaves"] <= row["max_leaves"]
+
+
+@pytest.mark.parametrize("lib, keys", [
+    ("xgboost", {"n_estimators", "max_leaves", "max_depth", "grow_policy"}),
+    ("lightgbm", {"n_estimators", "num_leaves", "max_depth"}),
+    ("catboost", {"iterations", "depth"})])
+def test_fit_to_board_returns_library_parameters_that_fit(lib, keys):
+    from pyruleanalyzer import footprint as fp
+    pytest.importorskip(lib)
+    X, y = data(3, False)
+    board = fp.make_board("esp32")
+    budget = 60_000
+    fit = fp.fit_to_board(X, y, flash_bytes=board.firmware_flash + budget,
+                          ram_bytes=board.ram_bytes, firmware_flash=board.firmware_flash,
+                          firmware_ram=board.firmware_ram, algorithm=lib,
+                          n_estimators=(5, 10), sample_rows=None)
+    assert set(fit.params) == keys
+    model = make_model(lib).set_params(**fit.params).fit(X, y)
+    trees, nodes = _compiled_counts(model, X)
+    assert fp.model_bytes(trees, nodes, lib, 3) <= budget

@@ -111,6 +111,19 @@ _ALIASES = {
 }
 
 
+# The boosting library a name asks for (None: scikit-learn).
+_LIBRARIES = {
+    'xgbclassifier': 'xgboost', 'xgboost': 'xgboost',
+    'lgbmclassifier': 'lightgbm', 'lightgbm': 'lightgbm',
+    'catboostclassifier': 'catboost', 'catboost': 'catboost',
+}
+
+
+def _library(name: str) -> Optional[str]:
+    """'xgboost', 'lightgbm' or 'catboost' for those names, else None."""
+    return _LIBRARIES.get(str(name).strip().lower())
+
+
 def _algorithm(name: str) -> str:
     """'gbdt', 'rf' or 'dt' for any accepted spelling of an algorithm."""
     key = str(name).strip().lower()
@@ -228,9 +241,75 @@ def estimate_footprint(algorithm: str = 'gbdt', n_estimators: int = 100,
     }
 
 
+def _catboost_depth(max_depth: Optional[int],
+                    max_leaf_nodes: Optional[int]) -> Optional[int]:
+    """The depth of CatBoost's symmetric trees under these limits.
+
+    A symmetric tree of depth ``d`` always has ``2 ** d`` leaves, so a leaf
+    limit becomes the deepest depth whose leaves fit it (None when not even
+    depth 1 does).
+    """
+    depth = 6 if max_depth is None else int(max_depth)
+    if max_leaf_nodes is not None:
+        depth = min(depth, int(math.floor(math.log2(int(max_leaf_nodes)))))
+    return depth if depth >= 1 else None
+
+
+def _library_params(library: str, n_estimators: int, max_depth: Optional[int],
+                    max_leaf_nodes: Optional[int]) -> Dict[str, Any]:
+    """The size settings of a boosting library, in its own parameter names.
+
+    ``max_depth`` and ``max_leaf_nodes`` keep their scikit-learn meaning: a
+    leaf limit without a depth grows trees best-first (XGBoost ``lossguide``,
+    LightGBM's default), and a depth without a leaf limit lets the depth
+    alone bound the leaves (LightGBM's ``num_leaves`` is raised to
+    ``2 ** max_depth``). CatBoost's trees are symmetric: see
+    :func:`_catboost_depth`.
+    """
+    if library == 'xgboost':
+        out: Dict[str, Any] = {'n_estimators': n_estimators}
+        if max_leaf_nodes is not None:
+            out.update(grow_policy='lossguide', max_leaves=int(max_leaf_nodes),
+                       max_depth=0 if max_depth is None else int(max_depth))
+        elif max_depth is not None:
+            out['max_depth'] = int(max_depth)
+        return out
+    if library == 'lightgbm':
+        out = {'n_estimators': n_estimators,
+               'max_depth': -1 if max_depth is None else int(max_depth)}
+        if max_leaf_nodes is not None:
+            out['num_leaves'] = int(max_leaf_nodes)
+        elif max_depth is not None:
+            out['num_leaves'] = max(2, min(2 ** int(max_depth), 131072))
+        return out
+    depth = _catboost_depth(max_depth, max_leaf_nodes)
+    if depth is None:
+        raise ValueError('CatBoost trees need at least 2 leaves (max_leaf_nodes >= 2)')
+    return {'iterations': n_estimators, 'depth': depth}
+
+
 def _make_estimator(algo: str, n_estimators: int, max_depth: Optional[int],
-                    random_state: Any, params: Dict[str, Any]):
-    """A scikit-learn estimator of `algo` with these settings."""
+                    random_state: Any, params: Dict[str, Any],
+                    library: Optional[str] = None):
+    """An estimator of `algo` with these settings: scikit-learn's, or the
+    `library` one ('xgboost', 'lightgbm', 'catboost') for a GBDT."""
+    if library is not None:
+        from .pyruleanalyzer import _sklearn_estimator_class
+        params = dict(params)
+        leaves = params.pop('max_leaf_nodes', None)
+        cls = _sklearn_estimator_class('Gradient Boosting Decision Trees', {
+            'xgboost': 'XGBClassifier', 'lightgbm': 'LGBMClassifier',
+            'catboost': 'CatBoostClassifier'}[library])
+        quiet = {'xgboost': {'verbosity': 0},
+                 'lightgbm': {'verbose': -1},
+                 'catboost': {'verbose': 0, 'allow_writing_files': False,
+                              'random_seed': random_state}}[library]
+        if library != 'catboost':
+            quiet['random_state'] = random_state
+        settings = dict(quiet)
+        settings.update(_library_params(library, n_estimators, max_depth, leaves))
+        settings.update(params)
+        return cls(**settings)
     if algo == 'gbdt':
         from sklearn.ensemble import GradientBoostingClassifier
         return GradientBoostingClassifier(n_estimators=n_estimators, max_depth=max_depth,
@@ -251,6 +330,36 @@ def _fitted_trees(model) -> List[Any]:
     return [t for t in np.ravel(model.estimators_)]
 
 
+def _leaf_counts(model) -> List[int]:
+    """Leaves of every tree the exports write for a fitted model.
+
+    A boosting library's model is counted on the trees pyRuleAnalyzer reads
+    from it (one per stage and class; a CatBoost tree of depth ``d`` has
+    ``2 ** d`` leaves), which are the trees the C and Arduino exports store.
+    """
+    from ._boosting_import import READERS, estimator_kind
+    kind = estimator_kind(model)
+    if kind is None:
+        return [int(t.tree_.n_leaves) for t in _fitted_trees(model)]
+    form = READERS[kind](model)
+    return [sum(1 for c in tree['left'] if c == -1)
+            for trees in form['trees'].values() for tree in trees]
+
+
+def _encode_labels(y, *others):
+    """`y` (and `others`, with the same classes) as codes 0..K-1, which the
+    boosting libraries need; a label of `others` not in `y` raises."""
+    classes, codes = np.unique(np.asarray(y), return_inverse=True)
+    out = [codes]
+    for o in others:
+        o = np.asarray(o)
+        pos = np.clip(np.searchsorted(classes, o), 0, len(classes) - 1)
+        if not np.array_equal(classes[pos], o):
+            raise ValueError('validation labels not seen in the training labels')
+        out.append(pos)
+    return out
+
+
 def probe_leaves(X, y, algorithm: str = 'gbdt', max_depth: Optional[int] = None,
                  n_estimators: int = 10, max_rows: Optional[int] = 50_000,
                  random_state: Any = 0, **params) -> float:
@@ -261,16 +370,24 @@ def probe_leaves(X, y, algorithm: str = 'gbdt', max_depth: Optional[int] = None,
     tends to underestimate the trees of the full data, which have more rows
     to split, so treat it as the expected size, and the bound of
     :func:`estimate_footprint` as the guarantee.
+
+    `algorithm` may name a boosting library ('xgboost', 'lightgbm',
+    'catboost' or their class names): that library's model is fitted, with
+    ``max_depth`` and ``max_leaf_nodes`` (in `params`) translated to its own
+    settings, and its trees are counted as the exports store them.
     """
     algo = _algorithm(algorithm)
+    library = _library(algorithm)
     X = np.asarray(X)
     y = np.asarray(y)
     if max_rows is not None and len(X) > max_rows:
         idx = np.random.default_rng(random_state).choice(len(X), max_rows, replace=False)
         X, y = X[idx], y[idx]
-    model = _make_estimator(algo, n_estimators, max_depth, random_state, params)
+    if library is not None:
+        (y,) = _encode_labels(y)
+    model = _make_estimator(algo, n_estimators, max_depth, random_state, params, library)
     model.fit(X, y)
-    return float(np.mean([t.tree_.n_leaves for t in _fitted_trees(model)]))
+    return float(np.mean(_leaf_counts(model)))
 
 
 @dataclass
@@ -361,7 +478,8 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
     Args:
         X, y: Training data. Optional: they give `n_classes`, `n_features`,
             the row count that caps the leaves, and the probe.
-        algorithm: 'gbdt', 'rf' or 'dt'.
+        algorithm: 'gbdt', 'rf' or 'dt', or a boosting library ('xgboost',
+            'lightgbm', 'catboost'), whose own model is probed.
         n_estimators: Boosting stages or forest trees, or a list of them.
         n_classes, n_features: Taken from `y` and `X` when omitted.
         depths: Candidate values of ``max_depth``.
@@ -420,7 +538,7 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
             if (d, leaf_cap) not in probed:
                 extra = {'max_leaf_nodes': leaf_cap} if leaf_cap is not None else {}
                 probed[d, leaf_cap] = probe_leaves(
-                    X, y, algo, d, min(probe_estimators, max(est_grid)),
+                    X, y, algorithm, d, min(probe_estimators, max(est_grid)),
                     probe_rows, random_state, **extra, **params)
             ex = estimate_footprint(algo, n_est, n_classes, d, leaf_cap,
                                     n_samples, leaves_per_tree=probed[d, leaf_cap],
@@ -481,7 +599,8 @@ class BoardFit:
 
     Attributes:
         params: Estimator parameters of the best candidate (pass them to the
-            scikit-learn estimator together with your other settings).
+            estimator, scikit-learn's or the boosting library's, together
+            with your other settings).
         candidates: One dict per candidate: ``n_estimators``,
             ``max_leaf_nodes``, the guaranteed sketch ``flash`` and ``ram``,
             the validation ``score`` and ``fit_s``.
@@ -535,7 +654,10 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
             drawn from it (None: all rows).
         board, flash_bytes, ram_bytes, firmware_flash, firmware_ram: The
             target, a preset of :data:`BOARDS` and/or custom memory sizes.
-        algorithm: 'gbdt' or 'rf' ('dt' has a single candidate).
+        algorithm: 'gbdt' or 'rf' ('dt' has a single candidate), or a
+            boosting library ('xgboost', 'lightgbm', 'catboost'), whose own
+            model is fitted. A CatBoost candidate takes the deepest depth whose
+            ``2 ** depth`` leaves fit, its trees being symmetric.
         n_estimators: Candidate numbers of trees (boosting stages).
         X_val, y_val: Validation data; when omitted, `val_rows` rows of `X`
             not used for fitting.
@@ -546,12 +668,16 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
 
     Returns:
         BoardFit: ``params`` holds ``n_estimators`` (not for 'dt'),
-        ``max_leaf_nodes`` and ``max_depth=None``.
+        ``max_leaf_nodes`` and ``max_depth=None``; for a boosting library,
+        that library's own names (XGBoost ``max_leaves`` with
+        ``grow_policy='lossguide'``, LightGBM ``num_leaves``, CatBoost
+        ``iterations`` and ``depth``), ready to pass to its classifier.
     """
     import time
     from sklearn.metrics import get_scorer
 
     algo = _algorithm(algorithm)
+    library = _library(algorithm)
     target = make_board(board, flash_bytes=flash_bytes, ram_bytes=ram_bytes,
                         firmware_flash=firmware_flash, firmware_ram=firmware_ram)
     if target is None:
@@ -577,6 +703,8 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
         val_idx = rest if val_rows is None else rest[:int(val_rows)]
         X_val, y_val = X[val_idx], y[val_idx]
     Xf, yf = X[fit_idx], y[fit_idx]
+    if library is not None:
+        yf, y_val = _encode_labels(yf, y_val)
     scorer = get_scorer(scoring)
 
     grid = [1] if algo == 'dt' else sorted(set(int(n) for n in n_estimators))
@@ -586,6 +714,12 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
                                        target.double_bytes)
         if leaves is None:
             continue
+        if library == 'catboost':
+            # Symmetric trees: the deepest depth whose 2**depth leaves fit.
+            depth = _catboost_depth(None, leaves)
+            if depth is None:
+                continue
+            leaves = 2 ** depth
         ub = estimate_footprint(algo, n, n_classes, max_leaf_nodes=leaves,
                                 missing_routing=missing_routing,
                                 double_bytes=target.double_bytes)
@@ -593,7 +727,8 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
         if algo != 'dt':
             model_params['n_estimators'] = n
         est = _make_estimator(algo, model_params.pop('n_estimators', 1),
-                              model_params.pop('max_depth'), random_state, model_params)
+                              model_params.pop('max_depth'), random_state, model_params,
+                              library)
         t0 = time.perf_counter()
         est.fit(Xf, yf)
         row = {'n_estimators': n if algo != 'dt' else None, 'max_leaf_nodes': leaves,
@@ -609,5 +744,8 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
     best_params = {'max_leaf_nodes': best['max_leaf_nodes'], 'max_depth': None}
     if algo != 'dt':
         best_params = {'n_estimators': best['n_estimators'], **best_params}
+    if library is not None:
+        best_params = _library_params(library, best['n_estimators'], None,
+                                      best['max_leaf_nodes'])
     return BoardFit(params=best_params, candidates=cands, board=target,
                     model_budget=int(budget), scoring=scoring)
