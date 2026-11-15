@@ -642,6 +642,14 @@ class ArrayEngineMixin:
         return node_ids
 
     # Method to execute predict_batch
+    def _score_np_dtype(self):
+        """NumPy dtype GBDT scores are accumulated in (see `score_dtype`).
+
+        In-place additions into a float32 array round after every stage,
+        which is how XGBoost adds its trees.
+        """
+        return np.float32 if getattr(self, 'score_dtype', 'float64') == 'float32' else np.float64
+
     def predict_batch(
         self,
         X: np.ndarray,
@@ -772,7 +780,7 @@ class ArrayEngineMixin:
             if is_binary and len(classes) >= 2:
                 # Binary: accumulate score for positive class
                 pos_class = classes[1]
-                scores = np.zeros(n_samples, dtype=np.float64)
+                scores = np.zeros(n_samples, dtype=self._score_np_dtype())
 
                 # Add init scores
                 for i, tree in enumerate(trees):
@@ -793,7 +801,7 @@ class ArrayEngineMixin:
                 # Decide on the raw score, as scikit-learn does
                 # (raw_predictions >= 0); see update_native_model.
                 predictions = np.where(
-                    scores >= 0.0, int(classes[1]), int(classes[0])
+                    scores >= self.binary_threshold, int(classes[1]), int(classes[0])
                 ).astype(np.int32)
                 self.fallback_activations += int(touched_hole.sum())
                 return predictions
@@ -802,7 +810,7 @@ class ArrayEngineMixin:
                 # Multiclass: accumulate scores per class
                 class_to_col = {cl: idx for idx, cl in enumerate(classes)}
                 n_cls = len(classes)
-                scores = np.zeros((n_samples, n_cls), dtype=np.float64)
+                scores = np.zeros((n_samples, n_cls), dtype=self._score_np_dtype())
 
                 # Add init scores
                 for i, tree in enumerate(trees):
@@ -922,7 +930,7 @@ class ArrayEngineMixin:
             assert is_init is not None
             class_to_col = {cl: idx for idx, cl in enumerate(classes)}
             n_cls = len(classes)
-            scores = np.zeros((n_samples, n_cls), dtype=np.float64)
+            scores = np.zeros((n_samples, n_cls), dtype=self._score_np_dtype())
 
             # Separate init vs real trees, batch traverse real ones
             real_tree_indices = []
@@ -951,6 +959,7 @@ class ArrayEngineMixin:
                     leaf_ids = all_leaf_ids[batch_idx]
                     scores[:, col] += trees[orig_idx]['value'][leaf_ids]
 
+            scores = scores.astype(np.float64)
             if is_binary and n_cls == 2:
                 # Sigmoid on positive class score
                 prob_pos = 1.0 / (1.0 + np.exp(-scores[:, 1]))

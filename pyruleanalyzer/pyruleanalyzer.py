@@ -41,17 +41,22 @@ def _sklearn_estimator_class(algorithm_type: str, estimator: Optional[str] = Non
     Args:
         algorithm_type: "Decision Tree", "Random Forest" or
             "Gradient Boosting Decision Trees".
-        estimator: Name of the scikit-learn class to train instead of the
-            default one of the model type: "ExtraTreesClassifier" for a
-            "Random Forest", "ExtraTreeClassifier" for a "Decision Tree".
-            None (default) for the default class.
+        estimator: Name of the class to train instead of the default one of
+            the model type: "ExtraTreesClassifier" for a "Random Forest",
+            "ExtraTreeClassifier" for a "Decision Tree", and
+            "XGBClassifier", "LGBMClassifier" or "CatBoostClassifier" for
+            "Gradient Boosting Decision Trees" (these need the xgboost,
+            lightgbm or catboost package). None (default) for the default
+            class.
 
     Returns:
-        type: The scikit-learn estimator class.
+        type: The estimator class.
 
     Raises:
         ValueError: If the model type is not supported, or `estimator` is
             not a class of that type.
+        ImportError: If `estimator` names a class of a library that is not
+            installed.
     """
     from sklearn.ensemble import (ExtraTreesClassifier,
                                   GradientBoostingClassifier,
@@ -70,10 +75,63 @@ def _sklearn_estimator_class(algorithm_type: str, estimator: Optional[str] = Non
     for cls in classes[algorithm_type]:
         if cls.__name__ == estimator:
             return cls
+    if algorithm_type == 'Gradient Boosting Decision Trees' and estimator in _EXTERNAL_MODULES:
+        module, extra = _EXTERNAL_MODULES[estimator]
+        try:
+            lib = __import__(module)
+        except ImportError as exc:
+            raise ImportError(
+                f"{estimator} needs the {module!r} package: "
+                f"pip install pyruleanalyzer[{extra}]") from exc
+        return getattr(lib, estimator)
+    names = [c.__name__ for c in classes[algorithm_type]]
+    if algorithm_type == 'Gradient Boosting Decision Trees':
+        names += list(_EXTERNAL_MODULES)
     raise ValueError(
         f"Unsupported estimator {estimator!r} for model {algorithm_type!r}: "
-        f"expected one of {[c.__name__ for c in classes[algorithm_type]]}."
+        f"expected one of {names}."
     )
+
+
+# Classes of other libraries trained and read as a "Gradient Boosting
+# Decision Trees": class name -> (module, pip extra).
+_EXTERNAL_MODULES = {
+    'XGBClassifier': ('xgboost', 'xgboost'),
+    'LGBMClassifier': ('lightgbm', 'lightgbm'),
+    'CatBoostClassifier': ('catboost', 'catboost'),
+}
+
+# Short model names accepted by new_model/create for those classes.
+_MODEL_ALIASES = {
+    'xgboost': 'XGBClassifier',
+    'lightgbm': 'LGBMClassifier',
+    'catboost': 'CatBoostClassifier',
+}
+
+
+# Function to resolve a model name that may be a library alias.
+def _resolve_model(model: Optional[str], estimator: Optional[str] = None):
+    """("Gradient Boosting Decision Trees", class name) for "XGBoost",
+    "LightGBM" and "CatBoost" (any case); (model, estimator) otherwise."""
+    if model is not None and str(model).strip().lower() in _MODEL_ALIASES:
+        alias = _MODEL_ALIASES[str(model).strip().lower()]
+        if estimator is not None and estimator != alias:
+            raise ValueError(f"model={model!r} trains {alias}, not {estimator!r}.")
+        return 'Gradient Boosting Decision Trees', alias
+    return model, estimator
+
+
+# Function to list the hyperparameters an estimator class accepts.
+def _estimator_param_names(cls) -> set:
+    """Names ``set_params`` may set: ``get_params`` of a default instance
+    plus the constructor's named arguments (CatBoost's ``get_params`` only
+    lists the parameters that were set)."""
+    import inspect
+    names = set(cls().get_params(deep=False))
+    for name, p in inspect.signature(cls.__init__).parameters.items():
+        if name != 'self' and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            names.add(name)
+    return names
 
 
 # Function to name the estimator class of a fitted model, if not the default.
@@ -160,12 +218,16 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             feature_names: List of feature names.
             class_names: List of class names.
             model: Model type of an untrained analyzer - "Decision Tree"
-                (default), "Random Forest" or "Gradient Boosting Decision Trees".
-            estimator: scikit-learn class an untrained analyzer trains when
-                it is not the default of ``model``: "ExtraTreesClassifier"
-                (a "Random Forest") or "ExtraTreeClassifier" (a "Decision
-                Tree"). ``get_params`` reports it for an analyzer wrapping
-                such a model, so ``clone`` then ``fit`` trains it again.
+                (default), "Random Forest" or "Gradient Boosting Decision
+                Trees"; "XGBoost", "LightGBM" and "CatBoost" are short for a
+                "Gradient Boosting Decision Trees" trained with that library.
+            estimator: Class an untrained analyzer trains when it is not the
+                default of ``model``: "ExtraTreesClassifier" (a "Random
+                Forest"), "ExtraTreeClassifier" (a "Decision Tree"), or
+                "XGBClassifier", "LGBMClassifier", "CatBoostClassifier" (a
+                "Gradient Boosting Decision Trees"). ``get_params`` reports
+                it for an analyzer wrapping such a model, so ``clone`` then
+                ``fit`` trains it again.
             **params: Hyperparameters of the scikit-learn estimator of an
                 untrained analyzer, passed as they are.
 
@@ -174,6 +236,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 given together with ``classifier``.
         """
         if classifier is None:
+            model, estimator = _resolve_model(model, estimator)
             algorithm_type = model or "Decision Tree"
             if estimator is not None:
                 _sklearn_estimator_class(algorithm_type, estimator)  # validate
@@ -239,10 +302,13 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         current = self.get_params()
         model = params.pop("model", current.pop("model"))
         estimator = current.pop("estimator", None)
-        if model != self.classifier.algorithm_type:
+        alias_model, alias_est = _resolve_model(model)
+        if alias_est is not None:
+            model, estimator = alias_model, alias_est
+        elif model != self.classifier.algorithm_type:
             estimator = None   # a new model type trains its default class
         estimator = params.pop("estimator", estimator)
-        valid = _sklearn_estimator_class(model, estimator)().get_params(deep=False)
+        valid = _estimator_param_names(_sklearn_estimator_class(model, estimator))
         invalid = [k for k in params if k not in valid]
         if invalid:
             raise ValueError(
@@ -250,6 +316,9 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                 f"{type(self).__name__} with model={model!r}. Valid "
                 f"parameters are: {['model', 'estimator'] + sorted(valid)}."
             )
+        if estimator != getattr(self.classifier, 'sklearn_estimator', None):
+            # Another library's class: keep only the settings it accepts.
+            current = {k: v for k, v in current.items() if k in valid}
         current.update(params)
         if model != self.classifier.algorithm_type:
             self.classifier = RuleClassifier([], algorithm_type=model)
@@ -375,10 +444,24 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             ...     refine=True
             ... )
         """
+        # XGBoost, LightGBM and CatBoost: read the CSVs as new_classifier
+        # does, train through fit() (which reads the fitted model's trees).
+        resolved, estimator = _resolve_model(model)
+        if estimator is not None:
+            X_train, y_train, _, _, _, _, feature_names = RuleClassifier.process_data(
+                train_path, test_path)
+            analyzer = PyRuleAnalyzer.new_model(model, params)
+            analyzer.fit(pd.DataFrame(np.asarray(X_train), columns=feature_names),
+                         np.asarray(y_train))
+            if refine:
+                analyzer.execute_rule_refinement(test_path=test_path,
+                                                 **(refine_params or {}))
+            return analyzer
+
         # Set default parameters if not provided
         if params is None:
             params = PyRuleAnalyzer._get_default_params(model)
-        
+
         # Create the RuleClassifier
         classifier = RuleClassifier.new_classifier(
             train_path=train_path,
@@ -426,15 +509,19 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         
         Args:
             model: Model type - "Decision Tree", "Random Forest", or
-                  "Gradient Boosting Decision Trees". Default is "Decision Tree".
+                  "Gradient Boosting Decision Trees", or one of "XGBoost",
+                  "LightGBM", "CatBoost" (a "Gradient Boosting Decision
+                  Trees" trained with that library). Default is
+                  "Decision Tree".
             params: Model hyperparameters. Default is None (uses sensible defaults).
-        
+
         Returns:
             PyRuleAnalyzer: A configured but untrained PyRuleAnalyzer instance.
-            
+
         Example:
             >>> analyzer = PyRuleAnalyzer.new_model(model="Decision Tree")
             >>> analyzer.fit(X_train, y_train)
+            >>> xgb = PyRuleAnalyzer.new_model(model="XGBoost").fit(X_train, y_train)
         """
         # Set default parameters if not provided
         if params is None:
@@ -477,10 +564,25 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         decision trees and forests. ``GradientBoostingClassifier`` refuses
         NaN, and so does a model extracted from it.
 
+        ``XGBClassifier``, ``LGBMClassifier`` and ``CatBoostClassifier`` are
+        read as a "Gradient Boosting Decision Trees" whose raw scores are the
+        library's bit for bit: each library's split operator, input
+        precision and score arithmetic are kept (``input_dtype``,
+        ``score_dtype``), NaN goes where the library sends it, and a binary
+        model decides exactly as the library's ``predict``
+        (``binary_threshold``). A multiclass model predicts the argmax of the
+        raw scores; XGBoost and LightGBM take it over the softmax
+        probabilities, which differs only when two probabilities round to
+        the same value. Models the rules cannot express (categorical splits,
+        DART, linear trees, LightGBM ``zero_as_missing``, CatBoost
+        categorical features or non-symmetric trees) raise ``ValueError``.
+        See ``pyruleanalyzer._boosting_import``.
+
         Args:
             model: A fitted ``DecisionTreeClassifier`` (or ``ExtraTreeClassifier``),
-                ``RandomForestClassifier``, ``ExtraTreesClassifier`` or
-                ``GradientBoostingClassifier``.
+                ``RandomForestClassifier``, ``ExtraTreesClassifier``,
+                ``GradientBoostingClassifier``, ``xgboost.XGBClassifier``,
+                ``lightgbm.LGBMClassifier`` or ``catboost.CatBoostClassifier``.
             feature_names: Ordered feature names. Defaults to the estimator's
                 ``feature_names_in_``, then to ``feature_0 ... feature_n``.
             class_names: Class labels, in ``classes_`` order. Defaults to the
@@ -501,8 +603,12 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
                                       GradientBoostingClassifier,
                                       RandomForestClassifier)
         from sklearn.tree import DecisionTreeClassifier
+        from . import _boosting_import
 
-        if isinstance(model, GradientBoostingClassifier):
+        external = _boosting_import.estimator_kind(model)
+        if external is not None:
+            algorithm_type = 'Gradient Boosting Decision Trees'
+        elif isinstance(model, GradientBoostingClassifier):
             algorithm_type = 'Gradient Boosting Decision Trees'
         elif isinstance(model, (RandomForestClassifier, ExtraTreesClassifier)):
             # Not a subclass of RandomForestClassifier, but fitted the same
@@ -514,11 +620,14 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             raise ValueError(
                 f"Unsupported estimator {type(model).__name__}: expected a "
                 "DecisionTreeClassifier, RandomForestClassifier, "
-                "ExtraTreesClassifier or GradientBoostingClassifier."
+                "ExtraTreesClassifier, GradientBoostingClassifier, "
+                "XGBClassifier, LGBMClassifier or CatBoostClassifier."
             )
 
         if feature_names is None:
             names = getattr(model, 'feature_names_in_', None)
+            if names is None and external == _boosting_import.CATBOOST:
+                names = getattr(model, 'feature_names_', None)
             if names is not None:
                 feature_names = [str(n) for n in names]
             else:
@@ -533,7 +642,16 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         label_table = RuleClassifier._label_table_for(class_names)
         class_names = RuleClassifier._label_names(class_names)
 
-        if algorithm_type == 'Gradient Boosting Decision Trees':
+        form = None
+        if external is not None:
+            form = _boosting_import.READERS[external](model)
+            rules, init_scores, is_binary, gbdt_classes = _boosting_import.neutral_to_rules(
+                form, feature_names, class_names)
+            classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
+            classifier._gbdt_init_scores = init_scores
+            classifier._gbdt_is_binary = is_binary
+            classifier._gbdt_classes = gbdt_classes
+        elif algorithm_type == 'Gradient Boosting Decision Trees':
             rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
                 model, feature_names, class_names
             )
@@ -554,11 +672,17 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         # get_params() (and so clone) reproduces the estimator's settings,
         # and its class (ExtraTrees is wrapped as a 'Random Forest').
         classifier.model_parameters = model.get_params(deep=False)
-        classifier.sklearn_estimator = _estimator_name(algorithm_type, model)
+        classifier.sklearn_estimator = (external if external is not None
+                                        else _estimator_name(algorithm_type, model))
         # scikit-learn casts X to float32 before comparing it with the
         # thresholds; comparing in float64 routes a sample lying within one
         # float32 ULP above a threshold to the other child.
         classifier.input_dtype = 'float32'
+        if form is not None:
+            # Each library's own precision and decision (see _boosting_import).
+            classifier.input_dtype = form['input_dtype']
+            classifier.score_dtype = form['score_dtype']
+            classifier.binary_threshold = form['binary_threshold']
         # The constructor compiled the native function before the labels
         # above were known; a forest maps its argmax through them.
         if algorithm_type == 'Random Forest':
@@ -603,24 +727,32 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             self
         """
         params = getattr(self.classifier, 'model_parameters', None)
-        if params is None:
-            params = self._get_default_params(self.classifier.algorithm_type)
         algorithm_type = self.classifier.algorithm_type
         estimator = getattr(self.classifier, 'sklearn_estimator', None)
+        if params is None:
+            params = self._get_default_params(estimator or algorithm_type)
 
-        # Train the new Scikit-Learn model
+        # Train the new model
         model = _sklearn_estimator_class(algorithm_type, estimator)(**params)
-        model.fit(X, y)
-        
+        class_names = None
+        if estimator in _EXTERNAL_MODULES:
+            # XGBoost needs the labels as 0..K-1; train every library on the
+            # codes and name the original labels (classes_ order).
+            class_names, codes = np.unique(np.asarray(y), return_inverse=True)
+            class_names = list(class_names)
+            model.fit(X, codes)
+        else:
+            model.fit(X, y)
+
         # Determine feature names and class names
         if hasattr(X, 'columns'):
-            self.feature_names = list(X.columns)
+            self.feature_names = [str(c) for c in X.columns]
         else:
             self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
-            
+
         # Extract rules from the freshly trained estimator; the class names
         # come from its classes_ (integer labels, see from_sklearn).
-        trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names)
+        trained = PyRuleAnalyzer.from_sklearn(model, self.feature_names, class_names)
         # Keep the parameters as they were set, for get_params().
         trained.classifier.model_parameters = params
         self.classifier = trained.classifier
@@ -729,13 +861,28 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
     # Method to get default params.
     @staticmethod
     def _get_default_params(model: str) -> Dict:
-        """Return sensible default parameters for each model type."""
+        """Return sensible default parameters for each model type.
+
+        XGBoost, LightGBM and CatBoost get the settings of the scikit-learn
+        GBDT default (100 stages of depth 3, learning rate 0.1), so the four
+        boosting libraries are comparable out of the box, and are kept quiet
+        (CatBoost also writes no catboost_info folder).
+        """
+        gbdt = {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1, "random_state": 42}
         defaults = {
             "Decision Tree": {"max_depth": None, "random_state": 42},
             "Random Forest": {"n_estimators": 100, "max_depth": None, "random_state": 42},
-            "Gradient Boosting Decision Trees": {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1, "random_state": 42}
+            "Gradient Boosting Decision Trees": gbdt,
+            "XGBClassifier": {**gbdt, "verbosity": 0},
+            # num_leaves = 2 ** max_depth: LightGBM grows leaf-wise, so its
+            # default of 31 leaves would not fit a depth-3 tree.
+            "LGBMClassifier": {**gbdt, "num_leaves": 8, "verbose": -1},
+            "CatBoostClassifier": {"iterations": 100, "depth": 3, "learning_rate": 0.1,
+                                   "random_seed": 42, "verbose": 0,
+                                   "allow_writing_files": False},
         }
-        return defaults.get(model, {"random_state": 42})
+        _, estimator = _resolve_model(model)
+        return dict(defaults.get(estimator or model, {"random_state": 42}))
     
     # ==========================================================================
     # REFINEMENT

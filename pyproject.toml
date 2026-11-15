@@ -23,6 +23,7 @@ dependencies = [
     "cpncheck>=0.2.2",
 ]
 keywords = ["scikit-learn", "decision tree", "random forest", "gradient boosting",
+            "xgboost", "lightgbm", "catboost",
             "rule extraction", "explainability", "petri nets", "model checking",
             "arduino", "embedded"]
 classifiers = [
@@ -44,6 +45,13 @@ classifiers = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+# Reading and training XGBoost, LightGBM and CatBoost classifiers. The lower
+# bounds are the releases the bit-for-bit tests (tests/test_external_gbdt.py)
+# were run against.
+xgboost = ["xgboost>=3.4"]
+lightgbm = ["lightgbm>=4.7"]
+catboost = ["catboost>=1.2.10"]
+boosting = ["xgboost>=3.4", "lightgbm>=4.7", "catboost>=1.2.10"]
 docs = [
     "sphinx",
     "sphinx-autobuild",

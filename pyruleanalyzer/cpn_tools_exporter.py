@@ -642,10 +642,18 @@ class CPNToolsExporter:
             self._arc(top, "TtoP", t_ch, sock_score, "sc")
             self._arc(top, "TtoP", t_disp, sock_in, "x")
 
-            t_pos = self._add_trans(top, "Decide_1", 460, 120, guard="sc >= 0.0")
+            # scikit-learn decides at score >= 0; XGBoost, LightGBM and
+            # CatBoost move the cutoff (binary_threshold). The two guards
+            # stay complementary, so they still partition the reals.
+            from ._boosting_import import binary_test
+            op, cut = binary_test(float(getattr(self.clf, "binary_threshold", 0.0)))
+            neg_op = "<" if op == ">=" else "<="
+            t_pos = self._add_trans(top, "Decide_1", 460, 120,
+                                    guard=f"sc {op} {_ml_val(cut)}")
             self._arc(top, "PtoT", t_pos, sock_score, "sc")
             self._arc(top, "TtoP", t_pos, p_pred, str(_int_label(pos)))
-            t_neg = self._add_trans(top, "Decide_0", 460, -120, guard="sc < 0.0")
+            t_neg = self._add_trans(top, "Decide_0", 460, -120,
+                                    guard=f"sc {neg_op} {_ml_val(cut)}")
             self._arc(top, "PtoT", t_neg, sock_score, "sc")
             self._arc(top, "TtoP", t_neg, p_pred, str(_int_label(neg)))
         else:

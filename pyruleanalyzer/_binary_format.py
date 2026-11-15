@@ -71,6 +71,8 @@ class BinaryFormatMixin:
                          Version 4 also: bit 1 = per-node missing-value
                          routing stored with each tree; bit 2 = column
                          labels follow; bit 3 = label table follows.
+                         Version 5 also: bit 4 = GBDT score arithmetic
+                         follows the GBDT metadata.
             Version 3 (a Random Forest whose labels are not 0..K-1), or
             version 4 with flag bit 2:
                 n_classes * 4 bytes  label of each distribution column (int32)
@@ -88,6 +90,9 @@ class BinaryFormatMixin:
                     4 bytes  class_label (int32)
                 For each gbdt_class:
                     8 bytes  init_score (float64)
+                Version 5 with flag bit 4 (XGBoost, LightGBM, CatBoost):
+                    1 byte   score_dtype: 0 = float64, 1 = float32
+                    8 bytes  binary_threshold (float64)
             Feature names:
                 For each feature:
                     2 bytes  name_len (uint16)
@@ -113,7 +118,9 @@ class BinaryFormatMixin:
                 max_depth:     4 bytes (int32)
 
         Models that record no missing-value routing and whose labels are
-        integers are written exactly as before (versions 1 to 3).
+        integers are written exactly as before (versions 1 to 3). Version 5
+        is version 4 plus the score arithmetic of a GBDT read from XGBoost,
+        LightGBM or CatBoost; scikit-learn models never need it.
 
         Args:
             filepath (str): Output file path.
@@ -157,16 +164,22 @@ class BinaryFormatMixin:
             col_labels = self._rf_labels(self.num_classes)
             dt_labels = (self.algorithm_type == 'Decision Tree'
                          and col_labels != list(range(self.num_classes)))
-            if routes_missing or table is not None or dt_labels:
-                version = 4
+            # Version 5: a GBDT whose scores are not plain float64 sums
+            # decided at 0 (XGBoost, LightGBM, CatBoost).
+            arith = (self.algorithm_type == 'Gradient Boosting Decision Trees'
+                     and (getattr(self, 'score_dtype', 'float64') != 'float64'
+                          or float(getattr(self, 'binary_threshold', 0.0)) != 0.0))
+            if routes_missing or table is not None or dt_labels or arith:
+                version = 5 if arith else 4
                 has_labels = has_labels or dt_labels
                 rf_labels = col_labels
             else:
                 version = 3 if has_labels else (2 if f32 else 1)
             flags = ((1 if f32 else 0)
-                     | (2 if version == 4 and routes_missing else 0)
-                     | (4 if version == 4 and has_labels else 0)
-                     | (8 if version == 4 and table is not None else 0))
+                     | (2 if version >= 4 and routes_missing else 0)
+                     | (4 if version >= 4 and has_labels else 0)
+                     | (8 if version >= 4 and table is not None else 0)
+                     | (16 if arith else 0))
             f.write(b'PYRA')                                      # magic
             f.write(struct.pack('<B', version))                    # version
             f.write(struct.pack('<B', algo_byte))                  # algorithm_type
@@ -192,6 +205,9 @@ class BinaryFormatMixin:
                 init_scores = self._gbdt_init_scores or {}
                 for cl in classes:
                     f.write(struct.pack('<d', init_scores.get(cl, 0.0)))
+                if flags & 16:
+                    f.write(struct.pack('<B', 1 if self.score_dtype == 'float32' else 0))
+                    f.write(struct.pack('<d', float(self.binary_threshold)))
 
             # --- Feature names ---
             for name in self._array_feature_names:
@@ -283,7 +299,7 @@ class BinaryFormatMixin:
         if magic != b'PYRA':
             raise ValueError(f'Invalid binary model file (magic={magic!r})')
         version = _unpack('<B')
-        if version not in (1, 2, 3, 4):
+        if version not in (1, 2, 3, 4, 5):
             raise ValueError(f'Unsupported binary model version: {version}')
         algo_byte = _unpack('<B')
         if algo_byte not in algo_names:
@@ -294,7 +310,7 @@ class BinaryFormatMixin:
         n_trees = _unpack('<H')
         default_cls = _unpack('<i')
         flags = _unpack('<B') if version >= 2 else 0
-        known_flags = 0x0F if version >= 4 else 0x01
+        known_flags = 0x1F if version >= 5 else (0x0F if version >= 4 else 0x01)
         if flags & ~known_flags:
             raise ValueError(f'Invalid binary model file: unknown flags {flags:#04x}.')
         class_labels = list(range(n_classes))
@@ -344,6 +360,15 @@ class BinaryFormatMixin:
                 gbdt_classes.append(_unpack('<i'))
             for cl in gbdt_classes:
                 gbdt_init_scores[cl] = _unpack('<d')
+        score_dtype, binary_threshold = 'float64', 0.0
+        if flags & 16:
+            if algorithm_type != 'Gradient Boosting Decision Trees':
+                raise ValueError('Invalid binary model: score arithmetic on a non-GBDT model.')
+            code = _unpack('<B')
+            if code not in (0, 1):
+                raise ValueError(f'Invalid binary model: score dtype code {code}.')
+            score_dtype = 'float32' if code == 1 else 'float64'
+            binary_threshold = _unpack('<d')
 
         # Feature names
         feature_names = []
@@ -453,6 +478,12 @@ class BinaryFormatMixin:
         obj._native_source = None
         obj.fallback_activations = 0
         obj.input_dtype = 'float32' if flags & 1 else None
+        obj.score_dtype = score_dtype
+        obj.binary_threshold = binary_threshold
+        # A GBDT file that stores its missing-value routing came from a
+        # library that accepts NaN (scikit-learn's never stores it).
+        obj._gbdt_nan_routing = (algorithm_type == 'Gradient Boosting Decision Trees'
+                                 and bool(flags & 2))
         obj.label_table = label_table
         obj.sklearn_estimator = None
 

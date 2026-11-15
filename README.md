@@ -40,6 +40,7 @@ that the simplified model still behaves like a classifier.
 [A five-minute tour](#a-five-minute-tour) ·
 [The ideas in one page](#the-ideas-in-one-page) ·
 [How each model decides](#how-each-model-decides) ·
+[XGBoost, LightGBM and CatBoost](#xgboost-lightgbm-and-catboost) ·
 [Refinement](#refinement) ·
 [Predict](#predict-fast) ·
 [Export](#export-standalone-classifiers) ·
@@ -68,6 +69,13 @@ pip install -e .
 Python 3.9 or later. Dependencies: `numpy`, `pandas`, `scikit-learn`,
 `matplotlib` and [`cpncheck`](https://pypi.org/project/cpncheck/) (pure Python,
 the model checker for the exported nets).
+
+XGBoost, LightGBM and CatBoost models are optional extras (see
+[XGBoost, LightGBM and CatBoost](#xgboost-lightgbm-and-catboost)):
+
+```bash
+pip install "pyruleanalyzer[boosting]"      # or [xgboost], [lightgbm], [catboost]
+```
 
 **The C extension.** Batch prediction uses a compiled extension. The wheels on
 PyPI ship it for Linux (x86_64, aarch64), macOS (Intel and Apple silicon) and
@@ -228,6 +236,52 @@ a threshold goes to the same side as in scikit-learn.
 [`tests/test_rule_fidelity.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/tests/test_rule_fidelity.py)
 compares every engine, including the compiled C header, against a reference
 implementation on samples placed on and one ULP around every threshold.
+
+## XGBoost, LightGBM and CatBoost
+
+Their classifiers are read as a **Gradient Boosting** model, so refinement,
+every engine, the exports and the Petri net work on them unchanged:
+
+```python
+import xgboost as xgb
+from pyruleanalyzer import PyRuleAnalyzer
+
+model = xgb.XGBClassifier(n_estimators=100, max_depth=3).fit(X, y)
+analyzer = PyRuleAnalyzer.from_sklearn(model)           # an LGBMClassifier or
+                                                        # CatBoostClassifier too
+# or train one by name ("XGBoost", "LightGBM", "CatBoost"), any labels:
+analyzer = PyRuleAnalyzer.new_model("LightGBM").fit(X, y)
+```
+
+The rules reproduce the library's **raw score bit for bit**, and a binary
+model predicts exactly what the library's `predict` returns -- on and one ULP
+around every threshold, with missing values too
+([`tests/test_external_gbdt.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/tests/test_external_gbdt.py)).
+Each library decides differently at the edges, and each difference is kept:
+
+| | Split sends left | Inputs compared in | Score added in | Binary predicts positive when |
+|---|---|---|---|---|
+| scikit-learn | `x <= t` | float32 | float64 | `score >= 0` |
+| XGBoost | `x < t` | float32 | float32 | `sigmoid(score) > 0.5` in float32 |
+| LightGBM | `x <= t` (`\|x\| <= 1e-35` read as 0) | float64 | float64 | `p > 1 - p` |
+| CatBoost | `x <= border` (symmetric trees) | float32 | float64 | `score > 0` |
+
+The rules use `<=` throughout (`x < t` becomes `x <= prev(t)` in float32), the
+classifier records the precision (`input_dtype`, `score_dtype`), and each
+binary test becomes `score >= binary_threshold` for one constant found once.
+XGBoost's DART weights are folded into the leaves. A **multiclass** model
+predicts the argmax of the raw scores; XGBoost and LightGBM take the argmax of
+the softmax probabilities, which differs only when two probabilities round
+to the same value.
+
+Refused with a `ValueError`, because a threshold rule cannot express them:
+categorical splits, `gblinear`, XGBoost `missing` other than NaN, LightGBM
+linear trees and `zero_as_missing`, CatBoost categorical/text features,
+non-symmetric trees and a scale or bias (`boost_from_average=True`).
+
+The Petri net and the theorems behind it compute scores in real (double)
+arithmetic; an XGBoost model adds in float32, so the net and the model could
+differ only for a score within float32 rounding of the cutoff or of a tie.
 
 ## Refinement
 
@@ -790,7 +844,7 @@ added condition) refuse NaN as before.
 |---|---|
 | `PyRuleAnalyzer.new_model(model, params=None)` | An untrained analyzer: `"Decision Tree"`, `"Random Forest"` or `"Gradient Boosting Decision Trees"` |
 | `.fit(X, y)` | Train the scikit-learn model and extract its rules |
-| `PyRuleAnalyzer.from_sklearn(model, feature_names=None, class_names=None)` | Wrap an already-fitted `DecisionTreeClassifier`, `RandomForestClassifier`, `ExtraTreesClassifier` (wrapped as a Random Forest; `get_params()["estimator"]` remembers the class, so refitting, also after `clone`, trains an `ExtraTreesClassifier` again) or `GradientBoostingClassifier` |
+| `PyRuleAnalyzer.from_sklearn(model, feature_names=None, class_names=None)` | Wrap an already-fitted `DecisionTreeClassifier`, `RandomForestClassifier`, `ExtraTreesClassifier` (wrapped as a Random Forest; `get_params()["estimator"]` remembers the class, so refitting, also after `clone`, trains an `ExtraTreesClassifier` again), `GradientBoostingClassifier`, or `XGBClassifier`, `LGBMClassifier`, `CatBoostClassifier` (read as a Gradient Boosting model, see [XGBoost, LightGBM and CatBoost](#xgboost-lightgbm-and-catboost)) |
 | `PyRuleAnalyzer.create(train_path, test_path, model, params, refine)` | Same, from CSV files |
 | `.execute_rule_refinement(X, y, remove_below_n_classifications=-1, refine_between_trees=None, ...)` | Refine; returns `rules_before`, `rules_after`, `rules_removed`, `reduction_percent` |
 | `.compare_initial_final_results(X, y)` | Metrics and disagreements, initial against refined |

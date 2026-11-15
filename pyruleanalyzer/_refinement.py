@@ -962,7 +962,8 @@ class RefinementMixin:
         init = np.array([self._gbdt_init_scores.get(c, 0.0) for c in classes], dtype=np.float64)
         score = agg + init
         if self._gbdt_is_binary:
-            pred = np.where(score[:, 1] >= 0, _lab(classes[1]), _lab(classes[0]))
+            pred = np.where(score[:, 1] >= self.binary_threshold, _lab(classes[1]),
+                            _lab(classes[0]))
         else:
             labs = np.array([_lab(c) for c in classes], dtype=object)
             pred = labs[np.argmax(score, axis=1)]
@@ -987,7 +988,10 @@ class RefinementMixin:
         matching rule (`default_class` when none matches); RF, the argmax of
         the sum of the matching leaves' normalised distributions
         (`default_class` when every tree abstains); GBDT, init score plus the
-        matching contributions (binary: score >= 0).
+        matching contributions (binary: score >= `binary_threshold`, 0 for
+        scikit-learn). Scores are added in float64 in every case: these
+        statistics guide refinement and may differ from a float32 (XGBoost)
+        model only for samples whose score lies within rounding of the cutoff.
 
         Each change touches one tree, and only on the samples that the changed
         rules cover, so a candidate is evaluated on those samples alone.
@@ -1109,7 +1113,7 @@ class RefinementMixin:
                 return pred
             score = agg + init
             if self._gbdt_is_binary:
-                return np.where(score[:, 1] >= 0, _lab(classes[1]),
+                return np.where(score[:, 1] >= self.binary_threshold, _lab(classes[1]),
                                 _lab(classes[0])).astype(object)
             return np.array([_lab(classes[i]) for i in np.argmax(score, axis=1)],
                             dtype=object)

@@ -290,13 +290,26 @@ class LabelsMixin:
         """
         return all('missing_left' in t for t in trees if 'init_score' not in t)
 
+    # Method to tell whether a GBDT answers NaN inputs
+    def _gbdt_routes_nan(self) -> bool:
+        """Whether this GBDT routes NaN like its source library.
+
+        True for a model read from XGBoost, LightGBM or CatBoost (or loaded
+        from a binary file that stores its missing-value routing); False for
+        scikit-learn's GradientBoostingClassifier, which refuses NaN.
+        """
+        from ._boosting_import import EXTERNAL_GBDT
+        return (getattr(self, 'sklearn_estimator', None) in EXTERNAL_GBDT
+                or bool(getattr(self, '_gbdt_nan_routing', False)))
+
     # Method to refuse NaN inputs a model cannot answer faithfully
     def _check_missing_values(self, X, routes_missing: bool) -> bool:
         """Accept NaN in `X` only where the original model accepts it.
 
         * Gradient Boosting: scikit-learn's GradientBoostingClassifier raises
           on NaN (its trees route missing values, the ensemble does not
-          accept them), so NaN is refused, as there.
+          accept them), so NaN is refused, as there. A model read from
+          XGBoost, LightGBM or CatBoost routes NaN as that library does.
         * Decision Tree / Random Forest (also ExtraTrees): NaN follows the
           per-split routing recorded in the rules (`Condition`), exactly as
           the fitted trees do; refused when that routing is unknown.
@@ -315,7 +328,8 @@ class LabelsMixin:
         arr = np.asarray(X, dtype=np.float64)
         if not (arr.size and np.isnan(arr).any()):
             return False
-        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+        if (self.algorithm_type == 'Gradient Boosting Decision Trees'
+                and not self._gbdt_routes_nan()):
             n = int(np.isnan(arr).any(axis=-1).sum()) if arr.ndim > 1 else 1
             raise ValueError(
                 f'Input contains NaN in {n} sample(s). scikit-learn\'s '

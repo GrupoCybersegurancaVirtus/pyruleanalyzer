@@ -100,6 +100,11 @@ def make_board(board: Optional[Any] = None, **overrides) -> Optional[Board]:
 _ALIASES = {
     'gbdt': 'gbdt', 'gradient boosting decision trees': 'gbdt',
     'gradientboostingclassifier': 'gbdt',
+    # XGBoost, LightGBM and CatBoost are read as a GBDT (one tree per stage
+    # and class; CatBoost's vector leaves become one tree per class).
+    'xgbclassifier': 'gbdt', 'xgboost': 'gbdt',
+    'lgbmclassifier': 'gbdt', 'lightgbm': 'gbdt',
+    'catboostclassifier': 'gbdt', 'catboost': 'gbdt',
     'rf': 'rf', 'random forest': 'rf', 'randomforestclassifier': 'rf',
     'extratreesclassifier': 'rf',
     'dt': 'dt', 'decision tree': 'dt', 'decisiontreeclassifier': 'dt',

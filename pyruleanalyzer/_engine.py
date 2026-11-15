@@ -114,6 +114,7 @@ class IterativeEngineMixin:
             predicted_class, _, _ = self.classify_gbdt(
                 data, rules, self._gbdt_init_scores,
                 self._gbdt_is_binary, self._gbdt_classes,
+                self.score_dtype, self.binary_threshold,
             )
 
         elif self.algorithm_type == 'Decision Tree':
@@ -288,7 +289,8 @@ class IterativeEngineMixin:
 
     # Method to classify data using GBDT rules (additive scoring)
     @staticmethod
-    def classify_gbdt(data, rules, init_scores, is_binary, classes):
+    def classify_gbdt(data, rules, init_scores, is_binary, classes,
+                      score_dtype='float64', binary_threshold=0.0):
         """
         Classifies a single data instance using GBDT additive scoring.
 
@@ -303,6 +305,10 @@ class IterativeEngineMixin:
             init_scores (Dict[str, float]): Init scores per class group.
             is_binary (bool): Whether this is binary classification.
             classes (List[str]): List of class label strings.
+            score_dtype (str): 'float64', or 'float32' to add the stages in
+                float32 as XGBoost does.
+            binary_threshold (float): A binary model predicts the positive
+                class when the score is >= this (0.0 for scikit-learn).
 
         Returns:
             Tuple[int, List[Rule], None]:
@@ -320,7 +326,13 @@ class IterativeEngineMixin:
                 tree_id = rule.name
             tree_rules_map[tree_id].append(rule)
 
-        # Compute scores per class group
+        # Compute scores per class group, in the library's arithmetic
+        if score_dtype == 'float32':
+            def add(a, b):
+                return float(np.float32(a + b))
+        else:
+            def add(a, b):
+                return a + b
         scores = {}
         matched_rules = []
 
@@ -372,13 +384,15 @@ class IterativeEngineMixin:
 
                     if matched:
                         if rule.contribution is not None:
-                            score += rule.contribution
+                            score = add(score, rule.contribution)
                         matched_rules.append(rule)
                         break  # Only one match per tree
 
             # Decide on the raw score, as scikit-learn does (raw >= 0); see
-            # update_native_model for why not sigmoid(score) >= 0.5.
-            predicted_class = int(classes[1]) if score >= 0.0 else int(classes[0])
+            # update_native_model for why not sigmoid(score) >= 0.5. Other
+            # libraries move the cutoff (binary_threshold).
+            predicted_class = (int(classes[1]) if score >= binary_threshold
+                               else int(classes[0]))
 
         else:
             # Multiclass: compute score for each class group
@@ -425,7 +439,8 @@ class IterativeEngineMixin:
 
                     if matched:
                         if rule.contribution is not None and class_group in scores:
-                            scores[class_group] += rule.contribution
+                            scores[class_group] = add(scores[class_group],
+                                                      rule.contribution)
                         matched_rules.append(rule)
                         break
 

@@ -91,14 +91,16 @@ class CExportMixin:
     def _c_routes_missing(self) -> bool:
         """Whether the C/Arduino exports carry the missing-value routing.
 
-        Gradient Boosting never does: scikit-learn's GradientBoostingClassifier
-        refuses NaN, so its exports are written as before.
+        A scikit-learn Gradient Boosting never does: GradientBoostingClassifier
+        refuses NaN, so its exports are written as before. One read from
+        XGBoost, LightGBM or CatBoost does, as those libraries route NaN.
 
         Returns:
             bool: True when every compiled tree has its ``missing_left``
             array and there is at least one tree to traverse.
         """
-        if self.algorithm_type == 'Gradient Boosting Decision Trees':
+        if (self.algorithm_type == 'Gradient Boosting Decision Trees'
+                and not self._gbdt_routes_nan()):
             return False
         trees = self._tree_arrays
         return (self._trees_route_missing(trees)
@@ -370,24 +372,32 @@ class CExportMixin:
             tree_class_groups_c = self._tree_class_groups
             assert tree_class_groups_c is not None
 
+            # XGBoost adds its trees in float32: a float accumulator rounds
+            # after every stage (score + value is computed in double, then
+            # rounded once to float, which is the float32 sum).
+            stype = 'float' if getattr(self, 'score_dtype', 'float64') == 'float32' else 'double'
+            cut = float(getattr(self, 'binary_threshold', 0.0))
             a('#include <math.h>')
             a('')
             a(signature)
             if self._gbdt_is_binary and len(classes) >= 2:
                 pos_class = classes[1]
                 init_s = init_scores.get(pos_class, 0.0)
-                a(f'    double score = {init_s:.17g};')
+                a(f'    {stype} score = {init_s:.17g};')
                 for t_idx, tree in enumerate(self._tree_arrays):
                     if 'init_score' in tree:
                         continue
                     if tree_class_groups_c[t_idx] != pos_class:
                         continue
                     a(f'    score += tree{t_idx}_value[{call(t_idx)}];')
-                # Decide on the raw score, as scikit-learn does (raw >= 0).
-                a(f'    return (score >= 0.0) ? {int(classes[1])} : {int(classes[0])};')
+                # Decide on the raw score, as scikit-learn does (raw >= 0);
+                # other libraries move the cutoff (binary_threshold).
+                from ._boosting_import import binary_test
+                op, c = binary_test(cut)
+                a(f'    return (score {op} {_format_c_float(c)}) ? {int(classes[1])} : {int(classes[0])};')
                 a('}')
             else:
-                a(f'    double scores[{len(classes)}] = {{')
+                a(f'    {stype} scores[{len(classes)}] = {{')
                 inits = ', '.join(f'{init_scores.get(cl, 0.0):.17g}' for cl in classes)
                 a(f'        {inits}')
                 a('    };')

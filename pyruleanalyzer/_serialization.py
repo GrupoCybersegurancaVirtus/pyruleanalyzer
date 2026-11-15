@@ -34,12 +34,14 @@ class SerializationMixin:
     # Identification of the JSON model format (see to_json)
     _JSON_FORMAT = 'pyruleanalyzer.RuleClassifier'
     # Version 2: missing-value routing of each condition, label table,
-    # estimator class. Version 1 files are still read.
-    _JSON_VERSION = 2
+    # estimator class. Version 3: score arithmetic of a GBDT read from
+    # XGBoost, LightGBM or CatBoost. Versions 1 and 2 are still read.
+    _JSON_VERSION = 3
     _JSON_ESTIMATORS = {
         'Decision Tree': ('DecisionTreeClassifier', 'ExtraTreeClassifier'),
         'Random Forest': ('RandomForestClassifier', 'ExtraTreesClassifier'),
-        'Gradient Boosting Decision Trees': ('GradientBoostingClassifier',),
+        'Gradient Boosting Decision Trees': ('GradientBoostingClassifier', 'XGBClassifier',
+                                             'LGBMClassifier', 'CatBoostClassifier'),
     }
     _JSON_MAX_DEPTH = 64
     _JSON_ALGORITHMS = ('Decision Tree', 'Random Forest', 'Gradient Boosting Decision Trees')
@@ -263,9 +265,14 @@ class SerializationMixin:
         v2 = (table is not None or estimator is not None
               or any(isinstance(c, Condition)
                      for r in pool for c in (r.parsed_conditions or [])))
+        # Version 3 adds the score arithmetic, written only when it is not
+        # scikit-learn's (float64 sums decided at 0).
+        score_dtype = getattr(self, 'score_dtype', 'float64')
+        cut = float(getattr(self, 'binary_threshold', 0.0))
+        v3 = score_dtype != 'float64' or cut != 0.0
         out = {
             'format': RuleClassifier._JSON_FORMAT,
-            'version': RuleClassifier._JSON_VERSION if v2 else 1,
+            'version': 3 if v3 else (2 if v2 else 1),
             'algorithm_type': self.algorithm_type,
             'rules': [rule.to_dict() for rule in pool],
             'initial_rules': initial,
@@ -288,6 +295,12 @@ class SerializationMixin:
             out['label_table'] = None if table is None else [
                 RuleClassifier._json_table_label(v) for v in table]
             out['sklearn_estimator'] = estimator
+        if v3:
+            out['label_table'] = None if table is None else [
+                RuleClassifier._json_table_label(v) for v in table]
+            out['sklearn_estimator'] = estimator
+            out['score_dtype'] = score_dtype
+            out['binary_threshold'] = cut
         return out
 
     # Method to write one entry of the label table as JSON
@@ -336,7 +349,7 @@ class SerializationMixin:
                 f'{cls._JSON_FORMAT!r}.'
             )
         version = data.get('version')
-        if isinstance(version, bool) or version not in (1, cls._JSON_VERSION):
+        if isinstance(version, bool) or version not in (1, 2, cls._JSON_VERSION):
             raise ValueError(
                 f'Unsupported JSON model version {version!r:.40} (this version of '
                 f'pyruleanalyzer reads versions 1 to {cls._JSON_VERSION}).'
@@ -348,6 +361,8 @@ class SerializationMixin:
                 'model_parameters')
         if version >= 2:
             keys += ('label_table', 'sklearn_estimator')
+        if version >= 3:
+            keys += ('score_dtype', 'binary_threshold')
         missing = [k for k in keys if k not in data]
         if missing:
             raise ValueError(f'Invalid JSON model: missing field(s) {missing}.')
@@ -442,6 +457,11 @@ class SerializationMixin:
             obj.model_parameters = params
         obj.label_table = table
         obj.sklearn_estimator = estimator
+        obj.score_dtype = data.get('score_dtype', 'float64')
+        if obj.score_dtype not in ('float64', 'float32'):
+            raise ValueError(f'Invalid JSON model: unsupported score_dtype {obj.score_dtype!r:.40}.')
+        obj.binary_threshold = (Rule._json_number(data['binary_threshold'], 'binary_threshold')
+                                if version >= 3 else 0.0)
         if table is not None and len(table) != obj.num_classes:
             raise ValueError('Invalid JSON model: label_table must have one '
                              'label per class (num_classes).')

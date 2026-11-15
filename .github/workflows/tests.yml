@@ -38,6 +38,27 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+  boosting-libraries:
+    # XGBoost, LightGBM and CatBoost models read as rules, bit for bit.
+    # Python 3.13: CatBoost publishes no wheel for the newest Pythons yet.
+    name: ${{ matrix.os }} / Python 3.13 / XGBoost, LightGBM, CatBoost
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install (with the C extension and the three libraries)
+        env:
+          PYRULEANALYZER_REQUIRE_EXTENSION: "1"
+        run: python -m pip install -e ".[test,boosting]"
+      - name: Test
+        run: python -m pytest -q tests/test_external_gbdt.py
+
   minimum-versions:
     # The lowest bounds pyproject.toml declares, on the oldest Python: every
     # one of these publishes cp39 wheels. scipy is pinned to a release of the

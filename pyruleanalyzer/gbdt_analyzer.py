@@ -110,11 +110,12 @@ def _count_usage_batch(clf, X_test, y_test, feature_names):
         rule.usage_count = 0
         rule.error_count = 0
 
-    # Pass 1: scores and usage.
+    # Pass 1: scores and usage, in the arithmetic of the source library.
+    sdt = np.float32 if getattr(clf, 'score_dtype', 'float64') == 'float32' else np.float64
     if is_binary:
-        score = np.full(n, init_scores.get(pos_class, 0.0), dtype=np.float64)
+        score = np.full(n, init_scores.get(pos_class, 0.0), dtype=sdt)
     else:
-        score = np.empty((n, len(classes)), dtype=np.float64)
+        score = np.empty((n, len(classes)), dtype=sdt)
         for j, c in enumerate(classes):
             score[:, j] = init_scores.get(c, 0.0)
         gcol = {c: j for j, c in enumerate(classes)}
@@ -127,7 +128,7 @@ def _count_usage_batch(clf, X_test, y_test, feature_names):
         counts = np.bincount(ids, minlength=len(arrays['value']))
         for nid, r in owner.items():
             r.usage_count += int(counts[nid])
-        contrib = np.zeros(len(arrays['value']), dtype=np.float64)
+        contrib = np.zeros(len(arrays['value']), dtype=sdt)
         hit = np.zeros(len(arrays['value']), dtype=bool)
         for nid, r in owner.items():
             if r.contribution is not None:
@@ -142,7 +143,8 @@ def _count_usage_batch(clf, X_test, y_test, feature_names):
             score[m, j] += contrib[ids][m]
 
     if is_binary:
-        pred = np.where(score >= 0.0, int(classes[1]), int(classes[0]))
+        pred = np.where(score >= getattr(clf, 'binary_threshold', 0.0),
+                        int(classes[1]), int(classes[0]))
     else:
         cls_int = np.array([int(c) for c in classes])
         pred = cls_int[np.argmax(score, axis=1)]
@@ -342,6 +344,7 @@ class GBDTAnalyzer:
             pred_label, matched_rules, _ = RuleClassifier.classify_gbdt(
                 sample, clf.final_rules,
                 clf._gbdt_init_scores, clf._gbdt_is_binary, clf._gbdt_classes,
+                clf.score_dtype, clf.binary_threshold,
             )
 
             # Convert prediction to int

@@ -168,6 +168,18 @@ class RuleClassifier(
         # 'Random Forest'), so a refit trains the same kind of model.
         self.sklearn_estimator: Optional[str] = None
 
+        # --- GBDT SCORE ARITHMETIC ---
+        # How the raw score of a GBDT is accumulated and decided, so that
+        # every engine reproduces the library the model came from bit for
+        # bit. 'float64' (scikit-learn, LightGBM, CatBoost) or 'float32'
+        # (XGBoost adds its trees in float32). A binary model predicts the
+        # positive class when score >= binary_threshold: 0.0 for
+        # scikit-learn; the smallest score whose probability the library
+        # rounds above 0.5 for XGBoost/LightGBM; the smallest positive
+        # double for CatBoost (raw > 0). See _boosting_import.
+        self.score_dtype: str = 'float64'
+        self.binary_threshold: float = 0.0
+
     # Method to execute reset_fallback_counter
     def reset_fallback_counter(self) -> None:
         """Zero the uncovered-region counter (see `fallback_activations`)."""
@@ -227,6 +239,10 @@ class RuleClassifier(
             self.label_table = None
         if not hasattr(self, 'sklearn_estimator'):
             self.sklearn_estimator = None
+        if not hasattr(self, 'score_dtype'):
+            self.score_dtype = 'float64'
+        if not hasattr(self, 'binary_threshold'):
+            self.binary_threshold = 0.0
         self._native_source = None
 
         # Auto-recompile the native model upon loading (classify only uses it

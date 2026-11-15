@@ -175,6 +175,22 @@ class NativePythonMixin:
                 init_scores[tree_rules[0].class_group] = tree_rules[0].contribution
 
         write('import math\n\n' if export else 'import math\n')
+        f32 = getattr(self, 'score_dtype', 'float64') == 'float32'
+        cut = float(getattr(self, 'binary_threshold', 0.0))
+        if f32:
+            # XGBoost adds its trees in float32: round after every stage.
+            write("import struct as _s32\n\n\n"
+                  "def _r32(v):\n"
+                  "    return _s32.unpack('f', _s32.pack('f', v))[0]\n\n\n")
+
+        def acc(target, term):
+            """`target` += `term`, in the score arithmetic of the model."""
+            return (f'{target} = _r32({target} + {term})' if f32
+                    else f'{target} += {term}')
+
+        # XGBoost, LightGBM and CatBoost route NaN at every split;
+        # GradientBoostingClassifier refuses NaN, so no routing is emitted.
+        nan = self._gbdt_routes_nan()
 
         # Identifiers come from positions, never from rule names or class
         # labels, which may hold anything (a '-' in "-1" already breaks
@@ -191,9 +207,8 @@ class NativePythonMixin:
                               and rule.contribution is not None else 0.0))
             if tree is None:
                 return False
-            # GradientBoostingClassifier refuses NaN: no routing emitted.
             write(function_source(fn_of[tid], tree,
-                                  lambda v: repr(float(v)), nan=False))
+                                  lambda v: repr(float(v)), nan=nan))
             write('\n')
 
         # The boosting stages (tree id, class group), init rules left out
@@ -211,17 +226,20 @@ class NativePythonMixin:
             write(f'    score = {repr(init_scores.get(pos_class, 0.0))}\n')
             for tid, class_group in stages:
                 if class_group == pos_class:
-                    write(f'    score += {fn_of[tid]}(sample)\n')
+                    write(f"    {acc('score', fn_of[tid] + '(sample)')}\n")
             # Decide on the raw score, as scikit-learn does
             # (raw_predictions >= 0). sigmoid(score) >= 0.5 is not the same
             # test in floating point: sigmoid rounds to exactly 0.5 for
             # negative scores of magnitude below ~1e-16 and would pick the
-            # positive class.
+            # positive class. Other libraries move the cutoff
+            # (binary_threshold, see _boosting_import).
+            from ._boosting_import import binary_test
+            op, c = binary_test(cut)
             if export:
-                write(f'    return {int(classes[1])} if score >= 0.0 '
+                write(f'    return {int(classes[1])} if score {op} {c!r} '
                       f'else {int(classes[0])}\n')
             else:
-                write('    if score >= 0.0:\n')
+                write(f'    if score {op} {c!r}:\n')
                 write(f'        return {int(classes[1])}, None, None\n')
                 write('    else:\n')
                 write(f'        return {int(classes[0])}, None, None\n')
@@ -233,7 +251,7 @@ class NativePythonMixin:
                       f'{repr(init_scores.get(class_label, 0.0))}\n')
             for tid, class_group in stages:
                 if class_group in col:
-                    write(f'    score_{col[class_group]} += {fn_of[tid]}(sample)\n')
+                    write(f"    {acc(f'score_{col[class_group]}', fn_of[tid] + '(sample)')}\n")
 
             # Argmax
             score_vars = [f'score_{col[cl]}' for cl in classes]
