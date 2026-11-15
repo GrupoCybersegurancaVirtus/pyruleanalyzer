@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.2
 
 **Fixed**
 * `fit_to_board`, `probe_leaves` and `suggest_complexity` with
