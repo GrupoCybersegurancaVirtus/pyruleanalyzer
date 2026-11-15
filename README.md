@@ -222,8 +222,9 @@ function, for the initial and for the refined rule set:
   or a custom refinement that left a region uncovered) the model falls back to
   its default class.
 * **Random Forest**: each tree answers with a class distribution; the
-  distributions are normalised and summed, and the largest wins (lowest class
-  index on a tie). A tree with no matching rule abstains.
+  distributions are summed in tree order and divided by the number of trees,
+  and the largest wins (lowest class index on a tie), as in scikit-learn's
+  `predict`. A tree with no matching rule abstains.
 * **Gradient Boosting**: the initial score plus the contribution
   (`learning_rate * leaf_value`) of the matching leaf of every stage. Binary
   models decide on `score >= 0`, exactly as scikit-learn does; multiclass
@@ -554,8 +555,13 @@ constructions proved in the accompanying article (*Coloured Petri Nets-Based
 Modeling and Validation of Gradient Boosting Decision Trees*): one transition
 per root-to-leaf path with exactly one enabled per sample (Theorem 1), and the
 sequential accumulation `s + eta * v` along the stages of each class channel
-(Theorem 2). The files open directly in CPN Tools for visualisation and
-simulation.
+(Theorem 2). A forest's net decides on scikit-learn's own floats: each leaf
+emits the tree's `predict_proba` row, and `Vote` sums the rows in tree order
+and divides by the number of trees before the argmax, so a tie that the
+division creates goes to the class scikit-learn picks
+([`examples/rf_net_float_exactness.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/examples/rf_net_float_exactness.py)
+compares the scores bit for bit). The files open directly in CPN Tools for
+visualisation and simulation.
 
 ### What gets checked
 
@@ -669,7 +675,10 @@ through `reduction_options={...}`.
   4.0.1 simulator headlessly, enters the state-space tool as the GUI does and
   evaluates the ASK-CTL queries. CPNCheck compares its statistics, verdicts
   and ML library with CPN Tools on its own samples and on 48 nets other people
-  wrote (details in the CPNCheck README).
+  wrote (details in the CPNCheck README). The two also agree on the nets of
+  XGBoost, LightGBM and CatBoost models, refined or not, and on their mutants.
+  These tests need CPN Tools 4.0.1, CPN IDE (its backend jar holds the
+  Access/CPN libraries) and Java 8 with `jjs`; without them they are skipped.
 * **Sensitivity.** `pyruleanalyzer.cpn_mutants.make_mutants()` derives one
   mutant per property -- a small edit of a guard, an inscription or an arc that
   makes exactly that property false -- and the tests require every mutant to be
@@ -953,10 +962,18 @@ pyruleanalyzer/
 ## Tests
 
 ```bash
+pip install -e ".[test]"                     # pytest and lxml (DTD check of the .cpn files)
+pip install -e ".[test,boosting]"            # + XGBoost, LightGBM and CatBoost
 pytest tests/                                # everything
 pytest tests/test_rule_fidelity.py           # every engine against the reference (~20 s; uses gcc if present)
 pytest tests/test_cpn_export.py tests/test_model_checker.py   # after touching the exporter or refinement
+pytest tests/test_external_gbdt.py           # XGBoost, LightGBM, CatBoost bit for bit
+CPNCHECK_CPNTOOLS=1 pytest tests/            # + agreement with CPN Tools (Windows)
 ```
+
+A test that needs something missing here is skipped and says why (`pytest
+-rs`): gcc for the compiled C exports, the compiled extension, each boosting
+library, and CPN Tools for the oracle tests.
 
 Three invariants are checked on 25 configurations of each model type: the
 initial rules reproduce scikit-learn; boundary merging alone never changes a
@@ -975,7 +992,7 @@ cd docs && make html
 
 ## Status
 
-Version 2.1.2; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
+Version 2.2.1; [CHANGELOG.md](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/CHANGELOG.md)
 says what changed. The figures on this page are drawn from real runs by
 [`docs/figures/make_figures.py`](https://github.com/GrupoCybersegurancaVirtus/pyruleanalyzer/blob/main/docs/figures/make_figures.py).
 
