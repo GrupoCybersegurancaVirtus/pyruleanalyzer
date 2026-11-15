@@ -18,6 +18,30 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import LabelEncoder
 from ._rules import make_condition, Rule
 
+import sklearn as _sklearn
+
+# scikit-learn 1.4 stores each leaf's class fractions in tree_.value and
+# predict_proba returns them as they are; before, tree_.value held weighted
+# counts and predict_proba divided each row by its sum.
+_VALUE_IS_PROBA = tuple(int(p) for p in _sklearn.__version__.split('.')[:2]) >= (1, 4)
+
+
+def _sklearn_leaf_proba(value):
+    """The leaf's row of a tree's predict_proba, bit for bit.
+
+    Args:
+        value (np.ndarray): ``tree_.value[node]``, shape (1, n_classes).
+
+    Returns:
+        list: The probabilities, in the estimator's class order.
+    """
+    row = np.array(value[:1], dtype=np.float64)
+    if not _VALUE_IS_PROBA:
+        norm = row.sum(axis=1)[:, np.newaxis]
+        norm[norm == 0.0] = 1.0
+        row /= norm
+    return [float(v) for v in row[0]]
+
 
 class ExtractionMixin:
     """Data processing, rule extraction and classifier creation."""
@@ -313,6 +337,7 @@ class ExtractionMixin:
                 # happens at classification time in classify_rf / native model.
                 weighted_n = tree_.weighted_n_node_samples[node]
                 class_dist = (value_array * weighted_n).tolist()
+                leaf_proba = _sklearn_leaf_proba(tree_.value[node])
                 
                 # Ensure we handle class names correctly (int or str)
                 try:
@@ -325,6 +350,7 @@ class ExtractionMixin:
                 # Create the Rule object with class distribution
                 new_rule = Rule(rule_name, str(class_label), conditions_str,
                                 class_distribution=class_dist)
+                new_rule.leaf_proba = leaf_proba
                 
                 # OPTIMIZATION: Assign the pre-parsed conditions immediately.
                 # This bypasses 'parse_conditions_static' later, saving time and keeping precision.

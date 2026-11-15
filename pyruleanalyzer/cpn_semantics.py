@@ -443,7 +443,10 @@ def evaluate(net, x, default_class=0):
         if total is None or all(v == 0.0 for v in total):
             return int(default_class)      # every tree abstained
         labels = _rf_label_table(net)
-        best = _argmax(total)
+        # The net divides the sum by the number of trees, as scikit-learn
+        # does: the division can make a tie the lowest index wins.
+        n_trees = float(len(subst))
+        best = _argmax([v / n_trees for v in total])
         return labels[best] if labels else best
 
     # --- GBDT: per-class channels, additive scores, then threshold/argmax -

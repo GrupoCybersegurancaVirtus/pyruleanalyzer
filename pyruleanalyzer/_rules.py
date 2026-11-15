@@ -190,6 +190,10 @@ class Rule:
         'parsed_conditions',
         # RF soft-voting: per-class probability distribution at this leaf
         'class_distribution',
+        # The leaf's class-probability row exactly as scikit-learn's
+        # predict_proba returns it (None when unknown, e.g. a merged rule);
+        # the coloured net emits it so the forest's sum is scikit-learn's.
+        'leaf_proba',
         # GBDT-specific fields (None for DT/RF rules)
         'leaf_value', 'learning_rate', 'contribution', 'class_group',
     ]
@@ -218,6 +222,7 @@ class Rule:
         self.parsed_conditions = []  # Populated by parse_conditions_static
         # RF soft-voting distribution
         self.class_distribution = class_distribution
+        self.leaf_proba = None
         # GBDT-specific
         self.leaf_value = leaf_value
         self.learning_rate = learning_rate

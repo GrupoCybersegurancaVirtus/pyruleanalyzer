@@ -304,10 +304,19 @@ class CPNToolsExporter:
             self.colorsets["PROB"] = ("list", "REAL", "colset PROB = list REAL;")
 
     def _prob_literal(self, rule) -> str:
-        """SML list literal of the leaf's normalised class distribution."""
+        """SML list literal of the leaf's normalised class distribution.
+
+        A rule of the unrefined model carries the leaf's row of scikit-learn's
+        predict_proba (``leaf_proba``); it is written as it is, so that the
+        net sums exactly the floats scikit-learn sums. A refined model, whose
+        merged leaves have no scikit-learn row, normalises the counts.
+        """
         k = self.n_classes
         dist = getattr(rule, "class_distribution", None)
-        if dist is None:
+        proba = None if self.is_final else getattr(rule, "leaf_proba", None)
+        if proba is not None and len(proba) <= k:
+            vec = [float(v) for v in proba] + [0.0] * (k - len(proba))
+        elif dist is None:
             idx = self._label_column(rule.class_)
             vec = [1.0 if i == idx else 0.0 for i in range(k)]
         else:
@@ -765,7 +774,13 @@ class CPNToolsExporter:
         for i, sock in vote_socks:
             self._arc(top, "PtoT", t_dec, sock, f"vp{i}")
         prob_list = "[" + ", ".join(f"vp{i}" for i, _ in vote_socks) + "]"
-        self._arc(top, "TtoP", t_dec, p_pred, f"decide(vsum({prob_list}))")
+        # scikit-learn sums the trees' rows in tree order and divides by the
+        # number of trees before the argmax. The division can turn two sums
+        # one ulp apart into a tie, which the lowest index then wins, so the
+        # net divides too: it decides on scikit-learn's own floats.
+        n_trees = sml_real(float(len(vote_socks)))
+        self._arc(top, "TtoP", t_dec, p_pred,
+                  f"decide(vdiv(vsum({prob_list}), {n_trees}))")
         return top
 
     def _declare_ml_softvote(self):
@@ -777,6 +792,9 @@ class CPNToolsExporter:
         self.mls.append(
             "fun vsum ([] : real list list) = []\n"
             "  | vsum (h::t) = List.foldl vadd h t;"
+        )
+        self.mls.append(
+            "fun vdiv (xs : real list, d : real) = List.map (fn a => a / d) xs;"
         )
         self.mls.append(
             "fun argmax (nil : real list) = 0\n"
