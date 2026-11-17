@@ -423,12 +423,14 @@ def _estimate_and_check_memory(
 
 def _compute_memory_estimates(model) -> Dict[str, Any]:
     """Compute memory usage estimates for the model."""
-    # Platform maximums
-    avr_max_flash = 143360  # Arduino Uno: ~140KB available
-    avr_max_sram = 2048     # Arduino Uno: 2KB SRAM
-    
-    esp32_max_flash = 4 * 1024 * 1024  # ESP32: 4MB Flash
-    esp32_max_sram = 524288             # ESP32: 512KB SRAM
+    # Platform maximums: the sketch limits of the Uno and the ESP32
+    # (footprint.BOARDS, from each board's Arduino core).
+    from .footprint import BOARDS
+    avr_max_flash = BOARDS['uno'].flash_bytes
+    avr_max_sram = BOARDS['uno'].ram_bytes
+
+    esp32_max_flash = BOARDS['esp32'].flash_bytes
+    esp32_max_sram = BOARDS['esp32'].ram_bytes
     
     estimated_flash_bytes = 0
     total_ram_bytes = 0

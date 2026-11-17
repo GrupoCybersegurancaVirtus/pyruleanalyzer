@@ -13,6 +13,76 @@ from typing import List
 
 
 # Helper function to write a float as a C literal
+
+# avr-libc (Arduino Uno, Mega, Leonardo) defines INFINITY but not the C89
+# HUGE_VAL the tree arrays use, so the sketch would not compile on AVR.
+_HUGE_VAL_FALLBACK = [
+    '#ifndef HUGE_VAL',
+    '#define HUGE_VAL (__builtin_huge_val())',
+    '#endif',
+]
+
+# Partition tables written beside the sketch for the presets that need one.
+# One factory app of 0xFF0000 bytes fills a 16 MB flash after the bootloader,
+# the partition table and NVS (no OTA, no file system).
+_CUSTOM_PARTITIONS = {
+    'esp32s3_16mb_custom': ('# Name,   Type, SubType, Offset,  Size\n'
+                            'nvs,      data, nvs,     0x9000,  0x5000\n'
+                            'app0,     app,  factory, 0x10000, 0xFF0000\n'),
+}
+
+# Where the tree arrays live and how they are read. On AVR (Uno, Mega,
+# Leonardo) a `static const` array is copied to RAM at start-up, which caps the
+# model at the 2 KB (Uno) or 8 KB (Mega) of SRAM; with PROGMEM it stays in
+# flash and is read with pgm_read_*. Above 64 KB of flash (Mega 2560) the
+# arrays can sit past the reach of a 16-bit pointer, so the reads take 32-bit
+# far addresses. Elsewhere (ESP32, RP2040, a PC) the macros are plain array
+# accesses and the generated code is the one the exports always had.
+_ROM_PRELUDE = [
+    '#ifndef PYRA_ROM',
+    '/* One traversal function for every tree: inlining it into each call',
+    '   costs hundreds of bytes per tree of an ensemble (316 KB for 750 trees',
+    '   on a Cortex-M4). */',
+    '#if defined(__GNUC__)',
+    '#define PYRA_NOINLINE __attribute__((noinline))',
+    '#else',
+    '#define PYRA_NOINLINE',
+    '#endif',
+    '#if defined(__AVR__)',
+    '#include <avr/pgmspace.h>',
+    '#if __SIZEOF_DOUBLE__ != 4',
+    '#error "pyruleanalyzer: the AVR export expects a 4-byte double"',
+    '#endif',
+    '#define PYRA_ROM PROGMEM',
+    '#if defined(__AVR_HAVE_ELPM__)  /* more than 64 KB of flash (Mega 2560) */',
+    'typedef uint_farptr_t pyra_addr_t;',
+    '#define PYRA_ADDR(v) pgm_get_far_address(v)',
+    '#define PYRA_I32(a, i) ((int32_t)pgm_read_dword_far((a) + 4UL * (uint32_t)(i)))',
+    '#define PYRA_DBL(a, i) ((double)pgm_read_float_far((a) + 4UL * (uint32_t)(i)))',
+    '#define PYRA_U8(a, i) ((uint8_t)pgm_read_byte_far((a) + (uint32_t)(i)))',
+    '#else',
+    'typedef uint16_t pyra_addr_t;',
+    '#define PYRA_ADDR(v) ((pyra_addr_t)(v))',
+    '#define PYRA_I32(a, i) ((int32_t)pgm_read_dword((a) + 4U * (uint16_t)(i)))',
+    '#define PYRA_DBL(a, i) ((double)pgm_read_float((a) + 4U * (uint16_t)(i)))',
+    '#define PYRA_U8(a, i) ((uint8_t)pgm_read_byte((a) + (uint16_t)(i)))',
+    '#endif',
+    '#define PYRA_ARR(T) pyra_addr_t',
+    '#define PYRA_SYM(n) __asm__(#n) __attribute__((used))',
+    '#define PYRA_T(d, f) (f)  /* threshold: largest float32 <= t */',
+    '#else',
+    '#define PYRA_ROM',
+    '#define PYRA_ARR(T) const T *',
+    '#define PYRA_ADDR(v) (v)',
+    '#define PYRA_I32(a, i) ((a)[i])',
+    '#define PYRA_DBL(a, i) ((a)[i])',
+    '#define PYRA_U8(a, i) ((a)[i])',
+    '#define PYRA_SYM(n)',
+    '#define PYRA_T(d, f) (d)',
+    '#endif',
+    '#endif',
+]
+
 def _format_c_float(v) -> str:
     """Format a float value as a C-compatible literal.
 
@@ -38,6 +108,36 @@ def _format_c_float(v) -> str:
     return f'{v:.17g}'
 
 
+def _format_c_threshold(v) -> str:
+    """Format a split threshold as a C literal that is exact on every target.
+
+    A split sends ``x`` left when ``x <= t``. Where ``double`` is a double the
+    literal is ``t`` itself (``%.17g``). On AVR ``double`` is a float32, and the
+    compiler would round ``t`` to the *nearest* float32, which can lie above
+    ``t``: a float32 input equal to that value would then go left on the board
+    and right in Python. ``PYRA_T`` picks, on AVR, the largest float32 not
+    above ``t`` instead; for a float32 input ``x``, ``x <= t`` holds exactly
+    when ``x`` is at most that value, so the split is decided as in Python.
+
+    Args:
+        v: The threshold.
+
+    Returns:
+        str: ``PYRA_T(<double>, <float32>f)``, or the literal of
+        :func:`_format_c_float` for an infinite or NaN threshold.
+    """
+    if not math.isfinite(v):
+        return _format_c_float(v)
+    import numpy as np
+    f = np.float32(v)
+    if float(f) > v:
+        f = np.nextafter(f, np.float32(-np.inf))
+    single = f'{float(f):.9g}'
+    if '.' not in single and 'e' not in single:
+        single += '.0'  # "3f" is not a C literal; "3.0f" is
+    return f'PYRA_T({v:.17g}, {single}f)'
+
+
 # Helper function for memory estimation (used by export_to_arduino_ino)
 def _compute_memory_for_rule_classifier(rf_model) -> dict:
     """Compute memory estimates for a RuleClassifier instance.
@@ -48,10 +148,12 @@ def _compute_memory_for_rule_classifier(rf_model) -> dict:
     Returns:
         Dict with flash and RAM byte estimates.
     """
-    avr_max_flash = 143360   # Arduino Uno: ~140KB available
-    avr_max_sram = 2048      # Arduino Uno: 2KB SRAM
-    esp32_max_flash = 4 * 1024 * 1024  # ESP32: 4MB Flash
-    esp32_max_sram = 524288              # ESP32: 512KB SRAM
+    from .footprint import BOARDS
+    # Sketch limits of the Uno and the ESP32 (footprint.BOARDS).
+    avr_max_flash = BOARDS['uno'].flash_bytes
+    avr_max_sram = BOARDS['uno'].ram_bytes
+    esp32_max_flash = BOARDS['esp32'].flash_bytes
+    esp32_max_sram = BOARDS['esp32'].ram_bytes
 
     estimated_flash_bytes = 0
     total_ram_bytes = 0
@@ -127,39 +229,40 @@ class CExportMixin:
         """
         f32 = getattr(self, 'input_dtype', None) == 'float32'
         # scikit-learn casts X to float32 before comparing.
-        value = ('(double)(float)features[feat_idx[node]]' if f32
-                 else 'features[feat_idx[node]]')
+        value = ('(double)(float)features[PYRA_I32(feat_idx, node)]' if f32
+                 else 'features[PYRA_I32(feat_idx, node)]')
         out = [
-            f'static inline int32_t {name}(',
+            f'static inline PYRA_NOINLINE int32_t {name}(',
             '    const double *features,',
-            '    const int32_t *feat_idx,',
-            '    const double *thresh,',
-            '    const int32_t *left,',
-            '    const int32_t *right,',
+            '    PYRA_ARR(int32_t) feat_idx,',
+            '    PYRA_ARR(double) thresh,',
+            '    PYRA_ARR(int32_t) left,',
+            '    PYRA_ARR(int32_t) right,',
         ]
         if routes_missing:
-            out.append('    const uint8_t *missing_left,')
+            out.append('    PYRA_ARR(uint8_t) missing_left,')
         out += [
             '    int max_depth',
             ') {',
             '    int32_t node = 0;',
             '    int d;',
             '    for (d = 0; d < max_depth; d++) {',
-            f'        if (left[node] == node) break;{leaf_comment}',
+            '        int32_t l = PYRA_I32(left, node);',
+            f'        if (l == node) break;{leaf_comment}',
         ]
         if routes_missing:
             out += [
                 f'        double x = {value};',
                 '        if (isnan(x))  /* missing value: the side the split recorded */',
-                '            node = missing_left[node] ? left[node] : right[node];',
-                '        else if (x <= thresh[node])',
+                '            node = PYRA_U8(missing_left, node) ? l : PYRA_I32(right, node);',
+                '        else if (x <= PYRA_DBL(thresh, node))',
             ]
         else:
-            out.append(f'        if ({value} <= thresh[node])')
+            out.append(f'        if ({value} <= PYRA_DBL(thresh, node))')
         out += [
-            '            node = left[node];',
+            '            node = l;',
             '        else',
-            '            node = right[node];',
+            '            node = PYRA_I32(right, node);',
             '    }',
             '    return node;',
             '}',
@@ -181,8 +284,9 @@ class CExportMixin:
         """
         if not routes_missing:
             return source
-        return re.sub(r'tree(\d+)_right, TREE\1_DEPTH\)',
-                      r'tree\1_right, tree\1_missing_left, TREE\1_DEPTH)', source)
+        return re.sub(r'PYRA_ADDR\(tree(\d+)_right\), TREE\1_DEPTH\)',
+                      r'PYRA_ADDR(tree\1_right), PYRA_ADDR(tree\1_missing_left), '
+                      r'TREE\1_DEPTH)', source)
 
     # Method to document the code -> label table in generated C
     def _c_label_table_comment(self, line_comment: bool = False) -> List[str]:
@@ -249,12 +353,16 @@ class CExportMixin:
 
     # Method to generate the const arrays of every tree
     def _c_tree_arrays(self, routes_missing: bool,
-                       line_comment: bool = False) -> List[str]:
+                       line_comment: bool = False,
+                       avr_table: bool = False) -> List[str]:
         """The ``TREEn_DEPTH`` macro and const arrays of each compiled tree.
 
         Args:
             routes_missing (bool): Also emit ``treeN_missing_left``.
             line_comment (bool): ``//`` comments (Arduino) instead of blocks.
+            avr_table (bool): Give every array an assembler name
+                (``PYRA_SYM``), for the AVR tree table of
+                :meth:`_c_avr_tree_table`.
 
         Returns:
             List[str]: The lines, an empty line after each tree.
@@ -267,41 +375,183 @@ class CExportMixin:
 
             n_nodes = len(tree['feature_idx'])
             tree_depth = tree.get('max_depth', 50)
+
+            def sym(key, t_idx=t_idx):
+                """The assembler name of one array (AVR tree table only)."""
+                return f' PYRA_SYM(pyra_t{t_idx}_{key})' if avr_table else ''
             title = f'Tree {t_idx}: {n_nodes} nodes, depth {tree_depth}'
             a(f'// {title}' if line_comment else f'/* {title} */')
             a(f'#define TREE{t_idx}_DEPTH {tree_depth}')
 
             vals = ', '.join(str(v) for v in tree['feature_idx'])
-            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}] = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}]{sym('f')} PYRA_ROM = {{{vals}}};')
 
             # threshold — special float values as C-compatible literals
-            vals = ', '.join(_format_c_float(v) for v in tree['threshold'])
-            a(f'static const double tree{t_idx}_threshold[{n_nodes}] = {{{vals}}};')
+            vals = ', '.join(_format_c_threshold(v) for v in tree['threshold'])
+            a(f'static const double tree{t_idx}_threshold[{n_nodes}]{sym('t')} PYRA_ROM = {{{vals}}};')
 
             vals = ', '.join(str(v) for v in tree['children_left'])
-            a(f'static const int32_t tree{t_idx}_left[{n_nodes}] = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_left[{n_nodes}]{sym('l')} PYRA_ROM = {{{vals}}};')
 
             vals = ', '.join(str(v) for v in tree['children_right'])
-            a(f'static const int32_t tree{t_idx}_right[{n_nodes}] = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_right[{n_nodes}]{sym('r')} PYRA_ROM = {{{vals}}};')
 
             # missing_left: 1 where a split sends a missing value (NaN) left
             if routes_missing:
                 vals = ', '.join(str(int(v)) for v in tree['missing_left'])
-                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}] = {{{vals}}};')
+                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}]{sym('m')} PYRA_ROM = {{{vals}}};')
 
             # value
             if self.algorithm_type == 'Decision Tree':
                 vals = ', '.join(str(v) for v in tree['value'])
-                a(f'static const int32_t tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+                a(f'static const int32_t tree{t_idx}_value[{n_nodes}]{sym('v')} PYRA_ROM = {{{vals}}};')
             elif self.algorithm_type == 'Random Forest':
                 flat = tree['value'].flatten()
                 vals = ', '.join(f'{v:.17g}' for v in flat)
-                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}] = {{{vals}}};')
+                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}]{sym('v')} PYRA_ROM = {{{vals}}};')
             elif self.algorithm_type == 'Gradient Boosting Decision Trees':
                 vals = ', '.join(f'{v:.17g}' for v in tree['value'])
-                a(f'static const double tree{t_idx}_value[{n_nodes}] = {{{vals}}};')
+                a(f'static const double tree{t_idx}_value[{n_nodes}]{sym('v')} PYRA_ROM = {{{vals}}};')
 
             a('')
+        return out
+
+    # Method to list the trees the AVR tree table walks, in sum order
+    def _c_table_trees(self) -> List[tuple]:
+        """``(t_idx, column)`` of every tree the predict function adds.
+
+        A Random Forest adds every tree (column 0, unused); a multiclass GBDT
+        adds every tree to the score of its class column; a binary GBDT only
+        the trees of the positive class. The order is the order of the
+        unrolled predict function, so the sums are the same.
+        """
+        trees = [(t, tr) for t, tr in enumerate(self._tree_arrays) if 'init_score' not in tr]
+        if self.algorithm_type == 'Random Forest':
+            return [(t, 0) for t, _ in trees]
+        classes = self._gbdt_classes or []
+        groups = self._tree_class_groups
+        if self._gbdt_is_binary and len(classes) >= 2:
+            return [(t, 0) for t, _ in trees if groups[t] == classes[1]]
+        return [(t, list(classes).index(groups[t]) if groups[t] in classes else 0)
+                for t, _ in trees]
+
+    # Method to generate the AVR tree table of an ensemble sketch
+    def _c_avr_tree_table(self, routes_missing: bool) -> List[str]:
+        """The flash table of tree addresses that replaces one call per tree.
+
+        On AVR every unrolled traversal call loads four or five 32-bit far
+        addresses and adds a value read from flash: about 176 bytes of code
+        per tree, a quarter of a Mega filled by a 375-tree model. The table
+        holds, per tree, the 24-bit addresses of its arrays (``.long`` in an
+        assembler block, since a C initializer cannot hold an address above
+        64 KB on AVR) and, in a second array, its depth and class column; the
+        predict function walks it in a loop. Only compiled on AVR.
+        """
+        entries = self._c_table_trees()
+        keys = ['f', 't', 'l', 'r'] + (['m'] if routes_missing else []) + ['v']
+        depths = [int(self._tree_arrays[t].get('max_depth', 50)) for t, _ in entries]
+        out = ['#if defined(__AVR__)',
+               '// Tree table: the flash addresses of the arrays of every tree, walked',
+               '// in a loop instead of one inline call per tree (smaller code on AVR).',
+               '#define PYRA_TREE_TABLE 1',
+               f'#define PYRA_TABLE_N {len(entries)}',
+               f'#define PYRA_TABLE_W {len(keys)}',
+               '__asm__(',
+               r'    "  .pushsection .progmem.data,\"a\",@progbits\n"',
+               r'    "  .global pyra_tree_table\n"',
+               r'    "pyra_tree_table:\n"']
+        for t, _ in entries:
+            names = ', '.join(f'pyra_t{t}_{k}' for k in keys)
+            out.append(f'    "  .long {names}' + r'\n"')
+        out += [r'    "  .popsection\n");',
+                'extern const uint8_t pyra_tree_table[] PROGMEM;',
+                f'static const uint16_t pyra_tree_meta[{2 * len(entries)}] PROGMEM = {{'
+                + ', '.join(f'{d}, {c}' for d, (_, c) in zip(depths, entries)) + '};',
+                '#if defined(__AVR_HAVE_ELPM__)',
+                '#define PYRA_U16(a, i) ((uint16_t)pgm_read_word_far((a) + 2UL * (uint32_t)(i)))',
+                '#else',
+                '#define PYRA_U16(a, i) ((uint16_t)pgm_read_word((a) + 2U * (uint16_t)(i)))',
+                '#endif',
+                '#endif',
+                '']
+        return out
+
+    # Method to generate the table-driven predict function (AVR)
+    def _c_predict_function_table(self, name: str, traverse: str,
+                                  routes_missing: bool) -> List[str]:
+        """The predict function of :meth:`_c_predict_function`, with the trees
+        walked through the AVR tree table instead of unrolled.
+
+        It performs the same additions in the same order, so it returns the
+        same class; only the code size changes.
+        """
+        out: List[str] = []
+        a = out.append
+        args = ', '.join(f'(pyra_addr_t)PYRA_I32(pyra_d, {i})'
+                         for i in range(5 if routes_missing else 4))
+        loop = ['    uint16_t pyra_t;',
+                '    for (pyra_t = 0; pyra_t < PYRA_TABLE_N; pyra_t++) {',
+                '        pyra_addr_t pyra_d = PYRA_ADDR(pyra_tree_table)'
+                ' + (pyra_addr_t)(4UL * PYRA_TABLE_W * pyra_t);',
+                f'        int32_t leaf = {traverse}(features, {args}, '
+                '(int)PYRA_U16(PYRA_ADDR(pyra_tree_meta), 2 * pyra_t));',
+                '        pyra_addr_t pyra_v = (pyra_addr_t)PYRA_I32(pyra_d, PYRA_TABLE_W - 1);']
+        signature = f'static inline int32_t {name}(const double *features) {{'
+        if self.algorithm_type == 'Random Forest':
+            a(signature)
+            a('    double prob_sum[N_CLASSES] = {0};')
+            a('    int voted = 0;')
+            out.extend(loop)
+            a('        double total = 0.0;')
+            a('        int k;')
+            a('        for (k = 0; k < N_CLASSES; k++) total += PYRA_DBL(pyra_v, leaf * N_CLASSES + k);')
+            a('        if (total > 0.0) {')
+            a('            voted = 1;')
+            a('            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += PYRA_DBL(pyra_v, leaf * N_CLASSES + k) / total;')
+            a('        }')
+            a('    }')
+            a('    if (!voted) return DEFAULT_CLASS;')
+            a('    int32_t best = 0;')
+            a('    int k;')
+            a('    for (k = 1; k < N_CLASSES; k++) {')
+            a('        if (prob_sum[k] > prob_sum[best]) best = k;')
+            a('    }')
+            rf_labels = ', '.join(str(v) for v in self._rf_labels(self.num_classes))
+            a(f'    static const int32_t class_map[N_CLASSES] = {{ {rf_labels} }};')
+            a('    return class_map[best];')
+            a('}')
+            return out
+        classes = self._gbdt_classes or []
+        init_scores = self._gbdt_init_scores or {}
+        stype = 'float' if getattr(self, 'score_dtype', 'float64') == 'float32' else 'double'
+        cut = float(getattr(self, 'binary_threshold', 0.0))
+        a(signature)
+        if self._gbdt_is_binary and len(classes) >= 2:
+            a(f'    {stype} score = {init_scores.get(classes[1], 0.0):.17g};')
+            out.extend(loop)
+            a('        score += PYRA_DBL(pyra_v, leaf);')
+            a('    }')
+            from ._boosting_import import binary_test
+            op, c = binary_test(cut)
+            a(f'    return (score {op} {_format_c_float(c)}) ? {int(classes[1])} : {int(classes[0])};')
+            a('}')
+            return out
+        a(f'    {stype} scores[{len(classes)}] = {{')
+        a('        ' + ', '.join(f'{init_scores.get(cl, 0.0):.17g}' for cl in classes))
+        a('    };')
+        out.extend(loop)
+        a('        scores[PYRA_U16(PYRA_ADDR(pyra_tree_meta), 2 * pyra_t + 1)] += PYRA_DBL(pyra_v, leaf);')
+        a('    }')
+        a('    int32_t best = 0;')
+        a('    int k;')
+        a(f'    for (k = 1; k < {len(classes)}; k++) {{')
+        a('        if (scores[k] > scores[best]) best = k;')
+        a('    }')
+        a(f'    static const int32_t class_map[{len(classes)}] = {{')
+        a('        ' + ', '.join(str(int(cl)) for cl in classes))
+        a('    };')
+        a('    return class_map[best];')
+        a('}')
         return out
 
     # Method to generate the C predict function of the model
@@ -326,14 +576,15 @@ class CExportMixin:
 
         def call(t_idx):
             """The traversal call of tree `t_idx`."""
-            return (f'{traverse}(features, tree{t_idx}_feature, tree{t_idx}_threshold, '
-                    f'tree{t_idx}_left, tree{t_idx}_right, TREE{t_idx}_DEPTH)')
+            return (f'{traverse}(features, PYRA_ADDR(tree{t_idx}_feature), '
+                    f'PYRA_ADDR(tree{t_idx}_threshold), PYRA_ADDR(tree{t_idx}_left), '
+                    f'PYRA_ADDR(tree{t_idx}_right), TREE{t_idx}_DEPTH)')
 
         signature = f'static inline int32_t {name}(const double *features) {{'
         if self.algorithm_type == 'Decision Tree':
             a(signature)
             a(f'    int32_t leaf = {call(0)};')
-            a('    return tree0_value[leaf];')
+            a('    return PYRA_I32(PYRA_ADDR(tree0_value), leaf);')
             a('}')
         elif self.algorithm_type == 'Random Forest':
             if rf_math_include:
@@ -347,10 +598,10 @@ class CExportMixin:
                 a(f'        int32_t leaf = {call(t_idx)};')
                 a('        double total = 0.0;')
                 a('        int k;')
-                a(f'        for (k = 0; k < N_CLASSES; k++) total += tree{t_idx}_value[leaf * N_CLASSES + k];')
+                a(f'        for (k = 0; k < N_CLASSES; k++) total += PYRA_DBL(PYRA_ADDR(tree{t_idx}_value), leaf * N_CLASSES + k);')
                 a('        if (total > 0.0) {')
                 a('            voted = 1;')
-                a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += tree{t_idx}_value[leaf * N_CLASSES + k] / total;')
+                a(f'            for (k = 0; k < N_CLASSES; k++) prob_sum[k] += PYRA_DBL(PYRA_ADDR(tree{t_idx}_value), leaf * N_CLASSES + k) / total;')
                 a('        }')
                 a('    }')
             # Every tree abstained (refinement left the sample uncovered in
@@ -389,7 +640,7 @@ class CExportMixin:
                         continue
                     if tree_class_groups_c[t_idx] != pos_class:
                         continue
-                    a(f'    score += tree{t_idx}_value[{call(t_idx)}];')
+                    a(f'    score += PYRA_DBL(PYRA_ADDR(tree{t_idx}_value), {call(t_idx)});')
                 # Decide on the raw score, as scikit-learn does (raw >= 0);
                 # other libraries move the cutoff (binary_threshold).
                 from ._boosting_import import binary_test
@@ -406,7 +657,7 @@ class CExportMixin:
                         continue
                     cg = tree_class_groups_c[t_idx]
                     col = list(classes).index(cg) if cg in classes else 0
-                    a(f'    scores[{col}] += tree{t_idx}_value[{call(t_idx)}];')
+                    a(f'    scores[{col}] += PYRA_DBL(PYRA_ADDR(tree{t_idx}_value), {call(t_idx)});')
                 a('    int32_t best = 0;')
                 a('    int k;')
                 a(f'    for (k = 1; k < {len(classes)}; k++) {{')
@@ -459,6 +710,8 @@ class CExportMixin:
             a('#include <math.h>  /* HUGE_VAL; isnan: missing values (NaN) */')
         else:
             a('#include <math.h>  /* HUGE_VAL */')
+        lines.extend(_HUGE_VAL_FALLBACK)
+        lines.extend(_ROM_PRELUDE)
         a('')
         lines.extend(self._c_model_defines(default_cls))
         lines.extend(self._c_tree_arrays(routes_missing))
@@ -472,7 +725,7 @@ class CExportMixin:
         a(f'#endif /* {guard_name} */')
         a('')
 
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self._c_with_missing_args('\n'.join(lines), routes_missing))
 
         print(f'[EXPORT] C header saved to {filepath} '
@@ -505,8 +758,13 @@ class CExportMixin:
             Output .ino file path. Default is 'model.ino'.
         board_model : str
             Target board to determine memory limits and architecture hints.
-            Options: 'auto', 'uno', 'nano', 'mega', 'esp32', 'leonardo'.
-            Default is 'auto' (detects from model size).
+            Options: 'auto', a preset of ``footprint.BOARDS`` ('uno', 'nano',
+            'mega2560' or 'mega', 'nrf52840', 'pico', 'rp2040_16mb', 'esp32', 'esp32_huge_app',
+            'esp32s3', 'esp32s3_16mb', 'esp32s3_16mb_custom', 'esp32s3_32mb') or
+            'leonardo'. 'esp32s3_16mb_custom' also writes a ``partitions.csv``
+            beside the sketch (one 15.9 MB app); select the Custom partition
+            scheme when compiling.
+            Default is 'auto' (the smallest of Uno, Mega and ESP32 that fits).
         serial_baud : int
             Serial baud rate for output. Default is 115200.
         include_sensor_placeholders : bool
@@ -537,14 +795,14 @@ class CExportMixin:
                 'Tree arrays not compiled. Call compile_tree_arrays() first.'
             )
 
-        # Memory limits per board type (Flash bytes, SRAM bytes)
-        BOARD_MEMORY = {
-            'uno':      (143360, 2048),     # Arduino Uno: ~140KB flash, 2KB SRAM
-            'nano':     (143360, 2048),     # Arduino Nano: same as Uno
-            'mega':     (1048576, 8192),    # Arduino Mega: 1MB flash, 8KB SRAM
-            'leonardo': (32768, 2560),      # Leonardo: ~32KB for sketch, 2.5KB SRAM
-            'esp32':    (4194304, 524288),  # ESP32: 4MB flash, 512KB SRAM
-        }
+        # Sketch limits per board (flash bytes, SRAM bytes): the presets of
+        # footprint.BOARDS (the limits of each board's Arduino core), plus the
+        # Leonardo (ArduinoCore-avr boards.txt) and 'mega' for 'mega2560'.
+        from .footprint import BOARDS
+        BOARD_MEMORY = {name: (b.flash_bytes, b.ram_bytes) for name, b in BOARDS.items()}
+        BOARD_MEMORY['mega'] = BOARD_MEMORY['mega2560']
+        BOARD_MEMORY['nano_old'] = BOARD_MEMORY['nano']  # old bootloader, same limits
+        BOARD_MEMORY['leonardo'] = (28672, 2560)
 
         # Estimate Flash and RAM usage
         estimates = _compute_memory_for_rule_classifier(self)
@@ -554,14 +812,17 @@ class CExportMixin:
         # Determine target board
         if board_model == 'auto':
             # Auto-detect: pick the smallest board that fits
-            if est_flash <= 143360 and est_ram <= 2048:
-                board_model = 'uno'
-            elif est_flash <= 1048576 and est_ram <= 8192:
-                board_model = 'mega'
-            else:
-                board_model = 'esp32'
+            board_model = 'esp32'
+            for name in ('uno', 'mega'):
+                flash_lim, ram_lim = BOARD_MEMORY[name]
+                if est_flash <= flash_lim and est_ram <= ram_lim:
+                    board_model = name
+                    break
 
-        max_flash, max_sram = BOARD_MEMORY.get(board_model, (143360, 2048))
+        if board_model not in BOARD_MEMORY:
+            raise ValueError(f'unknown board_model {board_model!r}; known: '
+                             f"'auto', {', '.join(repr(k) for k in sorted(BOARD_MEMORY))}")
+        max_flash, max_sram = BOARD_MEMORY[board_model]
         
         flash_pct = (est_flash / max_flash) * 100 if max_flash > 0 else 0
         ram_pct = (est_ram / max_sram) * 100 if max_sram > 0 else 0
@@ -582,6 +843,9 @@ class CExportMixin:
         a(f'// Model: {self.model_name}')
         a(f'// Features: {len(self._array_feature_names)} | Classes: {self.num_classes} | Trees: {len(self._tree_arrays)}')
         a(f'// Target Board: {board_model.upper()}')
+        if board_model in _CUSTOM_PARTITIONS:
+            a('// Partition scheme: Custom (the partitions.csv beside this sketch;')
+            a('//   arduino-cli: --fqbn esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=custom)')
         a('// ============================================================')
         a('')
 
@@ -607,8 +871,18 @@ class CExportMixin:
             a('#include <math.h>  // HUGE_VAL; isnan: missing values (NaN)')
         else:
             a('#include <math.h>  // HUGE_VAL')
+        lines.extend(_HUGE_VAL_FALLBACK)
+        lines.extend(_ROM_PRELUDE)
+        # Adafruit nRF52 (and other TinyUSB) cores: Serial is the TinyUSB CDC
+        # class, which only links when the sketch includes its header.
+        lines.extend(['#if defined(USE_TINYUSB)', '#include <Adafruit_TinyUSB.h>', '#endif'])
         lines.extend(self._c_model_defines(default_cls, line_comment=True))
-        lines.extend(self._c_tree_arrays(routes_missing, line_comment=True))
+        avr_table = (self.algorithm_type in ('Random Forest', 'Gradient Boosting Decision Trees')
+                     and len(self._c_table_trees()) > 1)
+        lines.extend(self._c_tree_arrays(routes_missing, line_comment=True,
+                                         avr_table=avr_table))
+        if avr_table:
+            lines.extend(self._c_avr_tree_table(routes_missing))
 
         # Inline traverse_tree function
         a('// ============================================================')
@@ -616,8 +890,15 @@ class CExportMixin:
         a('// ============================================================')
         a('')
         lines.extend(self._c_traverse_function('pyra_traverse_tree', routes_missing))
+        if avr_table:
+            a('#if defined(PYRA_TREE_TABLE)')
+            lines.extend(self._c_predict_function_table(
+                'pyra_predict', 'pyra_traverse_tree', routes_missing))
+            a('#else')
         lines.extend(self._c_predict_function(
             'pyra_predict', 'pyra_traverse_tree', rf_math_include=True))
+        if avr_table:
+            a('#endif')
 
         a('')
 
@@ -696,6 +977,11 @@ class CExportMixin:
         
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self._c_with_missing_args('\n'.join(lines), routes_missing))
+        if board_model in _CUSTOM_PARTITIONS:
+            # The core copies a partitions.csv found beside the sketch.
+            part = os.path.join(os.path.dirname(os.path.abspath(filepath)), 'partitions.csv')
+            with open(part, 'w', encoding='utf-8') as f:
+                f.write(_CUSTOM_PARTITIONS[board_model])
 
         # Print memory report to stdout
         avr_pct_flash = (est_flash / max_flash) * 100 if max_flash > 0 else 0

@@ -525,10 +525,46 @@ model = LGBMClassifier(**fit.params).fit(X_train, y_train)
 ```
 
 `probe_leaves()` and `suggest_complexity()` measure the library's own trees
-the same way. Presets: `uno`, `nano`, `mega2560`, `esp32`
-(1.25 MB application) and `esp32_huge_app` (3 MB); any board can be described
-with `flash_bytes` and `ram_bytes`. The ESP32 constants are measured on the
-Arduino core 3.3.12, where the bound was within 15 KB above the compiled size.
+the same way. Presets, from 32 KB to 15.9 MB of sketch flash:
+
+| Preset | Board | Flash (sketch) | RAM |
+|---|---|---|---|
+| `uno` | Arduino Uno (ATmega328P) | 32,256 B | 2 KB |
+| `nano` | Arduino Nano (ATmega328P) | 30,720 B | 2 KB |
+| `mega2560` | Arduino Mega 2560 | 253,952 B | 8 KB |
+| `esp32` | ESP32, default partitions | 1.25 MB | 320 KB |
+| `esp32s3` | ESP32-S3, default partitions | 1.25 MB | 320 KB |
+| `pico` | Raspberry Pi Pico (RP2040), "2MB (no FS)" | 2,093,056 B | 256 KB |
+| `esp32_huge_app` | ESP32, "Huge APP" | 3 MB | 320 KB |
+| `esp32s3_16mb` | ESP32-S3 16 MB, "16M Flash (3MB APP)" | 3 MB | 320 KB |
+| `esp32s3_32mb` | ESP32-S3 32 MB (e.g. N32R8), "32M Flash (13MB APP)" | 12.5 MB | 320 KB |
+| `esp32s3_16mb_custom` | ESP32-S3 16 MB, Custom scheme (one app, no OTA or FS) | 15.9 MB | 320 KB |
+| `rp2040_16mb` | RP2040 with 16 MB of flash (e.g. VCC-GND YD-RP2040), "16MB (no FS)" | 16,773,120 B | 256 KB |
+| `nrf52840` | nRF52840 (nice!nano / Pro Micro clones), Adafruit nRF52 core | 815,104 B | 232 KB |
+
+The limits are those of each board's Arduino core (`upload.maximum_size` /
+`maximum_data_size` in its `boards.txt`, the app partition for the ESP32s).
+Any board can be described with `flash_bytes` and `ram_bytes`. The size of
+the sketch without the model is measured for every preset (a minimal sketch
+using Serial, compiled with arduino:avr 1.8.8, arduino-esp32 3.3.12 and
+arduino-pico 6.3.2); pass `firmware_flash` and `firmware_ram` from a compile
+of your own sketch without the model for a tight fit.
+`export_to_arduino_ino(board_model=...)` checks the sketch against the same
+limits; with `esp32s3_16mb_custom` it also writes the `partitions.csv` the
+core picks up (compile with `PartitionScheme=custom`).
+
+`examples/board_ladder_hil.py` runs the same comparison on several boards at
+once: `prepare` sizes, refines and compiles one model per board without
+hardware, and `run --port mega2560=COM5 --port esp32=COM7 ...` uploads them,
+sends the test samples and reports parity with the PC and latency per board.
+
+On the AVR boards (Uno, Nano, Mega) the exports keep the model in flash
+(`PROGMEM`, read with `pgm_read_*`, far reads on the Mega), so the model is
+bounded by the flash, not by the 2 KB or 8 KB of SRAM. avr-gcc refuses an
+array over 32,767 bytes, so one tree holds at most 8,191 nodes there (4,096
+leaves; fewer for a forest with many classes): `fit_to_board` and
+`suggest_complexity` apply that cap (`Board.max_array_bytes`). On the other
+boards the generated code is the same as before.
 
 **Test it without a board, or with one:**
 

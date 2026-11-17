@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+* Board presets `pico` (Raspberry Pi Pico, RP2040), `rp2040_16mb` (an
+  RP2040 with 16 MB of flash), `esp32s3`, `esp32s3_16mb`, `esp32s3_32mb` and
+  `esp32s3_16mb_custom` (one 15.9 MB app; the Arduino export writes its
+  `partitions.csv`), for `fit_to_board`, `suggest_complexity` and
+  `export_to_arduino_ino`. Their limits are those of the arduino-pico and
+  arduino-esp32 cores, and their firmware size is measured.
+* Preset `nrf52840` (nRF52840 boards with the Adafruit / nice!nano bootloader,
+  Adafruit nRF52 core: 815,104 bytes of sketch flash). The Arduino sketch
+  includes `Adafruit_TinyUSB.h` when the core uses TinyUSB, without which
+  `Serial` does not link on that core.
+* `examples/board_ladder_hil.py`: sizes one model per board of a ladder
+  (Mega, nRF52840, ESP32, RP2040 16 MB by default), refines and compiles it
+  (`prepare`, no hardware), then uploads it to the connected boards and
+  compares each answer with the PC, timing the inference (`run`).
+
+**Changed**
+* On AVR (Uno, Nano, Mega, Leonardo) the C header and the Arduino sketch keep
+  the tree arrays in flash (`PROGMEM`; far reads above 64 KB on the Mega).
+  They used to be copied to SRAM, which capped a model at about 1.8 KB on the
+  Uno and 7.8 KB on the Mega; it is now bounded by the 32 KB and 248 KB of
+  flash. `Board.max_array_bytes` (32,767 on AVR) caps the nodes of one tree,
+  and the AVR firmware sizes are the measured ones (1,732 / 2,072 bytes). The
+  code for the other boards is unchanged.
+* On AVR, the Arduino sketch of a forest or a boosting model walks a flash
+  table of tree addresses in a loop instead of one inline call per tree,
+  which cost about 176 bytes of code per tree (62 KB of a 375-tree model on
+  the Mega). The sums are made in the same order, so the predictions do not
+  change.
+* The tree traversal of the C header and the Arduino sketch is no longer
+  inlined into the call of every tree (`PYRA_NOINLINE`, GCC and Clang): GCC
+  inlined it into each of the 750 calls of a 50-stage, 15-class GBDT, about
+  420 bytes per tree, and the sketch for the nRF52840 overflowed its flash by
+  223 KB; it now takes 669 KB of the 815 KB.
+* On AVR the split thresholds are written as the largest float32 not above
+  the threshold (`double` is a float32 there, and the compiler rounded to the
+  nearest float32, which could lie above it): a float32 input now takes the
+  same branch on the board as in Python.
+
+**Fixed**
+* The memory check of `export_to_arduino_ino` (and the estimates of
+  `full_pipeline`) used wrong board limits: about 140 KB of flash for the Uno
+  (it has 32 KB), 1 MB for the Mega (256 KB) and 4 MB / 512 KB for the ESP32
+  (the default sketch partition is 1.25 MB and 320 KB of RAM). They now use
+  the limits of `footprint.BOARDS`. An unknown `board_model` raises
+  `ValueError` instead of being checked against the Uno.
+* The Arduino sketch and the C header did not compile for AVR boards (Uno,
+  Mega, Leonardo): avr-libc has no `HUGE_VAL`, which the tree arrays use.
+  Both now define it when `math.h` does not.
+* `export_to_c_header` wrote the file in the system encoding, so its
+  non-ASCII comment came out garbled on Windows; it is now written in UTF-8,
+  like the Arduino sketch.
+* `fit_to_board` and the other size estimates undercounted Random Forests,
+  so a forest sized to fill the ESP32 overflowed it by 20 to 92 KB (20 of
+  21 sketches). Two costs were missing. The exports always write the
+  missing-value side of each scikit-learn DT/RF node (one byte), so
+  `missing_routing` now defaults to that (`None`: on for DT and RF, off for
+  GBDT). A forest also adds each tree's class distribution to the vote, so a
+  forest tree costs 174 bytes of code, not 70 (`RF_PER_TREE_BYTES`,
+  `per_tree_bytes()`). Measured on 42 compiled ESP32 sketches, the estimate
+  is now at most 2 KB below the compiled size.
+
 ## 2.2.2
 
 **Fixed**

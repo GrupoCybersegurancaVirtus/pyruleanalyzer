@@ -7,7 +7,7 @@ models that route missing values, ``missing_left``), and call each tree once
 from the predict function. Their flash cost is therefore a linear function of
 two counts:
 
-    model bytes = PER_TREE_BYTES * trees + node_bytes(algorithm) * nodes
+    model bytes = per_tree_bytes(algorithm) * trees + node_bytes(algorithm) * nodes
 
 A scikit-learn tree with ``L`` leaves has ``2L - 1`` nodes and at most
 ``2 ** max_depth`` leaves, so the cost of a configuration is bounded before
@@ -22,9 +22,15 @@ Rule refinement only removes rules, so the bound of the extracted model also
 bounds the refined one.
 
 The node layout is the one written by ``_c_export``; ``PER_TREE_BYTES`` and
-the firmware size of the board presets were measured on 42 ESP32 sketches
-compiled with arduino-esp32 3.3.12 (compiled flash = 276,469 + 69.6 * trees +
-27.82 * nodes, maximum error 1.2 KB). Other boards, cores or sketches have
+the firmware size of the board presets were measured on 42 ESP32 sketches of
+GBDT models compiled with arduino-esp32 3.3.12 (compiled flash = 276,469 +
+69.6 * trees + 27.82 * nodes, maximum error 1.2 KB). ``RF_PER_TREE_BYTES``
+was measured on 42 sketches of Random Forests (compiled flash = 277,373 +
+173.6 * trees + (21 + 8 * classes) * nodes, maximum error 1.1 KB): a forest
+also adds the class distribution of each tree's leaf to the vote. Decision
+trees and forests of scikit-learn always record the side a missing value
+takes, and the exports always write it, so their nodes count one more byte
+unless ``missing_routing=False`` is passed. Other boards, cores or sketches have
 other constants: pass their flash and RAM sizes and the size of the sketch
 without the model (``firmware_flash``, ``firmware_ram``).
 """
@@ -40,6 +46,8 @@ import numpy as np
 
 # Code per tree: the traversal call of the tree in the predict function.
 PER_TREE_BYTES = 70
+# A forest also adds the class distribution of the tree's leaf to the vote.
+RF_PER_TREE_BYTES = 174
 
 @dataclass(frozen=True)
 class Board:
@@ -51,8 +59,12 @@ class Board:
         firmware_flash: Flash of the sketch without the model (core, serial).
         firmware_ram: RAM of the sketch without the model.
         double_bytes: Size of ``double`` (4 on AVR, where it is a float).
-        constants_in_ram: The exported ``static const`` arrays are copied to
-            RAM (AVR, since the export does not use ``PROGMEM``).
+        constants_in_ram: The model arrays take RAM as well as flash. False
+            for every preset: the exports keep them in flash (``PROGMEM`` on
+            AVR). Set it for a toolchain that copies const data to RAM.
+        max_array_bytes: Largest single array the compiler accepts (32,767
+            bytes on AVR, whose ``size_t`` is 16 bits), which caps the nodes
+            of one tree; None for no limit.
     """
     flash_bytes: int
     ram_bytes: int
@@ -60,17 +72,58 @@ class Board:
     firmware_ram: int = 0
     double_bytes: int = 8
     constants_in_ram: bool = False
+    max_array_bytes: Optional[int] = None
 
 
-# ESP32 values were measured with arduino-esp32 3.3.12 (a serial streaming
-# sketch); AVR firmware values are those of a minimal sketch using Serial.
+# Flash and RAM are the sketch limits of each board's Arduino core
+# (``upload.maximum_size`` / ``maximum_data_size`` in its boards.txt; for the
+# ESP32 family, the app partition of the named partition scheme).
+# The ESP32 firmware values were measured with arduino-esp32 3.3.12 (a serial
+# streaming sketch); the others are the compile of a minimal sketch using
+# Serial (arduino:avr 1.8.8, arduino-esp32 3.3.12, arduino-pico 6.3.2).
+_AVR = dict(double_bytes=4, max_array_bytes=32_767)
 BOARDS: Dict[str, Board] = {
-    'uno': Board(32_256, 2_048, 1_500, 200, double_bytes=4, constants_in_ram=True),
-    'nano': Board(30_720, 2_048, 1_500, 200, double_bytes=4, constants_in_ram=True),
-    'mega2560': Board(253_952, 8_192, 1_600, 200, double_bytes=4, constants_in_ram=True),
+    'uno': Board(32_256, 2_048, 1_732, 188, **_AVR),
+    'nano': Board(30_720, 2_048, 1_732, 188, **_AVR),
+    'mega2560': Board(253_952, 8_192, 2_072, 188, **_AVR),
+    # Raspberry Pi Pico (RP2040), arduino-pico core, "2MB (no FS)" flash
+    # option; an RP2040 board with 16 MB of flash (e.g. VCC-GND YD-RP2040),
+    # "16MB (no FS)".
+    'pico': Board(2_093_056, 262_144, 54_104, 8_812),
+    # nRF52840 boards with the Adafruit/nice!nano bootloader and SoftDevice
+    # S140 (Adafruit nRF52 core, "Feather nRF52840 Express"): 1 MB of flash,
+    # 815,104 bytes for the sketch.
+    'nrf52840': Board(815_104, 237_568, 52_548, 8_752),
+    'rp2040_16mb': Board(16_773_120, 262_144, 54_104, 8_812),
     'esp32': Board(1_310_720, 327_680, 276_469, 23_380),
     'esp32_huge_app': Board(3_145_728, 327_680, 276_469, 23_380),
+    # ESP32-S3 Dev Module, arduino-esp32: default scheme (1.2 MB app), a 16 MB
+    # board with "16M Flash (3MB APP/9.9MB FATFS)" (or "Huge APP"), and a 32 MB
+    # board (e.g. N32R8) with "32M Flash (13MB APP/6.75MB SPIFFS)".
+    'esp32s3': Board(1_310_720, 327_680, 273_553, 21_592),
+    'esp32s3_16mb': Board(3_145_728, 327_680, 278_843, 22_068),
+    'esp32s3_32mb': Board(13_107_200, 327_680, 273_617, 21_592),
+    # A 16 MB ESP32-S3 with the Custom scheme and the partitions.csv the
+    # Arduino export writes: one 0xFF0000-byte app (no OTA, no file system).
+    'esp32s3_16mb_custom': Board(16_711_680, 327_680, 278_827, 22_068),
 }
+
+
+def max_leaves_per_array(max_array_bytes: Optional[int], algorithm: str = 'gbdt',
+                         n_classes: int = 2, double_bytes: int = 8) -> Optional[int]:
+    """Most leaves of one tree whose largest exported array stays within
+    `max_array_bytes` (None: no limit).
+
+    A tree of L leaves has 2L - 1 nodes; its largest array holds 4 bytes per
+    node (feature, left, right, a decision tree's class) or, for a forest,
+    one ``double`` per class and node.
+    """
+    if max_array_bytes is None:
+        return None
+    algo = _algorithm(algorithm)
+    per_node = max(4, double_bytes, double_bytes * int(n_classes) if algo == 'rf' else 0)
+    nodes = int(max_array_bytes) // per_node
+    return (nodes + 1) // 2
 
 
 def make_board(board: Optional[Any] = None, **overrides) -> Optional[Board]:
@@ -132,16 +185,23 @@ def _algorithm(name: str) -> str:
     return _ALIASES[key]
 
 
+def per_tree_bytes(algorithm: str = 'gbdt') -> int:
+    """Flash bytes of the code that calls one tree in the predict function."""
+    return RF_PER_TREE_BYTES if _algorithm(algorithm) == 'rf' else PER_TREE_BYTES
+
+
 def node_bytes(algorithm: str = 'gbdt', n_classes: int = 2,
-               missing_routing: bool = False, double_bytes: int = 8) -> int:
+               missing_routing: Optional[bool] = None, double_bytes: int = 8) -> int:
     """Flash bytes of one node in the C/Arduino export.
 
     Args:
         algorithm: 'gbdt', 'rf' or 'dt' (or the scikit-learn class name).
         n_classes: Number of classes (Random Forest stores one double per
             class and node).
-        missing_routing: The model routes missing values (decision trees and
-            forests trained on NaN), which adds one byte per node.
+        missing_routing: The model routes missing values, which adds one
+            byte per node. None (the default) follows the exports: True for
+            scikit-learn decision trees and forests, whose trees always
+            record a side for missing values, False for GBDT.
         double_bytes: Size of ``double`` on the target (4 on AVR).
 
     Returns:
@@ -150,6 +210,8 @@ def node_bytes(algorithm: str = 'gbdt', n_classes: int = 2,
     algo = _algorithm(algorithm)
     value = {'gbdt': double_bytes, 'dt': 4, 'rf': double_bytes * int(n_classes)}[algo]
     base = 4 + double_bytes + 4 + 4  # feature, threshold, left, right
+    if missing_routing is None:
+        missing_routing = algo != 'gbdt'
     return base + value + (1 if missing_routing and algo != 'gbdt' else 0)
 
 
@@ -166,10 +228,10 @@ def n_trees(algorithm: str = 'gbdt', n_estimators: int = 100,
 
 
 def model_bytes(trees: int, nodes: int, algorithm: str = 'gbdt',
-                n_classes: int = 2, missing_routing: bool = False,
+                n_classes: int = 2, missing_routing: Optional[bool] = None,
                 double_bytes: int = 8) -> int:
     """Flash bytes of a model with `trees` trees and `nodes` nodes in total."""
-    return int(PER_TREE_BYTES * trees
+    return int(per_tree_bytes(algorithm) * trees
                + node_bytes(algorithm, n_classes, missing_routing, double_bytes) * nodes)
 
 
@@ -199,7 +261,7 @@ def estimate_footprint(algorithm: str = 'gbdt', n_estimators: int = 100,
                        max_leaf_nodes: Optional[int] = None,
                        n_samples: Optional[int] = None,
                        leaves_per_tree: Optional[float] = None,
-                       missing_routing: bool = False,
+                       missing_routing: Optional[bool] = None,
                        double_bytes: int = 8) -> Dict[str, Any]:
     """Size of a tree model, as an upper bound or from a leaf count.
 
@@ -465,7 +527,7 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
                        firmware_ram: Optional[int] = None,
                        probe: bool = True, probe_rows: Optional[int] = 50_000,
                        probe_estimators: int = 10, random_state: Any = 0,
-                       missing_routing: bool = False,
+                       missing_routing: Optional[bool] = None,
                        **params) -> ComplexityReport:
     """Model size per configuration, and the largest a board can hold.
 
@@ -516,12 +578,16 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
     if target is not None:
         report.flash_budget = target.flash_bytes - target.firmware_flash
         ram_fixed = target.firmware_ram + runtime_ram_bytes(n_features or 0, n_classes, dbl)
+        array_cap = max_leaves_per_array(target.max_array_bytes, algo, n_classes, dbl)
 
-    def fits(model: int):
-        """(sketch flash, sketch RAM, both fit) for a model of `model` bytes."""
+    def fits(model: int, leaves_per_tree: Optional[float] = None):
+        """(sketch flash, sketch RAM, fits) for a model of `model` bytes."""
         flash = target.firmware_flash + model
         ram = ram_fixed + (model if target.constants_in_ram else 0)
-        return flash, ram, flash <= target.flash_bytes and ram <= target.ram_bytes
+        ok = flash <= target.flash_bytes and ram <= target.ram_bytes
+        if array_cap is not None and leaves_per_tree is not None:
+            ok = ok and leaves_per_tree <= array_cap
+        return flash, ram, ok
 
     est_grid = _as_list(n_estimators)
     leaf_grid = _as_list(max_leaf_nodes)
@@ -546,9 +612,11 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
             row['expected_leaves'] = ex['leaves']
             row['expected_bytes'] = ex['model_bytes']
         if target is not None:
-            row['flash'], row['ram'], row['fits'] = fits(row['max_bytes'])
+            row['flash'], row['ram'], row['fits'] = fits(row['max_bytes'],
+                                                         row['max_leaves'] / row['trees'])
             if 'expected_bytes' in row:
-                row['fits_expected'] = fits(row['expected_bytes'])[2]
+                row['fits_expected'] = fits(row['expected_bytes'],
+                                            row['expected_leaves'] / row['trees'])[2]
         report.rows.append(row)
 
     if target is not None:
@@ -561,16 +629,16 @@ def suggest_complexity(X=None, y=None, *, algorithm: str = 'gbdt',
 
 def max_depth_for_budget(flash_budget: int, algorithm: str = 'gbdt',
                          n_estimators: int = 100, n_classes: int = 2,
-                         missing_routing: bool = False,
+                         missing_routing: Optional[bool] = None,
                          double_bytes: int = 8) -> Optional[int]:
     """Deepest ``max_depth`` whose full trees fit `flash_budget` bytes.
 
-    Closed form of the bound: ``trees * (PER_TREE_BYTES + node * (2 ** (d + 1)
+    Closed form of the bound: ``trees * (per_tree_bytes + node * (2 ** (d + 1)
     - 1)) <= budget``. None when not even depth 0 (one leaf) fits.
     """
     trees = n_trees(algorithm, n_estimators, n_classes)
     node = node_bytes(algorithm, n_classes, missing_routing, double_bytes)
-    per_tree = flash_budget / trees - PER_TREE_BYTES
+    per_tree = flash_budget / trees - per_tree_bytes(algorithm)
     if per_tree < node:
         return None
     return int(math.floor(math.log2((per_tree / node + 1) / 2)))
@@ -578,7 +646,7 @@ def max_depth_for_budget(flash_budget: int, algorithm: str = 'gbdt',
 
 def max_leaves_for_budget(flash_budget: int, algorithm: str = 'gbdt',
                           n_estimators: int = 100, n_classes: int = 2,
-                          missing_routing: bool = False,
+                          missing_routing: Optional[bool] = None,
                           double_bytes: int = 8) -> Optional[int]:
     """Largest ``max_leaf_nodes`` whose trees fit `flash_budget` bytes.
 
@@ -588,7 +656,7 @@ def max_leaves_for_budget(flash_budget: int, algorithm: str = 'gbdt',
     """
     trees = n_trees(algorithm, n_estimators, n_classes)
     node = node_bytes(algorithm, n_classes, missing_routing, double_bytes)
-    nodes = int((flash_budget / trees - PER_TREE_BYTES) // node)
+    nodes = int((flash_budget / trees - per_tree_bytes(algorithm)) // node)
     leaves = (nodes + 1) // 2
     return leaves if leaves >= 2 else None
 
@@ -637,7 +705,7 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
                  n_estimators: Sequence[int] = (25, 50, 100, 200),
                  X_val=None, y_val=None, sample_rows: Optional[int] = 50_000,
                  val_rows: Optional[int] = 20_000, scoring: str = 'f1_macro',
-                 random_state: Any = 0, missing_routing: bool = False,
+                 random_state: Any = 0, missing_routing: Optional[bool] = None,
                  **params) -> BoardFit:
     """The size parameters that make the best model a board can hold.
 
@@ -714,6 +782,10 @@ def fit_to_board(X, y, *, board: Optional[Any] = None,
                                        target.double_bytes)
         if leaves is None:
             continue
+        cap = max_leaves_per_array(target.max_array_bytes, algo, n_classes,
+                                   target.double_bytes)
+        if cap is not None:
+            leaves = min(leaves, cap)
         if library == 'catboost':
             # Symmetric trees: the deepest depth whose 2**depth leaves fit.
             depth = _catboost_depth(None, leaves)

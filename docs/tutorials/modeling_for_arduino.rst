@@ -3,7 +3,7 @@ Modeling for Arduino / ESP32
 
 This page covers strategies for training and configuring machine learning models optimized for deployment on resource-constrained microcontrollers like Arduino and ESP32. The pyruleanalyzer library exports trained scikit-learn models directly to self-contained C++ sketches (``.ino``) that run entirely on-device with zero external dependencies.
 
-When deploying to Arduino/ESP32, memory is the primary constraint: every tree node consumes Flash ROM for constants and SRAM at runtime. This guide explains how to choose model hyperparameters, reduce footprint, and validate compatibility before uploading your sketch.
+When deploying to Arduino/ESP32, memory is the primary constraint: every tree node consumes flash for its constants (on AVR the arrays are stored with ``PROGMEM``, so they do not take SRAM); SRAM holds only the feature vector and the per-class scores. This guide explains how to choose model hyperparameters, reduce footprint, and validate compatibility before uploading your sketch.
 
 
 .. _modeling-for-arduino#why-pyruleanalyzer:
@@ -14,7 +14,7 @@ Why pyruleanalyzer for Arduino?
 The ``full_pipeline`` function bridges Python ML training and embedded deployment in a single step:
 
 1. **Train in Python** — Use scikit-learn's full API (Decision Tree, Random Forest, GBDT).
-2. **Compile to C arrays** — Trees are serialized as static ``const`` arrays (feature indices, thresholds, children pointers, leaf values).
+2. **Compile to C arrays** — Trees are serialized as static ``const`` arrays (feature indices, thresholds, children pointers, leaf values), kept in flash on every board (``PROGMEM`` on AVR).
 3. **Generate self-contained sketch** — A single ``.ino`` file includes the model data, inference engine, and Arduino skeleton code.
 4. **Memory validation** — Built-in Flash/SRAM estimation with board-specific thresholds alerts you before upload fails.
 
@@ -34,17 +34,27 @@ Different boards have dramatically different memory budgets. The table below sum
      - Flash (program storage)
      - SRAM (data)
    * - Arduino Uno / Nano
-     - ~30 KB usable (~140 KB total, bootloader takes space)
+     - 32,256 / 30,720 B for the sketch (32 KB, minus the boot loader)
      - 2 KB
    * - Arduino Mega 2560
-     - ~256 KB usable (~1 MB total)
+     - 253,952 B for the sketch (256 KB)
      - 8 KB
    * - Arduino Leonardo
-     - ~28 KB usable (32 KB total, 2 KB boot loader)
+     - 28,672 B for the sketch (32 KB, 4 KB boot loader)
      - 2.5 KB
-   * - ESP32 (DevKit)
-     - ~4 MB Flash
-     - 512 KB SRAM
+   * - ESP32 (DevKit, 4 MB)
+     - 1.25 MB (default partitions) or 3 MB ("Huge APP")
+     - 320 KB
+   * - ESP32-S3 (16 MB / 32 MB)
+     - 3 MB (stock), 15.9 MB (Custom, ``esp32s3_16mb_custom``) / 12.5 MB
+     - 320 KB
+   * - Raspberry Pi Pico (RP2040, 2 MB / 16 MB boards)
+     - 2,093,056 B / 16,773,120 B ("no FS")
+     - 256 KB
+
+On AVR a single array cannot exceed 32,767 bytes, which caps one tree at
+8,191 nodes; ``fit_to_board`` applies that cap. See ``pyruleanalyzer.BOARDS``
+for every preset and its measured firmware size.
 
 
 .. _modeling-for-arduino#decision-tree-strategies:
@@ -115,7 +125,7 @@ Random Forests aggregate predictions from many trees by soft voting (sum of the 
 Gradient Boosting Decision Trees (GBDT) Strategies
 ----------------------------------------------------
 
-GBDT models are **the least Arduino-friendly** because predictions require summing outputs from all trees rather than simple voting. Each tree's ``value`` arrays must remain in SRAM simultaneously during inference, doubling the baseline footprint compared to Random Forest with the same number of estimators.
+GBDT models need many trees: one per class and boosting stage (one per stage for two classes), and a prediction walks all of them and sums their leaf values. The trees live in flash; SRAM holds only one running score per class.
 
 .. code-block:: python
 
@@ -132,7 +142,7 @@ GBDT models are **the least Arduino-friendly** because predictions require summi
 
 **When to use GBDT on Arduino:**
 
-- Board has >= 8 KB SRAM (Mega) or >= 512 KB SRAM (ESP32).
+- The board's flash holds the trees: check with ``fit_to_board`` or ``suggest_complexity``.
 - You need higher accuracy than Random Forest provides at the same depth.
 - Tree depth is limited to ``<= 4`` and total nodes < 3000.
 
@@ -278,36 +288,13 @@ Use the ``board_model`` parameter to target your board. Set it to ``'auto'`` (de
        board_model='auto',  # Auto-select best board
    )
 
-Board presets used internally:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 30 30 20
-
-   * - Board Model
-     - Flash Max (bytes)
-     - SRAM Max (bytes)
-     - Default Baud
-   * - ``uno``
-     - 143360
-     - 2048
-     - 115200
-   * - ``nano``
-     - 143360
-     - 2048
-     - 115200
-   * - ``mega``
-     - 1048576
-     - 8192
-     - 115200
-   * - ``leonardo``
-     - 32768
-     - 2560
-     - 115200
-   * - ``esp32``
-     - 4194304
-     - 524288
-     - 115200
+Board presets used internally: the presets of ``pyruleanalyzer.BOARDS``
+(``uno``, ``nano``, ``mega2560`` or ``mega``, ``pico``, ``rp2040_16mb``,
+``esp32``, ``esp32_huge_app``, ``esp32s3``, ``esp32s3_16mb``,
+``esp32s3_16mb_custom``, ``esp32s3_32mb``) and ``leonardo`` (28,672 B of
+flash, 2,560 B of SRAM). Their flash and SRAM limits are those of each
+board's Arduino core (``boards.txt``); ``'auto'`` picks the smallest of Uno,
+Mega and ESP32 that fits. Serial runs at 115200 baud by default.
 
 
 .. _modeling-for-arduino#example-workflows:
@@ -424,10 +411,10 @@ Reduce ``max_depth`` by 2 and retrain. If still too large, reduce ``n_estimators
        board_model='uno',
    )
 
-SRAM exceeded on Mega
-~~~~~~~~~~~~~~~~~~~~~
+Flash exceeded on Mega
+~~~~~~~~~~~~~~~~~~~~~~
 
-GBDT models with many estimators consume significant SRAM for intermediate values. Reduce ``n_estimators`` or switch to Random Forest:
+GBDT models with many estimators need many trees in flash (one per class and stage). Reduce ``n_estimators`` or switch to Random Forest:
 
 .. code-block:: python
 
