@@ -6,9 +6,9 @@ both the *initial* (unrefined) model and the *final* (post-refinement) model,
 so they can be opened, visualised, simulated and verified in
 `CPN Tools <https://cpntools.org>`_.
 
-The mapping implements the proofs of correctness from the accompanying article
-(Theorem 1: Decision Tree -> CPN; Theorem 2: GBDT -> HCPN with sequential
-boosting-stage accumulation and a NumPy-compatible argmax / sigmoid decision).
+The mapping is built to be provably equivalent to the model: a Decision Tree
+becomes a CPN, and a GBDT an HCPN with sequential boosting-stage accumulation
+and a NumPy-compatible argmax / sigmoid decision.
 
 Run:
     python examples/generate_hcpn_example.py

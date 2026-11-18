@@ -9,8 +9,7 @@ samples, the arithmetic of two versions of the coloured net's decision:
   summed in tree order and divided by the number of trees.
 
 and counts the samples whose scores differ from ``predict_proba`` in any bit,
-and whose predicted class differs from ``predict``. The figures are the ones
-quoted in the dissertation (Remark on the RF mapping in floating point).
+and whose predicted class differs from ``predict``.
 
 Run it::
 

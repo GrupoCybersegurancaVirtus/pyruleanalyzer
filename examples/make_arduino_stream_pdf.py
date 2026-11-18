@@ -581,15 +581,14 @@ def exemplos_datasets(larg):
         KeepTogether([
             P('Os datasets de ' + M('datasets-pyruleanalyzer'), 'h2'),
             P('Todos foram testados com o comando acima e ' + M('--max-train-rows 50000') + '. '
-              'Os maiores levam cerca de 1 minuto no ' + M('prepare') + '. Datasets que '
-              'aparecem em vários artigos são os mesmos arquivos; use qualquer uma das pastas.'),
+              'Os maiores levam cerca de 1 minuto no ' + M('prepare') + '.'),
             TABELA(linhas, [larg * 0.19, larg * 0.11, larg * 0.38, larg * 0.15,
                             larg * 0.17])]),
         P('(*) O litnet_2020 processado só tem classes de ataque, sem tráfego normal: '
           'escolha uma delas como “normal” (ex.: ' + M('--normal-class SPAM') + ') e o '
           'teste vira “essa classe × as outras”.<br/>'
-          '(**) No N-BaIoT o treino tem só tráfego normal (o artigo detecta anomalias sem '
-          'ver ataques), então um modelo de árvore não aprende os ataques. Use só o '
+          '(**) No N-BaIoT o treino tem só tráfego normal (o dataset foi feito para '
+          'detectar anomalias sem ver ataques), então um modelo de árvore não aprende os ataques. Use só o '
           + M('test.csv.gz') + ' com ' + M('--csv') + ', que o script divide em 70/30.',
           'nota'),
     ]
@@ -672,9 +671,9 @@ def conteudo_rapido(larg, fig1, fig2):
             'script converte sozinho rótulos e colunas de texto em números, troca valores '
             'vazios/infinitos por 0 e aceita treino e teste com as colunas em ordem diferente.'),
           P('Com treino e teste separados, como os datasets de '
-            + M('datasets-pyruleanalyzer') + ' (pasta ' + M('processed\\<dataset>') + ' de cada '
-            'artigo), no PowerShell:'),
-          CODE('$D = "C:\\Users\\...\\datasets-pyruleanalyzer\\<artigo>\\processed\\gas_pipeline"\n'
+            + M('datasets-pyruleanalyzer') + ' (pasta ' + M('processed\\<dataset>') + '), no '
+            'PowerShell:'),
+          CODE('$D = "C:\\Users\\...\\datasets-pyruleanalyzer\\<pasta>\\processed\\gas_pipeline"\n'
                '\n'
                'python examples/arduino_stream_test.py prepare --train-csv "$D\\train.csv.gz" '
                '`\n'

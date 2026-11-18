@@ -13,7 +13,7 @@ Two phases, so everything that needs no hardware is done before the boards
 arrive:
 
     # 1. no hardware: train, size, refine, export, build and compile
-    python examples/board_ladder_hil.py prepare --tii-pair 0
+    python examples/board_ladder_hil.py prepare --split-dir data/my_ids --target label
     python examples/board_ladder_hil.py prepare --dataset wine      # sklearn data
 
     # 2. list the serial ports of the connected boards
@@ -100,16 +100,58 @@ def quiet(fn, *a, **k):
 # data
 # ----------------------------------------------------------------------------
 
+def load_splits(folder, target, drop=()):
+    """A dataset already split into train/val/test files of `folder`.
+
+    Reads train.csv and test.csv (or .csv.gz) and, when present, val.csv,
+    which becomes the refinement set; without it a stratified fifth of the
+    training data is held out for refinement. Labels are coded over the union
+    of the splits (sorted), text columns as the sorted codes of their training
+    values (-1 for a value not seen in training), and missing or infinite
+    values become 0.
+
+    Returns:
+        (X_tr, y_tr, X_ref, y_ref, X_te, y_te, feature names).
+    """
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+
+    splits = {}
+    for split in ('train', 'val', 'test'):
+        for ext in ('.csv', '.csv.gz'):
+            path = Path(folder) / f'{split}{ext}'
+            if path.exists():
+                splits[split] = pd.read_csv(path, low_memory=False).drop(
+                    columns=[c for c in drop], errors='ignore')
+                break
+    if 'train' not in splits or 'test' not in splits:
+        raise FileNotFoundError(f'train.csv and test.csv not found in {folder}')
+    labels = sorted(pd.concat([df[target] for df in splits.values()]).astype(str).unique())
+    code = {lab: i for i, lab in enumerate(labels)}
+    feats = [c for c in splits['train'].columns if c != target]
+    cats = {}
+    for col in feats:
+        if splits['train'][col].dtype == object and                 pd.to_numeric(splits['train'][col], errors='coerce').notna().mean() <= 0.99:
+            cats[col] = {v: i for i, v in enumerate(sorted(splits['train'][col].astype(str).unique()))}
+    out = {}
+    for split, df in splits.items():
+        X = pd.DataFrame({c: (df[c].astype(str).map(cats[c]).fillna(-1) if c in cats
+                              else pd.to_numeric(df[c], errors='coerce')) for c in feats})
+        X = X.replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy(dtype=float)
+        out[split] = (X, df[target].astype(str).map(code).to_numpy(dtype=int))
+    X_tr, y_tr = out['train']
+    if 'val' in out:
+        X_ref, y_ref = out['val']
+    else:
+        X_tr, X_ref, y_tr, y_ref = train_test_split(X_tr, y_tr, test_size=0.2, random_state=42,
+                                                    stratify=y_tr)
+    return (X_tr, y_tr, X_ref, y_ref) + out['test'] + (feats,)
+
+
 def load_data(args):
     """(X_tr, y_tr, X_ref, y_ref, X_te, y_te, feature names, dataset name)."""
-    if args.tii_pair is not None:
-        from papers_benchmark import load_dataset
-        from tii_high_iiot_benchmark import DATA_ROOT, PAIRS
-        _, study, ds = PAIRS[args.tii_pair]
-        X_tr, y_tr, X_ref, y_ref, X_te, y_te, _ = load_dataset(os.path.join(DATA_ROOT, study), ds)
-        conv = lambda v: np.asarray(v).astype(int)  # noqa: E731
-        return (X_tr.values, conv(y_tr), X_ref.values, conv(y_ref), X_te.values, conv(y_te),
-                list(X_tr.columns), ds['name'])
+    if args.split_dir is not None:
+        return load_splits(args.split_dir, args.target, args.drop) + (Path(args.split_dir).name,)
     from sklearn import datasets
     from sklearn.model_selection import train_test_split
     if args.csv:
@@ -340,11 +382,12 @@ def main():
 
     pp = sub.add_parser('prepare', parents=[common], help='size, refine, export and compile')
     src = pp.add_mutually_exclusive_group()
-    src.add_argument('--tii-pair', type=int, default=None,
-                     help='a pair of the TII benchmark (0 = Edge-IIoTset)')
+    src.add_argument('--split-dir', default=None,
+                     help='a folder with train.csv, test.csv and optionally val.csv (or .csv.gz)')
     src.add_argument('--dataset', default='wine', help='a scikit-learn dataset (load_<name>)')
     src.add_argument('--csv', default=None)
-    pp.add_argument('--target', default='Target')
+    pp.add_argument('--target', default='Target', help='label column of --csv or --split-dir')
+    pp.add_argument('--drop', nargs='*', default=[], help='columns of --split-dir to ignore')
     pp.add_argument('--boards', nargs='+', default=DEFAULT_BOARDS, choices=sorted(LADDER))
     pp.add_argument('--algorithm', default='auto', choices=['auto', 'gbdt', 'rf', 'dt'],
                     help='auto: a GBDT, or a decision tree where no GBDT fits')
@@ -365,7 +408,7 @@ def main():
     sub.add_parser('ports', parents=[common], help='list the serial ports')
     args = p.parse_args()
     if args.cmd == 'prepare':
-        if args.tii_pair is not None:
+        if args.split_dir is not None:
             args.dataset = None
         return prepare(args)
     if args.cmd == 'run':

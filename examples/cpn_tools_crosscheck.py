@@ -1,7 +1,7 @@
 """Cross-validation of the model checker against CPN Tools.
 
-Two claims have to hold before the model checker's answers can be reported in
-a paper instead of CPN Tools' own:
+Two claims have to hold before the model checker's answers can be trusted in
+place of CPN Tools' own:
 
 1. **Agreement.** On every net, the occurrence graph pyRuleAnalyzer builds has
    the size CPN Tools reports (nodes, arcs, SCC nodes, SCC arcs, dead markings,
@@ -13,8 +13,8 @@ a paper instead of CPN Tools' own:
    "true".
 
 The benchmark is every model family (Decision Tree, Random Forest, binary and
-3-class GBDT), initial and refined, plus the 3-class, 8-stage GBDT of the
-article (19,685 markings), plus every mutant of every refined net (see
+3-class GBDT), initial and refined, plus every mutant of every refined net, plus
+any net of your own given with ``--extra-net`` (see
 :mod:`pyruleanalyzer.cpn_mutants`). CPN Tools is run headlessly through
 :mod:`pyruleanalyzer.cpntools_oracle`: the CPN Tools 4.0.1 simulator compiles
 each net, the state-space tool is entered as the GUI does it, and ASK-CTL
@@ -24,6 +24,7 @@ Run:
     python examples/cpn_tools_crosscheck.py                 # everything
     python examples/cpn_tools_crosscheck.py --no-mutants    # base nets only
     python examples/cpn_tools_crosscheck.py --python-only   # skip CPN Tools
+    python examples/cpn_tools_crosscheck.py --extra-net my_gbdt.cpn --extra-classes 3
 
 Output (``files/crosscheck/``): ``results.json`` with every value from both
 engines, ``report.md`` with the agreement and sensitivity tables, and the nets
@@ -70,8 +71,10 @@ def parse_args():
     p.add_argument("--no-mutants", action="store_true", help="Base nets only.")
     p.add_argument("--python-only", action="store_true",
                    help="Do not run CPN Tools (sensitivity table only).")
-    p.add_argument("--article-net", default="files/hcpn_mc3_final.cpn",
-                   help="Also cross-check this net (the article's case study).")
+    p.add_argument("--extra-net", default=None,
+                   help="Also cross-check this GBDT net (.cpn), e.g. one of your own models.")
+    p.add_argument("--extra-classes", type=int, default=3,
+                   help="Number of classes of --extra-net.")
     return p.parse_args()
 
 
@@ -279,10 +282,13 @@ def main():
             print(f"CPN Tools simulator image sha256={oracle.simulator_digest()[:16]}...")
 
     jobs = build_benchmark(args.out, with_mutants=not args.no_mutants)
-    if args.article_net and os.path.exists(args.article_net):
-        jobs.append({"net": args.article_net, "model": "article",
+    if args.extra_net:
+        if not os.path.exists(args.extra_net):
+            raise SystemExit(f"--extra-net not found: {args.extra_net}")
+        jobs.append({"net": args.extra_net, "model": "extra",
                      "family": "Gradient Boosting Decision Trees", "stage": "final",
-                     "mutant": None, "targets": [], "labels": [0, 1, 2],
+                     "mutant": None, "targets": [],
+                     "labels": list(range(args.extra_classes)),
                      "analyzer": None})
 
     records = []
