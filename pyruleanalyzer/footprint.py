@@ -410,15 +410,16 @@ def _leaf_counts(model) -> List[int]:
 
 def _encode_labels(y, *others):
     """`y` (and `others`, with the same classes) as codes 0..K-1, which the
-    boosting libraries need; a label of `others` not in `y` raises."""
+    boosting libraries need. A label of `others` not in `y` (a rare class
+    that the fitting sample missed) becomes -1, which no model predicts: it
+    is scored as an error, as a scikit-learn estimator scores a class it was
+    not fitted on."""
     classes, codes = np.unique(np.asarray(y), return_inverse=True)
     out = [codes]
     for o in others:
         o = np.asarray(o)
         pos = np.clip(np.searchsorted(classes, o), 0, len(classes) - 1)
-        if not np.array_equal(classes[pos], o):
-            raise ValueError('validation labels not seen in the training labels')
-        out.append(pos)
+        out.append(np.where(classes[pos] == o, pos, -1))
     return out
 
 
