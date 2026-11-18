@@ -640,6 +640,7 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
         # Integer labels are kept; any other labels are replaced by their
         # codes 0..K-1 (classes_ order) and remembered in a table.
         label_table = RuleClassifier._label_table_for(class_names)
+        given_names = list(class_names)
         class_names = RuleClassifier._label_names(class_names)
 
         form = None
@@ -652,8 +653,9 @@ class PyRuleAnalyzer(ClassifierMixin, BaseEstimator):
             classifier._gbdt_is_binary = is_binary
             classifier._gbdt_classes = gbdt_classes
         elif algorithm_type == 'Gradient Boosting Decision Trees':
+            # The names as given: get_gbdt_rules encodes them as above.
             rules, init_scores, is_binary, gbdt_classes = RuleClassifier.get_gbdt_rules(
-                model, feature_names, class_names
+                model, feature_names, given_names
             )
             classifier = RuleClassifier(rules, algorithm_type=algorithm_type)
             classifier._gbdt_init_scores = init_scores

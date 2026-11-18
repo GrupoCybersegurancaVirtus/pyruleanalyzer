@@ -426,7 +426,11 @@ class ExtractionMixin:
                 - List of class label strings.
         """
         from .rule_classifier import RuleClassifier
-        classes = RuleClassifier._label_names(model.classes_)
+        # The given names, when there is one per class, decide the labels, as
+        # they do for trees and forests: string names such as ['0', '2', '5']
+        # are encoded 0..K-1, like the label table from_sklearn builds from them.
+        named = class_names is not None and len(class_names) == len(model.classes_)
+        classes = RuleClassifier._label_names(class_names if named else model.classes_)
         is_binary = len(classes) == 2
         learning_rate = model.get_params()['learning_rate']
 
