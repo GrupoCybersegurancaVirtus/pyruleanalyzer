@@ -53,14 +53,20 @@ _ROM_PRELUDE = [
     '#if __SIZEOF_DOUBLE__ != 4',
     '#error "pyruleanalyzer: the AVR export expects a 4-byte double"',
     '#endif',
-    '#define PYRA_ROM PROGMEM',
     '#if defined(__AVR_HAVE_ELPM__)  /* more than 64 KB of flash (Mega 2560) */',
+    '/* After the code (.fini7), not in .progmem.data: in the low flash the model',
+    '   would push every later PROGMEM object (F() strings, the pin tables of the',
+    '   core) past 64 KB, where the core reads them with 16-bit addresses. */',
+    '#define PYRA_ROM __attribute__((section(".fini7")))',
+    '#define PYRA_ROM_SECTION ".fini7"',
     'typedef uint_farptr_t pyra_addr_t;',
     '#define PYRA_ADDR(v) pgm_get_far_address(v)',
     '#define PYRA_I32(a, i) ((int32_t)pgm_read_dword_far((a) + 4UL * (uint32_t)(i)))',
     '#define PYRA_DBL(a, i) ((double)pgm_read_float_far((a) + 4UL * (uint32_t)(i)))',
     '#define PYRA_U8(a, i) ((uint8_t)pgm_read_byte_far((a) + (uint32_t)(i)))',
     '#else',
+    '#define PYRA_ROM PROGMEM',
+    '#define PYRA_ROM_SECTION ".progmem.data"',
     'typedef uint16_t pyra_addr_t;',
     '#define PYRA_ADDR(v) ((pyra_addr_t)(v))',
     '#define PYRA_I32(a, i) ((int32_t)pgm_read_dword((a) + 4U * (uint16_t)(i)))',
@@ -457,15 +463,15 @@ class CExportMixin:
                f'#define PYRA_TABLE_N {len(entries)}',
                f'#define PYRA_TABLE_W {len(keys)}',
                '__asm__(',
-               r'    "  .pushsection .progmem.data,\"a\",@progbits\n"',
+               r'    "  .pushsection " PYRA_ROM_SECTION ",\"a\",@progbits\n"',
                r'    "  .global pyra_tree_table\n"',
                r'    "pyra_tree_table:\n"']
         for t, _ in entries:
             names = ', '.join(f'pyra_t{t}_{k}' for k in keys)
             out.append(f'    "  .long {names}' + r'\n"')
         out += [r'    "  .popsection\n");',
-                'extern const uint8_t pyra_tree_table[] PROGMEM;',
-                f'static const uint16_t pyra_tree_meta[{2 * len(entries)}] PROGMEM = {{'
+                'extern const uint8_t pyra_tree_table[] PYRA_ROM;',
+                f'static const uint16_t pyra_tree_meta[{2 * len(entries)}] PYRA_ROM = {{'
                 + ', '.join(f'{d}, {c}' for d, (_, c) in zip(depths, entries)) + '};',
                 '#if defined(__AVR_HAVE_ELPM__)',
                 '#define PYRA_U16(a, i) ((uint16_t)pgm_read_word_far((a) + 2UL * (uint32_t)(i)))',

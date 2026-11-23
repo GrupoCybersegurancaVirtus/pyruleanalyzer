@@ -334,6 +334,28 @@ def test_mega_sketch_reads_a_model_past_64_kb(tmp_path):
     assert flash > 70_000 and ram < 2_000
 
 
+def test_mega_model_lies_after_the_code(tmp_path):
+    """On a Mega the model goes to .fini7, after the code, not to
+    .progmem.data: in the low flash it would push the F() strings and the pin
+    tables of the core past 64 KB, where the core reads them with 16-bit
+    addresses (a physical Mega printed garbage for every F() string)."""
+    import contextlib, io
+    X, y = _data()
+    model = GradientBoostingClassifier(n_estimators=4, max_depth=3, random_state=0).fit(X, y)
+    ino = tmp_path / "m.ino"
+    with contextlib.redirect_stdout(io.StringIO()):
+        a = PyRuleAnalyzer.from_sklearn(model, feature_names=FEATS)
+        a.classifier.compile_tree_arrays(feature_names=FEATS)
+        a.classifier.export_to_arduino_ino(filepath=str(ino), board_model="mega")
+    src = ino.read_text(encoding="utf-8")
+    elpm = src.index("#if defined(__AVR_HAVE_ELPM__)")
+    assert src.index('#define PYRA_ROM __attribute__((section(".fini7")))') > elpm
+    assert "#define PYRA_ROM PROGMEM" in src            # Uno: 16-bit reads, low flash
+    if "pyra_tree_table:" in src:
+        assert '.pushsection " PYRA_ROM_SECTION' in src
+        assert "pyra_tree_meta[" in src and "] PROGMEM" not in src
+
+
 def test_esp32s3_custom_partition_preset(tmp_path):
     """The 16 MB ESP32-S3 preset with one 15.9 MB app: the export writes the
     partitions.csv the core picks up, and the core accepts it."""
