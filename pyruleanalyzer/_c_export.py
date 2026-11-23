@@ -390,34 +390,34 @@ class CExportMixin:
             a(f'#define TREE{t_idx}_DEPTH {tree_depth}')
 
             vals = ', '.join(str(v) for v in tree['feature_idx'])
-            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}]{sym('f')} PYRA_ROM = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_feature[{n_nodes}]{sym("f")} PYRA_ROM = {{{vals}}};')
 
             # threshold — special float values as C-compatible literals
             vals = ', '.join(_format_c_threshold(v) for v in tree['threshold'])
-            a(f'static const double tree{t_idx}_threshold[{n_nodes}]{sym('t')} PYRA_ROM = {{{vals}}};')
+            a(f'static const double tree{t_idx}_threshold[{n_nodes}]{sym("t")} PYRA_ROM = {{{vals}}};')
 
             vals = ', '.join(str(v) for v in tree['children_left'])
-            a(f'static const int32_t tree{t_idx}_left[{n_nodes}]{sym('l')} PYRA_ROM = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_left[{n_nodes}]{sym("l")} PYRA_ROM = {{{vals}}};')
 
             vals = ', '.join(str(v) for v in tree['children_right'])
-            a(f'static const int32_t tree{t_idx}_right[{n_nodes}]{sym('r')} PYRA_ROM = {{{vals}}};')
+            a(f'static const int32_t tree{t_idx}_right[{n_nodes}]{sym("r")} PYRA_ROM = {{{vals}}};')
 
             # missing_left: 1 where a split sends a missing value (NaN) left
             if routes_missing:
                 vals = ', '.join(str(int(v)) for v in tree['missing_left'])
-                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}]{sym('m')} PYRA_ROM = {{{vals}}};')
+                a(f'static const uint8_t tree{t_idx}_missing_left[{n_nodes}]{sym("m")} PYRA_ROM = {{{vals}}};')
 
             # value
             if self.algorithm_type == 'Decision Tree':
                 vals = ', '.join(str(v) for v in tree['value'])
-                a(f'static const int32_t tree{t_idx}_value[{n_nodes}]{sym('v')} PYRA_ROM = {{{vals}}};')
+                a(f'static const int32_t tree{t_idx}_value[{n_nodes}]{sym("v")} PYRA_ROM = {{{vals}}};')
             elif self.algorithm_type == 'Random Forest':
                 flat = tree['value'].flatten()
                 vals = ', '.join(f'{v:.17g}' for v in flat)
-                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}]{sym('v')} PYRA_ROM = {{{vals}}};')
+                a(f'static const double tree{t_idx}_value[{n_nodes * self.num_classes}]{sym("v")} PYRA_ROM = {{{vals}}};')
             elif self.algorithm_type == 'Gradient Boosting Decision Trees':
                 vals = ', '.join(f'{v:.17g}' for v in tree['value'])
-                a(f'static const double tree{t_idx}_value[{n_nodes}]{sym('v')} PYRA_ROM = {{{vals}}};')
+                a(f'static const double tree{t_idx}_value[{n_nodes}]{sym("v")} PYRA_ROM = {{{vals}}};')
 
             a('')
         return out
