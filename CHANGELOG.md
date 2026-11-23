@@ -1,6 +1,9 @@
 # Changelog
 
-## 2.3.0
+## 2.3.1
+
+(2.3.0 was tagged but never published: its wheels for Python 3.9-3.11 failed to
+import the C export. 2.3.1 is 2.3.0 with that fix.)
 
 **Added**
 * Board presets `pico` (Raspberry Pi Pico, RP2040), `rp2040_16mb` (an
