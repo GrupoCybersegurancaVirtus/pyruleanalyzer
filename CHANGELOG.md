@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.0
 
 **Added**
 * Board presets `pico` (Raspberry Pi Pico, RP2040), `rp2040_16mb` (an
@@ -63,6 +63,20 @@
   forest tree costs 174 bytes of code, not 70 (`RF_PER_TREE_BYTES`,
   `per_tree_bytes()`). Measured on 42 compiled ESP32 sketches, the estimate
   is now at most 2 KB below the compiled size.
+* On the Mega 2560, a model of more than about 64 KB pushed every later
+  constant in flash (`F()` strings, the pin tables of the Arduino core) past
+  64 KB, where the core reads it with 16-bit addresses: a physical Mega
+  printed garbage for every `F()` string. The model is now placed after the
+  code (`.fini7`) and still read with far addresses; the Uno keeps
+  `PROGMEM`.
+* `from_sklearn` on a scikit-learn GBDT with gapped string class labels
+  (e.g. `['0', '2', '27']`) raised `IndexError` in `predict`: the rules were
+  labelled with `model.classes_` instead of the encoded names of the label
+  table.
+* `fit_to_board` raised "validation labels not seen in the training labels"
+  for XGBoost, LightGBM and CatBoost when a rare class fell only in the
+  validation rows. Such a label is now coded -1, which no model predicts, so
+  it counts as an error, as it does for a scikit-learn estimator.
 
 ## 2.2.2
 
